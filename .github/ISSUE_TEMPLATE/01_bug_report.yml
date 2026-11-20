@@ -1,0 +1,55 @@
+name: "🐛 Bug Report"
+description: Report an issue or unexpected behavior in Tokio.
+title: "[BUG]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug! Please fill out the information below to help us triage and fix it.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of the system is affected?
+      options:
+        - Telegram Bot (V8 Isolate)
+        - Telegram Mini App (React 19)
+        - RPC Endpoints & SQLite DAL
+        - Overlay & i18n Compiler
+        - AI Agent & Tools
+        - Other / Tooling
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe the problem...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Step-by-step instructions to reproduce the problem.
+      placeholder: |
+        1. Send message '...' to Telegram bot
+        2. Open Mini App tab '...'
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or Screenshots
+      description: Paste any relevant logs, terminal output, or screenshots (ensure secrets and personal data are redacted!).
+      render: shell

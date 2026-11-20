@@ -1,0 +1,234 @@
+{
+  "ru": {
+    "accounts": [
+      { "name": "Карта", "currency": "EUR", "balanceCents": 145000, "envelope": "spendable" },
+      { "name": "Наличные", "currency": "EUR", "balanceCents": 24000, "envelope": "spendable" },
+      { "name": "Накопительный", "currency": "EUR", "balanceCents": 300000, "envelope": "reserved" }
+    ],
+    "liabilities": [
+      {
+        "name": "Аренда жилья",
+        "queue": "queue_1",
+        "amountCents": 60000,
+        "currency": "EUR",
+        "monthlyPaymentCents": 60000,
+        "paymentDay": 15,
+        "notes": "Ежемесячный фиксированный платёж"
+      }
+    ],
+    "tasks": [
+      {
+        "title": "Выбрать 1 фокусную задачу на сегодня",
+        "notes": "Начни с короткого шага на 10 минут",
+        "dueOffsetDays": 0,
+        "reminderInHours": 2
+      },
+      {
+        "title": "Проверить план расходов на неделю",
+        "notes": "Сверить свободный остаток и ближайший обязательный платёж",
+        "dueOffsetDays": 2,
+        "reminderInHours": null
+      },
+      {
+        "title": "Разобрать 2 заметки во входящих",
+        "notes": "Перенести идеи в нужные колонки или закрыть лишнее",
+        "dueOffsetDays": 0,
+        "reminderInHours": null
+      }
+    ],
+    "notes": [
+      {
+        "rawText": "Идея мини-проекта: собрать еженедельный обзор прогресса с тремя вопросами — что сработало, где застрял, один шаг на следующую неделю.",
+        "column": "idea",
+        "title": "Еженедельный ритуал обзора прогресса",
+        "tags": ["идея", "система", "обзор"]
+      },
+      {
+        "rawText": "Полезная памятка по финансам: сначала откладываем резерв и обязательные платежи, а свободный остаток делим по неделям.",
+        "column": "note",
+        "title": "Правило распределения бюджета по неделям",
+        "tags": ["финансы", "памятка"]
+      },
+      {
+        "rawText": "Мысль во входящих: записать список книг и статей, к которым хочется вернуться в спокойный выходной.",
+        "column": "raw",
+        "title": "Список чтения на спокойный выходной",
+        "tags": ["входящие", "чтение"]
+      }
+    ]
+  },
+  "en": {
+    "accounts": [
+      { "name": "Card", "currency": "EUR", "balanceCents": 145000, "envelope": "spendable" },
+      { "name": "Cash", "currency": "EUR", "balanceCents": 24000, "envelope": "spendable" },
+      { "name": "Savings", "currency": "EUR", "balanceCents": 300000, "envelope": "reserved" }
+    ],
+    "liabilities": [
+      {
+        "name": "Monthly Rent",
+        "queue": "queue_1",
+        "amountCents": 60000,
+        "currency": "EUR",
+        "monthlyPaymentCents": 60000,
+        "paymentDay": 15,
+        "notes": "Recurring fixed monthly housing payment"
+      }
+    ],
+    "tasks": [
+      {
+        "title": "Pick 1 focus task for today",
+        "notes": "Start with a small 10-minute first step",
+        "dueOffsetDays": 0,
+        "reminderInHours": 2
+      },
+      {
+        "title": "Review weekly spending plan",
+        "notes": "Check spendable balance against the upcoming recurring bill",
+        "dueOffsetDays": 2,
+        "reminderInHours": null
+      },
+      {
+        "title": "Triage 2 notes from inbox",
+        "notes": "Move useful ideas to their columns or archive noise",
+        "dueOffsetDays": 0,
+        "reminderInHours": null
+      }
+    ],
+    "notes": [
+      {
+        "rawText": "Project idea: run a short weekly progress review with three prompts — what worked, what stalled, and one clear step for next week.",
+        "column": "idea",
+        "title": "Weekly progress review ritual",
+        "tags": ["idea", "system", "review"]
+      },
+      {
+        "rawText": "Finance reference: cover reserved savings and recurring bills first, then split the spendable balance into weekly chunks.",
+        "column": "note",
+        "title": "Weekly budget allocation rule",
+        "tags": ["finances", "reference"]
+      },
+      {
+        "rawText": "Inbox thought: collect a short reading list of books and essays to revisit on a quiet weekend.",
+        "column": "raw",
+        "title": "Quiet weekend reading list",
+        "tags": ["inbox", "reading"]
+      }
+    ]
+  },
+  "sr": {
+    "accounts": [
+      { "name": "Kartica", "currency": "EUR", "balanceCents": 145000, "envelope": "spendable" },
+      { "name": "Gotovina", "currency": "EUR", "balanceCents": 24000, "envelope": "spendable" },
+      { "name": "Štednja", "currency": "EUR", "balanceCents": 300000, "envelope": "reserved" }
+    ],
+    "liabilities": [
+      {
+        "name": "Mesečna kirija",
+        "queue": "queue_1",
+        "amountCents": 60000,
+        "currency": "EUR",
+        "monthlyPaymentCents": 60000,
+        "paymentDay": 15,
+        "notes": "Redovna mesečna fiksna obaveza"
+      }
+    ],
+    "tasks": [
+      {
+        "title": "Izaberi 1 fokus zadatak za danas",
+        "notes": "Počni malim korakom od 10 minuta",
+        "dueOffsetDays": 0,
+        "reminderInHours": 2
+      },
+      {
+        "title": "Pregledaj nedeljni plan troškova",
+        "notes": "Uporedi raspoloživo stanje sa narednom redovnom obavezom",
+        "dueOffsetDays": 2,
+        "reminderInHours": null
+      },
+      {
+        "title": "Sredi 2 beleške iz prijemnog sandučeta",
+        "notes": "Premesti korisne ideje u kolone ili arhiviraj višak",
+        "dueOffsetDays": 0,
+        "reminderInHours": null
+      }
+    ],
+    "notes": [
+      {
+        "rawText": "Ideja za projekat: uvesti kratki nedeljni pregled napretka sa tri pitanja — šta je radilo, gde je zapelo i jedan jasan korak za sledeću nedelju.",
+        "column": "idea",
+        "title": "Nedeljni ritual pregleda napretka",
+        "tags": ["ideja", "sistem", "pregled"]
+      },
+      {
+        "rawText": "Podsetnik za finansije: prvo odvojiti rezervu i redovne račune, pa raspoloživi ostatak podeliti po nedeljama.",
+        "column": "note",
+        "title": "Pravilo raspodele budžeta po nedeljama",
+        "tags": ["finansije", "podsetnik"]
+      },
+      {
+        "rawText": "Misao u prijemnom sandučetu: napraviti kratku listu knjiga i tekstova za miran vikend.",
+        "column": "raw",
+        "title": "Lista čitanja za miran vikend",
+        "tags": ["inbox", "čitanje"]
+      }
+    ]
+  },
+  "ja": {
+    "accounts": [
+      { "name": "カード", "currency": "EUR", "balanceCents": 145000, "envelope": "spendable" },
+      { "name": "現金", "currency": "EUR", "balanceCents": 24000, "envelope": "spendable" },
+      { "name": "貯蓄", "currency": "EUR", "balanceCents": 300000, "envelope": "reserved" }
+    ],
+    "liabilities": [
+      {
+        "name": "家賃",
+        "queue": "queue_1",
+        "amountCents": 60000,
+        "currency": "EUR",
+        "monthlyPaymentCents": 60000,
+        "paymentDay": 15,
+        "notes": "毎月の固定費"
+      }
+    ],
+    "tasks": [
+      {
+        "title": "今日の最優先タスクを1つ選ぶ",
+        "notes": "まずは10分だけ着手できる小さな一歩から始めます",
+        "dueOffsetDays": 0,
+        "reminderInHours": 2
+      },
+      {
+        "title": "今週の支出計画を見直す",
+        "notes": "自由に使える残高と次の固定費を確認します",
+        "dueOffsetDays": 2,
+        "reminderInHours": null
+      },
+      {
+        "title": "受信メモを2件整理する",
+        "notes": "活かせるアイデアを分類し、不要なメモを片付けます",
+        "dueOffsetDays": 0,
+        "reminderInHours": null
+      }
+    ],
+    "notes": [
+      {
+        "rawText": "プロジェクトのアイデア：週末に3つの質問（うまくいったこと、詰まったこと、来週の最初の一歩）で短い振り返りを行う。",
+        "column": "idea",
+        "title": "週次の振り返りルーティン",
+        "tags": ["アイデア", "仕組み", "振り返り"]
+      },
+      {
+        "rawText": "家計管理メモ：まず貯蓄と固定費を確保し、残りの使える金額を週ごとに分けて管理する。",
+        "column": "note",
+        "title": "週ごとの予算配分ルール",
+        "tags": ["家計", "リファレンス"]
+      },
+      {
+        "rawText": "受信メモ：落ち着いた休日に読み返したい本と記事のリストをまとめておく。",
+        "column": "raw",
+        "title": "休日の読書リスト",
+        "tags": ["受信メモ", "読書"]
+      }
+    ]
+  }
+}

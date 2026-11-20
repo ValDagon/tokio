@@ -1,0 +1,1331 @@
+{
+  "cases": [
+    {
+      "accounts": [],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "empty",
+      "liabilities": [],
+      "python": {
+        "accountEnvelopes": {},
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 0,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 0,
+        "reservedGapCents": 0,
+        "runwayDays": 0,
+        "runwayWeeks": 0.0,
+        "safeDailyCents": 0,
+        "safeMonthlyCents": 0,
+        "safeWeeklyCents": 0,
+        "spendableCents": 0,
+        "totalLiquidCents": 0,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 100000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "single-spendable",
+      "liabilities": [],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 100000,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 0,
+        "reservedGapCents": 0,
+        "runwayDays": 50,
+        "runwayWeeks": 7.1,
+        "safeDailyCents": 4000,
+        "safeMonthlyCents": 100000,
+        "safeWeeklyCents": 28000,
+        "spendableCents": 100000,
+        "totalLiquidCents": 100000,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 100000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        },
+        {
+          "balanceCents": 50000,
+          "currency": "EUR",
+          "envelope": "reserved",
+          "name": "Reserve",
+          "pythonEnvelope": "reserved"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "spendable-plus-reserved",
+      "liabilities": [],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable",
+          "Reserve": "reserved"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 150000,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 50000,
+        "reservedGapCents": 50000,
+        "runwayDays": 50,
+        "runwayWeeks": 7.1,
+        "safeDailyCents": 4000,
+        "safeMonthlyCents": 100000,
+        "safeWeeklyCents": 28000,
+        "spendableCents": 100000,
+        "totalLiquidCents": 150000,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 60000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Cash",
+          "pythonEnvelope": "mixed (rent+taxes + spendable)"
+        },
+        {
+          "balanceCents": 100000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "cash-rent-partial",
+      "liabilities": [
+        {
+          "account": "Cash",
+          "currency": "EUR",
+          "monthlyCents": 40000,
+          "name": "Rent",
+          "paidMonths": [],
+          "paymentDay": 10,
+          "queue": "queue_1"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable",
+          "Cash": "mixed (rent+taxes + spendable)"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 40000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 120000,
+        "pendingHorizonCents": 40000,
+        "pendingThisMonthCents": 40000,
+        "reservedCents": 40000,
+        "reservedGapCents": 0,
+        "runwayDays": 60,
+        "runwayWeeks": 8.6,
+        "safeDailyCents": 4800,
+        "safeMonthlyCents": 120000,
+        "safeWeeklyCents": 33600,
+        "spendableCents": 120000,
+        "totalLiquidCents": 160000,
+        "totalMonthlyObligationsCents": 40000,
+        "upcoming": [
+          {
+            "name": "Rent",
+            "paymentDay": 10
+          }
+        ]
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 40000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Cash",
+          "pythonEnvelope": "reserved"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "cash-rent-full",
+      "liabilities": [
+        {
+          "account": "Cash",
+          "currency": "EUR",
+          "monthlyCents": 40000,
+          "name": "Rent",
+          "paidMonths": [],
+          "paymentDay": 10,
+          "queue": "queue_1"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Cash": "reserved"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 40000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 0,
+        "pendingHorizonCents": 40000,
+        "pendingThisMonthCents": 40000,
+        "reservedCents": 40000,
+        "reservedGapCents": 0,
+        "runwayDays": 0,
+        "runwayWeeks": 0.0,
+        "safeDailyCents": 0,
+        "safeMonthlyCents": 0,
+        "safeWeeklyCents": 0,
+        "spendableCents": 0,
+        "totalLiquidCents": 40000,
+        "totalMonthlyObligationsCents": 40000,
+        "upcoming": [
+          {
+            "name": "Rent",
+            "paymentDay": 10
+          }
+        ]
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 100000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Cash",
+          "pythonEnvelope": "mixed (rent+taxes + spendable)"
+        },
+        {
+          "balanceCents": 45000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "cash-two-liabilities",
+      "liabilities": [
+        {
+          "account": "Cash",
+          "currency": "EUR",
+          "monthlyCents": 40000,
+          "name": "Rent",
+          "paidMonths": [],
+          "paymentDay": 10,
+          "queue": "queue_1"
+        },
+        {
+          "account": "Cash",
+          "currency": "EUR",
+          "monthlyCents": 15000,
+          "name": "Taxes",
+          "paidMonths": [],
+          "paymentDay": 20,
+          "queue": "queue_2"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable",
+          "Cash": "mixed (rent+taxes + spendable)"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 55000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 90000,
+        "pendingHorizonCents": 55000,
+        "pendingThisMonthCents": 55000,
+        "reservedCents": 55000,
+        "reservedGapCents": 0,
+        "runwayDays": 45,
+        "runwayWeeks": 6.4,
+        "safeDailyCents": 3600,
+        "safeMonthlyCents": 90000,
+        "safeWeeklyCents": 25200,
+        "spendableCents": 90000,
+        "totalLiquidCents": 145000,
+        "totalMonthlyObligationsCents": 55000,
+        "upcoming": [
+          {
+            "name": "Rent",
+            "paymentDay": 10
+          },
+          {
+            "name": "Taxes",
+            "paymentDay": 20
+          }
+        ]
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 60000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Cash",
+          "pythonEnvelope": "spendable"
+        },
+        {
+          "balanceCents": 100000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "liability-paid-this-month",
+      "liabilities": [
+        {
+          "account": "Cash",
+          "currency": "EUR",
+          "monthlyCents": 40000,
+          "name": "Rent",
+          "paidMonths": [
+            "2026-11"
+          ],
+          "paymentDay": 10,
+          "queue": "queue_1"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable",
+          "Cash": "spendable"
+        },
+        "alreadyPaid": [
+          "Rent"
+        ],
+        "cashReserveCents": 0,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 160000,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 0,
+        "reservedGapCents": 0,
+        "runwayDays": 80,
+        "runwayWeeks": 11.4,
+        "safeDailyCents": 6400,
+        "safeMonthlyCents": 160000,
+        "safeWeeklyCents": 44800,
+        "spendableCents": 160000,
+        "totalLiquidCents": 160000,
+        "totalMonthlyObligationsCents": 40000,
+        "upcoming": []
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 90000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Cash",
+          "pythonEnvelope": "mixed (rent+taxes + spendable)"
+        },
+        {
+          "balanceCents": 10000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "different-payment-days",
+      "liabilities": [
+        {
+          "account": "Cash",
+          "currency": "EUR",
+          "monthlyCents": 30000,
+          "name": "Rent",
+          "paidMonths": [],
+          "paymentDay": 25,
+          "queue": "queue_1"
+        },
+        {
+          "account": "Cash",
+          "currency": "EUR",
+          "monthlyCents": 10000,
+          "name": "Utilities",
+          "paidMonths": [],
+          "paymentDay": 15,
+          "queue": "queue_2"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable",
+          "Cash": "mixed (rent+taxes + spendable)"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 40000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 60000,
+        "pendingHorizonCents": 40000,
+        "pendingThisMonthCents": 40000,
+        "reservedCents": 40000,
+        "reservedGapCents": 0,
+        "runwayDays": 30,
+        "runwayWeeks": 4.3,
+        "safeDailyCents": 2400,
+        "safeMonthlyCents": 60000,
+        "safeWeeklyCents": 16800,
+        "spendableCents": 60000,
+        "totalLiquidCents": 100000,
+        "totalMonthlyObligationsCents": 40000,
+        "upcoming": [
+          {
+            "name": "Utilities",
+            "paymentDay": 15
+          },
+          {
+            "name": "Rent",
+            "paymentDay": 25
+          }
+        ]
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 100000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": 10,
+      "id": "horizon-override-10",
+      "liabilities": [],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 10,
+        "netLiquidCents": 100000,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 0,
+        "reservedGapCents": 0,
+        "runwayDays": 50,
+        "runwayWeeks": 7.1,
+        "safeDailyCents": 10000,
+        "safeMonthlyCents": 100000,
+        "safeWeeklyCents": 70000,
+        "spendableCents": 100000,
+        "totalLiquidCents": 100000,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 80000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Cash",
+          "pythonEnvelope": "mixed (rent+taxes + spendable)"
+        },
+        {
+          "balanceCents": 20000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": 40,
+      "id": "horizon-override-40",
+      "liabilities": [
+        {
+          "account": "Cash",
+          "currency": "EUR",
+          "monthlyCents": 40000,
+          "name": "Rent",
+          "paidMonths": [],
+          "paymentDay": 25,
+          "queue": "queue_1"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable",
+          "Cash": "mixed (rent+taxes + spendable)"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 40000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 40,
+        "netLiquidCents": 60000,
+        "pendingHorizonCents": 40000,
+        "pendingThisMonthCents": 40000,
+        "reservedCents": 40000,
+        "reservedGapCents": 0,
+        "runwayDays": 30,
+        "runwayWeeks": 4.3,
+        "safeDailyCents": 1500,
+        "safeMonthlyCents": 60000,
+        "safeWeeklyCents": 10500,
+        "spendableCents": 60000,
+        "totalLiquidCents": 100000,
+        "totalMonthlyObligationsCents": 40000,
+        "upcoming": [
+          {
+            "name": "Rent",
+            "paymentDay": 25
+          }
+        ]
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 100000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "last-day-of-month",
+      "liabilities": [],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 1,
+        "horizonDays": 31,
+        "netLiquidCents": 100000,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 0,
+        "reservedGapCents": 0,
+        "runwayDays": 50,
+        "runwayWeeks": 7.1,
+        "safeDailyCents": 3226,
+        "safeMonthlyCents": 100000,
+        "safeWeeklyCents": 22582,
+        "spendableCents": 100000,
+        "totalLiquidCents": 100000,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2026-11-30"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 60000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "last-day-february-leap",
+      "liabilities": [],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 1,
+        "horizonDays": 31,
+        "netLiquidCents": 60000,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 0,
+        "reservedGapCents": 0,
+        "runwayDays": 30,
+        "runwayWeeks": 4.3,
+        "safeDailyCents": 1935,
+        "safeMonthlyCents": 60000,
+        "safeWeeklyCents": 13545,
+        "spendableCents": 60000,
+        "totalLiquidCents": 60000,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2028-02-29"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 20000,
+          "currency": "USD",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "usd-account",
+      "liabilities": [],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 18519,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 0,
+        "reservedGapCents": 0,
+        "runwayDays": 9,
+        "runwayWeeks": 1.3,
+        "safeDailyCents": 741,
+        "safeMonthlyCents": 18519,
+        "safeWeeklyCents": 5187,
+        "spendableCents": 18519,
+        "totalLiquidCents": 18519,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 987654,
+          "currency": "RUB",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "rub-account",
+      "liabilities": [],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 9406,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 0,
+        "reservedGapCents": 0,
+        "runwayDays": 4,
+        "runwayWeeks": 0.6,
+        "safeDailyCents": 376,
+        "safeMonthlyCents": 9406,
+        "safeWeeklyCents": 2632,
+        "spendableCents": 9406,
+        "totalLiquidCents": 9406,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 50000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Cash",
+          "pythonEnvelope": "mixed (rent+taxes + spendable)"
+        },
+        {
+          "balanceCents": 30000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "usd-liability-attached",
+      "liabilities": [
+        {
+          "account": "Cash",
+          "currency": "USD",
+          "monthlyCents": 2000,
+          "name": "Hosting",
+          "paidMonths": [],
+          "paymentDay": 12,
+          "queue": "queue_2"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable",
+          "Cash": "mixed (rent+taxes + spendable)"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 1852,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 78148,
+        "pendingHorizonCents": 1852,
+        "pendingThisMonthCents": 1852,
+        "reservedCents": 1852,
+        "reservedGapCents": 0,
+        "runwayDays": 39,
+        "runwayWeeks": 5.6,
+        "safeDailyCents": 3126,
+        "safeMonthlyCents": 78148,
+        "safeWeeklyCents": 21882,
+        "spendableCents": 78148,
+        "totalLiquidCents": 80000,
+        "totalMonthlyObligationsCents": 1852,
+        "upcoming": [
+          {
+            "name": "Hosting",
+            "paymentDay": 12
+          }
+        ]
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 0,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        },
+        {
+          "balanceCents": 25000,
+          "currency": "EUR",
+          "envelope": "reserved",
+          "name": "Reserve",
+          "pythonEnvelope": "reserved"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "zero-and-negative-balances",
+      "liabilities": [],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable",
+          "Reserve": "reserved"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 25000,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 25000,
+        "reservedGapCents": 25000,
+        "runwayDays": 0,
+        "runwayWeeks": 0.0,
+        "safeDailyCents": 0,
+        "safeMonthlyCents": 0,
+        "safeWeeklyCents": 0,
+        "spendableCents": 0,
+        "totalLiquidCents": 25000,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 50000,
+          "currency": "EUR",
+          "envelope": "reserved",
+          "name": "Reserve",
+          "pythonEnvelope": "reserved"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "reserved-only",
+      "liabilities": [],
+      "python": {
+        "accountEnvelopes": {
+          "Reserve": "reserved"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 50000,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 50000,
+        "reservedGapCents": 50000,
+        "runwayDays": 0,
+        "runwayWeeks": 0.0,
+        "safeDailyCents": 0,
+        "safeMonthlyCents": 0,
+        "safeWeeklyCents": 0,
+        "spendableCents": 0,
+        "totalLiquidCents": 50000,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 10000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 50,
+      "horizonDays": null,
+      "id": "burn-override-below-floor",
+      "liabilities": [],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 100,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 10000,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 0,
+        "reservedGapCents": 0,
+        "runwayDays": 100,
+        "runwayWeeks": 14.3,
+        "safeDailyCents": 400,
+        "safeMonthlyCents": 10000,
+        "safeWeeklyCents": 2800,
+        "spendableCents": 10000,
+        "totalLiquidCents": 10000,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 100001,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 1337,
+      "horizonDays": 33,
+      "id": "burn-override-odd",
+      "liabilities": [],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 1337,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 33,
+        "netLiquidCents": 100001,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 0,
+        "reservedGapCents": 0,
+        "runwayDays": 74,
+        "runwayWeeks": 10.6,
+        "safeDailyCents": 3030,
+        "safeMonthlyCents": 100001,
+        "safeWeeklyCents": 21210,
+        "spendableCents": 100001,
+        "totalLiquidCents": 100001,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 30000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": 15,
+      "id": "liability-payment-day-null",
+      "liabilities": [
+        {
+          "account": "Wallet",
+          "currency": "EUR",
+          "monthlyCents": 5000,
+          "name": "Loan",
+          "paidMonths": [],
+          "paymentDay": null,
+          "queue": "queue_3"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 15,
+        "netLiquidCents": 25000,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 5000,
+        "reservedCents": 0,
+        "reservedGapCents": 0,
+        "runwayDays": 15,
+        "runwayWeeks": 2.1,
+        "safeDailyCents": 2000,
+        "safeMonthlyCents": 30000,
+        "safeWeeklyCents": 14000,
+        "spendableCents": 30000,
+        "totalLiquidCents": 30000,
+        "totalMonthlyObligationsCents": 5000,
+        "upcoming": [
+          {
+            "name": "Loan",
+            "paymentDay": null
+          }
+        ]
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 30000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "liability-zero-monthly",
+      "liabilities": [
+        {
+          "account": null,
+          "currency": "EUR",
+          "monthlyCents": 0,
+          "name": "Old loan",
+          "paidMonths": [],
+          "paymentDay": 15,
+          "queue": "queue_4"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 42000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 30000,
+        "pendingHorizonCents": 0,
+        "pendingThisMonthCents": 0,
+        "reservedCents": 0,
+        "reservedGapCents": 0,
+        "runwayDays": 15,
+        "runwayWeeks": 2.1,
+        "safeDailyCents": 1200,
+        "safeMonthlyCents": 30000,
+        "safeWeeklyCents": 8400,
+        "spendableCents": 30000,
+        "totalLiquidCents": 30000,
+        "totalMonthlyObligationsCents": 0,
+        "upcoming": []
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 70000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Cash",
+          "pythonEnvelope": "mixed (rent+taxes + spendable)"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": 30,
+      "id": "payment-day-31-in-november",
+      "liabilities": [
+        {
+          "account": "Cash",
+          "currency": "EUR",
+          "monthlyCents": 60000,
+          "name": "Rent",
+          "paidMonths": [],
+          "paymentDay": 31,
+          "queue": "queue_1"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Cash": "mixed (rent+taxes + spendable)"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 60000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 30,
+        "netLiquidCents": 10000,
+        "pendingHorizonCents": 60000,
+        "pendingThisMonthCents": 60000,
+        "reservedCents": 60000,
+        "reservedGapCents": 0,
+        "runwayDays": 5,
+        "runwayWeeks": 0.7,
+        "safeDailyCents": 333,
+        "safeMonthlyCents": 10000,
+        "safeWeeklyCents": 2331,
+        "spendableCents": 10000,
+        "totalLiquidCents": 70000,
+        "totalMonthlyObligationsCents": 60000,
+        "upcoming": [
+          {
+            "name": "Rent",
+            "paymentDay": 31
+          }
+        ]
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 100000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Cash",
+          "pythonEnvelope": "mixed (rent+taxes + spendable)"
+        },
+        {
+          "balanceCents": 20000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "unattached-eur-rent",
+      "liabilities": [
+        {
+          "account": null,
+          "currency": "EUR",
+          "monthlyCents": 30000,
+          "name": "Rent",
+          "paidMonths": [],
+          "paymentDay": 10,
+          "queue": "queue_1"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable",
+          "Cash": "mixed (rent+taxes + spendable)"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 30000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 90000,
+        "pendingHorizonCents": 30000,
+        "pendingThisMonthCents": 30000,
+        "reservedCents": 30000,
+        "reservedGapCents": 0,
+        "runwayDays": 45,
+        "runwayWeeks": 6.4,
+        "safeDailyCents": 3600,
+        "safeMonthlyCents": 90000,
+        "safeWeeklyCents": 25200,
+        "spendableCents": 90000,
+        "totalLiquidCents": 120000,
+        "totalMonthlyObligationsCents": 30000,
+        "upcoming": [
+          {
+            "name": "Rent",
+            "paymentDay": 10
+          }
+        ]
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 60000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Cash",
+          "pythonEnvelope": "mixed (rent+taxes + spendable)"
+        },
+        {
+          "balanceCents": 20000,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        }
+      ],
+      "dailyBurnOverrideCents": 2000,
+      "horizonDays": null,
+      "id": "overdue-payment-day",
+      "liabilities": [
+        {
+          "account": "Cash",
+          "currency": "EUR",
+          "monthlyCents": 40000,
+          "name": "Rent",
+          "paidMonths": [],
+          "paymentDay": 1,
+          "queue": "queue_1"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable",
+          "Cash": "mixed (rent+taxes + spendable)"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 40000,
+        "dailyBurnCents": 2000,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 25,
+        "netLiquidCents": 40000,
+        "pendingHorizonCents": 80000,
+        "pendingThisMonthCents": 40000,
+        "reservedCents": 40000,
+        "reservedGapCents": -40000,
+        "runwayDays": 20,
+        "runwayWeeks": 2.9,
+        "safeDailyCents": 1600,
+        "safeMonthlyCents": 40000,
+        "safeWeeklyCents": 11200,
+        "spendableCents": 40000,
+        "totalLiquidCents": 80000,
+        "totalMonthlyObligationsCents": 40000,
+        "upcoming": [
+          {
+            "name": "Rent",
+            "paymentDay": 1
+          }
+        ]
+      },
+      "today": "2026-11-06"
+    },
+    {
+      "accounts": [
+        {
+          "balanceCents": 9876543,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Wallet",
+          "pythonEnvelope": "spendable"
+        },
+        {
+          "balanceCents": 1234567,
+          "currency": "EUR",
+          "envelope": "reserved",
+          "name": "Reserve",
+          "pythonEnvelope": "reserved"
+        },
+        {
+          "balanceCents": 555555,
+          "currency": "EUR",
+          "envelope": "spendable",
+          "name": "Cash",
+          "pythonEnvelope": "mixed (rent+taxes + spendable)"
+        }
+      ],
+      "dailyBurnOverrideCents": 7400,
+      "horizonDays": 90,
+      "id": "big-balances",
+      "liabilities": [
+        {
+          "account": "Cash",
+          "currency": "EUR",
+          "monthlyCents": 120000,
+          "name": "Rent",
+          "paidMonths": [],
+          "paymentDay": 9,
+          "queue": "queue_1"
+        },
+        {
+          "account": "Cash",
+          "currency": "EUR",
+          "monthlyCents": 3999,
+          "name": "Internet",
+          "paidMonths": [],
+          "paymentDay": 9,
+          "queue": "queue_2"
+        }
+      ],
+      "python": {
+        "accountEnvelopes": {
+          "Wallet": "spendable",
+          "Cash": "mixed (rent+taxes + spendable)",
+          "Reserve": "reserved"
+        },
+        "alreadyPaid": [],
+        "cashReserveCents": 123999,
+        "dailyBurnCents": 7400,
+        "daysRemainingInMonth": 25,
+        "horizonDays": 90,
+        "netLiquidCents": 11542666,
+        "pendingHorizonCents": 247998,
+        "pendingThisMonthCents": 123999,
+        "reservedCents": 1358566,
+        "reservedGapCents": 1110568,
+        "runwayDays": 1392,
+        "runwayWeeks": 198.9,
+        "safeDailyCents": 114534,
+        "safeMonthlyCents": 10308099,
+        "safeWeeklyCents": 801738,
+        "spendableCents": 10308099,
+        "totalLiquidCents": 11666665,
+        "totalMonthlyObligationsCents": 123999,
+        "upcoming": [
+          {
+            "name": "Rent",
+            "paymentDay": 9
+          },
+          {
+            "name": "Internet",
+            "paymentDay": 9
+          }
+        ]
+      },
+      "today": "2026-11-06"
+    }
+  ],
+  "generatedBy": "tests/parity/generate.py",
+  "now": "2026-11-06T10:00:00+00:00",
+  "rates": {
+    "BAM": 1.95583,
+    "EUR": 1.0,
+    "KZT": 525.0,
+    "RUB": 105.0,
+    "TRY": 37.0,
+    "USD": 1.08,
+    "USDC": 1.08,
+    "USDT": 1.08
+  },
+  "reference": "backend/app/services/runway.py::calculate_runway (БД и fx заглушены, today задан)"
+}

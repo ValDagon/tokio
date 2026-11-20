@@ -1,0 +1,21 @@
+{
+  // Type-check only. The real build is transpile-only (esbuild, see build.mjs);
+  // outDir mirrors the build output so editors resolve the same layout.
+  "compilerOptions": {
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noEmit": true,
+    "outDir": "tgcloud",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["src", "tests"],
+  "exclude": ["node_modules", "tgcloud", "miniapp-dist", "miniapp", "**/*.example.ts"]
+}

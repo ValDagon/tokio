@@ -1,0 +1,475 @@
+{
+  "addDaysCases": [
+    {
+      "days": 1,
+      "id": "add-days-0",
+      "instant": "2026-11-06T10:00:00+00:00",
+      "pythonIso": "2026-11-07T10:00:00+00:00",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "days": 30,
+      "id": "add-days-1",
+      "instant": "2026-11-06T10:00:00+00:00",
+      "pythonIso": "2026-12-06T10:00:00+00:00",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "days": -1,
+      "id": "add-days-2",
+      "instant": "2026-11-06T10:00:00+00:00",
+      "pythonIso": "2026-11-05T10:00:00+00:00",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "days": 1,
+      "id": "add-days-3",
+      "instant": "2026-10-24T12:00:00+00:00",
+      "pythonIso": "2026-10-25T13:00:00+00:00",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "days": 7,
+      "id": "add-days-4",
+      "instant": "2026-10-24T12:00:00+00:00",
+      "pythonIso": "2026-10-31T13:00:00+00:00",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "days": 1,
+      "id": "add-days-5",
+      "instant": "2026-03-28T12:00:00+00:00",
+      "pythonIso": "2026-03-29T11:00:00+00:00",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "days": 2,
+      "id": "add-days-6",
+      "instant": "2026-03-28T12:00:00+00:00",
+      "pythonIso": "2026-03-30T11:00:00+00:00",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "days": 365,
+      "id": "add-days-7",
+      "instant": "2026-11-06T10:00:00+00:00",
+      "pythonIso": "2027-11-06T10:00:00+00:00",
+      "timeZone": "UTC"
+    },
+    {
+      "days": 1,
+      "id": "add-days-8",
+      "instant": "2027-12-31T23:00:00+00:00",
+      "pythonIso": "2028-01-01T23:00:00+00:00",
+      "timeZone": "UTC"
+    },
+    {
+      "days": 31,
+      "id": "add-days-9",
+      "instant": "2026-11-06T10:00:00+00:00",
+      "pythonIso": "2026-12-07T10:00:00+00:00",
+      "timeZone": "America/New_York"
+    }
+  ],
+  "cases": [
+    {
+      "dateKey": "2026-11-06",
+      "formatDate": "06.11.2026",
+      "formatDateTime": "06.11.2026 10:00",
+      "id": "zoned-0",
+      "instant": "2026-11-06T10:00:00+00:00",
+      "monthKey": "2026-11",
+      "parts": {
+        "day": 6,
+        "hour": 10,
+        "minute": 0,
+        "month": 11,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "10:00",
+      "timeZone": "UTC"
+    },
+    {
+      "dateKey": "2026-11-06",
+      "formatDate": "06.11.2026",
+      "formatDateTime": "06.11.2026 23:30",
+      "id": "zoned-1",
+      "instant": "2026-11-06T23:30:00+00:00",
+      "monthKey": "2026-11",
+      "parts": {
+        "day": 6,
+        "hour": 23,
+        "minute": 30,
+        "month": 11,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "23:30",
+      "timeZone": "UTC"
+    },
+    {
+      "dateKey": "2026-11-07",
+      "formatDate": "07.11.2026",
+      "formatDateTime": "07.11.2026 00:30",
+      "id": "zoned-2",
+      "instant": "2026-11-06T23:30:00+00:00",
+      "monthKey": "2026-11",
+      "parts": {
+        "day": 7,
+        "hour": 0,
+        "minute": 30,
+        "month": 11,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "00:30",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "dateKey": "2026-11-06",
+      "formatDate": "06.11.2026",
+      "formatDateTime": "06.11.2026 01:30",
+      "id": "zoned-3",
+      "instant": "2026-11-06T00:30:00+00:00",
+      "monthKey": "2026-11",
+      "parts": {
+        "day": 6,
+        "hour": 1,
+        "minute": 30,
+        "month": 11,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "01:30",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "dateKey": "2026-01-01",
+      "formatDate": "01.01.2026",
+      "formatDateTime": "01.01.2026 01:00",
+      "id": "zoned-4",
+      "instant": "2026-01-01T00:00:00+00:00",
+      "monthKey": "2026-01",
+      "parts": {
+        "day": 1,
+        "hour": 1,
+        "minute": 0,
+        "month": 1,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "01:00",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "dateKey": "2026-01-01",
+      "formatDate": "01.01.2026",
+      "formatDateTime": "01.01.2026 00:59",
+      "id": "zoned-5",
+      "instant": "2025-12-31T23:59:59+00:00",
+      "monthKey": "2026-01",
+      "parts": {
+        "day": 1,
+        "hour": 0,
+        "minute": 59,
+        "month": 1,
+        "second": 59,
+        "year": 2026
+      },
+      "timeKey": "00:59",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "dateKey": "2026-03-29",
+      "formatDate": "29.03.2026",
+      "formatDateTime": "29.03.2026 01:30",
+      "id": "zoned-6",
+      "instant": "2026-03-29T00:30:00+00:00",
+      "monthKey": "2026-03",
+      "parts": {
+        "day": 29,
+        "hour": 1,
+        "minute": 30,
+        "month": 3,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "01:30",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "dateKey": "2026-03-29",
+      "formatDate": "29.03.2026",
+      "formatDateTime": "29.03.2026 03:30",
+      "id": "zoned-7",
+      "instant": "2026-03-29T01:30:00+00:00",
+      "monthKey": "2026-03",
+      "parts": {
+        "day": 29,
+        "hour": 3,
+        "minute": 30,
+        "month": 3,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "03:30",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "dateKey": "2026-10-25",
+      "formatDate": "25.10.2026",
+      "formatDateTime": "25.10.2026 02:30",
+      "id": "zoned-8",
+      "instant": "2026-10-25T00:30:00+00:00",
+      "monthKey": "2026-10",
+      "parts": {
+        "day": 25,
+        "hour": 2,
+        "minute": 30,
+        "month": 10,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "02:30",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "dateKey": "2026-10-25",
+      "formatDate": "25.10.2026",
+      "formatDateTime": "25.10.2026 02:30",
+      "id": "zoned-9",
+      "instant": "2026-10-25T01:30:00+00:00",
+      "monthKey": "2026-10",
+      "parts": {
+        "day": 25,
+        "hour": 2,
+        "minute": 30,
+        "month": 10,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "02:30",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "dateKey": "2026-03-08",
+      "formatDate": "08.03.2026",
+      "formatDateTime": "08.03.2026 03:30",
+      "id": "zoned-10",
+      "instant": "2026-03-08T07:30:00+00:00",
+      "monthKey": "2026-03",
+      "parts": {
+        "day": 8,
+        "hour": 3,
+        "minute": 30,
+        "month": 3,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "03:30",
+      "timeZone": "America/New_York"
+    },
+    {
+      "dateKey": "2026-11-01",
+      "formatDate": "01.11.2026",
+      "formatDateTime": "01.11.2026 01:30",
+      "id": "zoned-11",
+      "instant": "2026-11-01T05:30:00+00:00",
+      "monthKey": "2026-11",
+      "parts": {
+        "day": 1,
+        "hour": 1,
+        "minute": 30,
+        "month": 11,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "01:30",
+      "timeZone": "America/New_York"
+    },
+    {
+      "dateKey": "2026-03-01",
+      "formatDate": "01.03.2026",
+      "formatDateTime": "01.03.2026 08:59",
+      "id": "zoned-12",
+      "instant": "2026-02-28T23:59:59+00:00",
+      "monthKey": "2026-03",
+      "parts": {
+        "day": 1,
+        "hour": 8,
+        "minute": 59,
+        "month": 3,
+        "second": 59,
+        "year": 2026
+      },
+      "timeKey": "08:59",
+      "timeZone": "Asia/Tokyo"
+    },
+    {
+      "dateKey": "2028-02-29",
+      "formatDate": "29.02.2028",
+      "formatDateTime": "29.02.2028 05:00",
+      "id": "zoned-13",
+      "instant": "2028-02-28T20:00:00+00:00",
+      "monthKey": "2028-02",
+      "parts": {
+        "day": 29,
+        "hour": 5,
+        "minute": 0,
+        "month": 2,
+        "second": 0,
+        "year": 2028
+      },
+      "timeKey": "05:00",
+      "timeZone": "Asia/Tokyo"
+    },
+    {
+      "dateKey": "2028-02-29",
+      "formatDate": "29.02.2028",
+      "formatDateTime": "29.02.2028 12:00",
+      "id": "zoned-14",
+      "instant": "2028-02-29T12:00:00+00:00",
+      "monthKey": "2028-02",
+      "parts": {
+        "day": 29,
+        "hour": 12,
+        "minute": 0,
+        "month": 2,
+        "second": 0,
+        "year": 2028
+      },
+      "timeKey": "12:00",
+      "timeZone": "UTC"
+    },
+    {
+      "dateKey": "2027-02-28",
+      "formatDate": "28.02.2027",
+      "formatDateTime": "28.02.2027 23:00",
+      "id": "zoned-15",
+      "instant": "2027-02-28T23:00:00+00:00",
+      "monthKey": "2027-02",
+      "parts": {
+        "day": 28,
+        "hour": 23,
+        "minute": 0,
+        "month": 2,
+        "second": 0,
+        "year": 2027
+      },
+      "timeKey": "23:00",
+      "timeZone": "UTC"
+    },
+    {
+      "dateKey": "2026-06-15",
+      "formatDate": "15.06.2026",
+      "formatDateTime": "15.06.2026 14:00",
+      "id": "zoned-16",
+      "instant": "2026-06-15T12:00:00+00:00",
+      "monthKey": "2026-06",
+      "parts": {
+        "day": 15,
+        "hour": 14,
+        "minute": 0,
+        "month": 6,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "14:00",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "dateKey": "2026-06-15",
+      "formatDate": "15.06.2026",
+      "formatDateTime": "15.06.2026 12:00",
+      "id": "zoned-17",
+      "instant": "2026-06-15T12:00:00+00:00",
+      "monthKey": "2026-06",
+      "parts": {
+        "day": 15,
+        "hour": 12,
+        "minute": 0,
+        "month": 6,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "12:00",
+      "timeZone": "UTC"
+    },
+    {
+      "dateKey": "2026-07-01",
+      "formatDate": "01.07.2026",
+      "formatDateTime": "01.07.2026 02:00",
+      "id": "zoned-18",
+      "instant": "2026-07-01T00:00:00+00:00",
+      "monthKey": "2026-07",
+      "parts": {
+        "day": 1,
+        "hour": 2,
+        "minute": 0,
+        "month": 7,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "02:00",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "dateKey": "2026-12-31",
+      "formatDate": "31.12.2026",
+      "formatDateTime": "31.12.2026 23:00",
+      "id": "zoned-19",
+      "instant": "2026-12-31T22:00:00+00:00",
+      "monthKey": "2026-12",
+      "parts": {
+        "day": 31,
+        "hour": 23,
+        "minute": 0,
+        "month": 12,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "23:00",
+      "timeZone": "Europe/Berlin"
+    },
+    {
+      "dateKey": "2026-04-06",
+      "formatDate": "06.04.2026",
+      "formatDateTime": "06.04.2026 00:00",
+      "id": "zoned-20",
+      "instant": "2026-04-05T12:00:00+00:00",
+      "monthKey": "2026-04",
+      "parts": {
+        "day": 6,
+        "hour": 0,
+        "minute": 0,
+        "month": 4,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "00:00",
+      "timeZone": "Pacific/Auckland"
+    },
+    {
+      "dateKey": "2026-09-28",
+      "formatDate": "28.09.2026",
+      "formatDateTime": "28.09.2026 01:00",
+      "id": "zoned-21",
+      "instant": "2026-09-27T12:00:00+00:00",
+      "monthKey": "2026-09",
+      "parts": {
+        "day": 28,
+        "hour": 1,
+        "minute": 0,
+        "month": 9,
+        "second": 0,
+        "year": 2026
+      },
+      "timeKey": "01:00",
+      "timeZone": "Pacific/Auckland"
+    }
+  ],
+  "generatedBy": "tests/parity/generate.py",
+  "now": "2026-11-06T10:00:00+00:00",
+  "reference": "zoneinfo astimezone/strftime; aware datetime + timedelta"
+}

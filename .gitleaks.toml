@@ -1,0 +1,67 @@
+title = "Tokio Core Leak & Secret Rules"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "telegram-bot-token"
+description = "Telegram Bot API token"
+regex = '''\b\d{8,10}:[A-Za-z0-9_-]{35}\b'''
+tags = ["telegram", "secret"]
+
+[[rules]]
+id = "gemini-aq-key"
+description = "Google Gemini AQ.Ab API key"
+regex = '''AQ\.Ab[0-9A-Za-z._-]{20,}'''
+tags = ["gemini", "secret"]
+
+[[rules]]
+id = "tgcloud-deploy-url"
+description = "Hardcoded tgcloud deployment URL"
+regex = '''app\d{10}\.tgcloud\.ai'''
+tags = ["tgcloud", "identifier"]
+
+[[rules]]
+id = "tgcloud-cli-token"
+description = "Telegram Serverless CLI token"
+regex = '''app\d+:[A-Za-z0-9_-]{16,}'''
+tags = ["tgcloud", "secret"]
+
+[[rules]]
+id = "supabase-project-ref"
+description = "Legacy Supabase project_ref identifier"
+regex = '''project_ref=[a-z0-9]{10,}'''
+tags = ["supabase", "legacy"]
+
+[[rules]]
+id = "local-macos-path"
+description = "Local developer home path"
+regex = '''/Users/[a-zA-Z0-9._-]+/'''
+tags = ["pii", "path"]
+
+[[rules]]
+id = "personal-email-domain"
+description = "Personal email address outside noreply"
+regex = '''[A-Za-z0-9._%+-]+@(?:gmail\.com|yandex\.(?:ru|com)|mail\.ru)'''
+tags = ["pii", "email"]
+
+[[rules]]
+id = "clinical-icd-code"
+description = "Clinical ICD diagnostic code"
+regex = '''\bF[24]\d\.\d\b'''
+tags = ["pii", "medical"]
+
+[allowlist]
+description = "Scanner definitions, lockfiles, and explicit dummy test fixtures"
+paths = [
+  '''^\.gitleaks\.toml$''',
+  '''^scripts/check-leaks\.mjs$''',
+  '''^tests/config\.test\.ts$''',
+  '''^package-lock\.json$''',
+  '''^miniapp/package-lock\.json$''',
+]
+regexes = [
+  '''AIza[0-9A-Za-z_-]*(?:Dummy|Test|Fake|Example)[0-9A-Za-z_-]*''',
+  '''AQ\.Ab[0-9A-Za-z._-]*TestDummyKey[0-9A-Za-z._-]*''',
+  '''users\.noreply\.github\.com''',
+]

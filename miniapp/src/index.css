@@ -1,0 +1,148 @@
+:root {
+  /* Tier 1 & 2: Quiet Precision Dark Foundation Tokens */
+  --bg-canvas: #0c0d10;
+  --bg-color: #0c0d10;
+  --bg-surface: #14161b;
+  --bg-surface-elevated: #1c1f26;
+  --secondary-bg: #181b22;
+  --card-bg: #14161b;
+  --card-hover: #1a1d24;
+
+  /* Hairline Borders (3:1+ non-text contrast support on elevated controls) */
+  --border-hairline: rgba(255, 255, 255, 0.08);
+  --card-border: rgba(255, 255, 255, 0.09);
+  --card-border-hover: rgba(255, 255, 255, 0.18);
+  --border-focus: rgba(245, 158, 11, 0.55);
+
+  /* High-Contrast Optical Text Hierarchy */
+  --text-primary: #f4f4f6;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+
+  /* Curated Semantic Accents (Warm Amber + Precision Emerald, Zero Default Indigo) */
+  --accent-color: #f59e0b;
+  --accent-hover: #d97706;
+  --accent-subtle: rgba(245, 158, 11, 0.14);
+  --accent-text: #0c0d10;
+
+  --accent-emerald: #10b981;
+  --accent-emerald-subtle: rgba(16, 185, 129, 0.14);
+  --attention-warm: #d97706;
+  --attention-warm-subtle: rgba(217, 119, 6, 0.12);
+
+  --success-color: #10b981;
+  --danger-color: #ef4444;
+
+  /* Spatial & Geometric Radii (R_inner = R_outer - Padding) */
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 6px;
+
+  /* Snappy High-Tension Easing (< 200ms) */
+  --transition-speed: 140ms cubic-bezier(0.23, 1, 0.32, 1);
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  font-family: var(--font-sans);
+  color-scheme: dark;
+}
+
+/* Low Stimulation Mode (Calm Mode): Subdued warm graphite, zero motion, muted slate accents */
+body.low-stimulation {
+  background: #121316 !important;
+  --bg-canvas: #121316 !important;
+  --bg-color: #121316 !important;
+  --bg-surface: #181a1f !important;
+  --bg-surface-elevated: #20232a !important;
+  --secondary-bg: #181a1f !important;
+  --card-bg: #181a1f !important;
+  --card-hover: #1e2028 !important;
+  --border-hairline: #292c35 !important;
+  --card-border: #292c35 !important;
+  --card-border-hover: #383c47 !important;
+  --accent-color: #71717a !important;
+  --accent-hover: #52525b !important;
+  --accent-subtle: rgba(113, 113, 122, 0.16) !important;
+  --accent-text: #f4f4f5 !important;
+  --accent-emerald: #9ca3af !important;
+  --accent-emerald-subtle: rgba(156, 163, 175, 0.12) !important;
+  --attention-warm: #9ca3af !important;
+  --attention-warm-subtle: rgba(156, 163, 175, 0.1) !important;
+  --text-primary: #d4d4d8 !important;
+  --text-secondary: #9ca3af !important;
+  --text-muted: #6b7280 !important;
+  --success-color: #9ca3af !important;
+  --transition-speed: 0s !important;
+}
+
+body.low-stimulation *,
+body.low-stimulation *::before,
+body.low-stimulation *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  background-color: var(--bg-canvas);
+  overscroll-behavior-y: none;
+}
+
+body {
+  background-color: var(--bg-canvas);
+  background-image: none;
+  color: var(--text-primary);
+  min-height: 100vh;
+  min-height: 100dvh;
+  font-size: 15px;
+  line-height: 1.5;
+  user-select: none;
+  -webkit-user-select: none;
+  overscroll-behavior-y: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  border: none;
+  outline: none;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

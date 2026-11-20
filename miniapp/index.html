@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b0d14" />
+    <title>Tokio</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      (function () {
+        var reasons = [];
+        window.addEventListener('error', function (e) {
+          var t = e.target && e.target.tagName ? e.target.tagName + ' ' + (e.target.src || e.target.href || '') : '';
+          reasons.push(t || e.message || 'unknown error');
+        }, true);
+        window.addEventListener('unhandledrejection', function (e) {
+          reasons.push('promise: ' + (e.reason && e.reason.message ? e.reason.message : e.reason));
+        });
+        setTimeout(function () {
+          var root = document.getElementById('root');
+          if (root && root.childElementCount === 0) {
+            var wa = window.Telegram && window.Telegram.WebApp;
+            root.innerHTML =
+              '<div style="padding:60px 24px;text-align:center;font-family:-apple-system,system-ui,sans-serif;color:#e5e7eb">' +
+              '<div style="font-size:40px">📡</div>' +
+              '<h3 style="margin:12px 0 8px">Приложение не запустилось</h3>' +
+              '<p style="font-size:13px;opacity:.7;line-height:1.4;word-break:break-word">' +
+              (reasons.length ? reasons.slice(0, 3).join('<br>').replace(/</g, '&lt;') : 'Нет ответа от скрипта. Проверьте соединение.') +
+              '</p><button onclick="location.reload()" style="margin-top:16px;padding:10px 24px;border-radius:12px;border:0;background:#6366f1;color:#fff;font-size:14px">🔄 Перезагрузить</button>' +
+              (wa ? '' : '<p style="font-size:11px;opacity:.5;margin-top:12px">Telegram WebApp SDK не загрузился</p>') +
+              '</div>';
+          }
+        }, 8000);
+      })();
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+{
+  // Mini App is served natively by the platform (static SPA at the project's app URL).
+  // `npm run build` emits the Vite bundle into ./miniapp-dist; `npx tgcloud push` uploads it.
+  "static": {
+    "source": "miniapp-dist",
+    "spa": true
+  }
+}

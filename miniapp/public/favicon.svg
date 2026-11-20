@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <defs>
+    <radialGradient id="ag-bg" cx="50%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#1e222d" />
+      <stop offset="100%" stop-color="#0c0d10" />
+    </radialGradient>
+    <linearGradient id="ag-orbit" x1="10" y1="44" x2="54" y2="20" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.8" />
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0.2" />
+      <stop offset="100%" stop-color="#fbbf24" />
+    </linearGradient>
+    <linearGradient id="ag-amber-l" x1="32" y1="32" x2="48" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#fde68a" />
+    </linearGradient>
+    <linearGradient id="ag-amber-d" x1="32" y1="32" x2="48" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#b45309" />
+      <stop offset="100%" stop-color="#f59e0b" />
+    </linearGradient>
+    <linearGradient id="ag-emerald-l" x1="32" y1="32" x2="16" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#272b36" />
+      <stop offset="100%" stop-color="#34d399" />
+    </linearGradient>
+    <linearGradient id="ag-emerald-d" x1="32" y1="32" x2="16" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#181b22" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded Squircle Chassis -->
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#ag-bg)" stroke="#ffffff" stroke-opacity="0.14" stroke-width="1.5" />
+
+  <!-- Subtle Inner Dial Ring -->
+  <circle cx="32" cy="32" r="22" stroke="#ffffff" stroke-opacity="0.1" stroke-width="1.25" />
+
+  <!-- Tokio Orbit -->
+  <g transform="rotate(-32 32 32)">
+    <ellipse cx="32" cy="32" rx="23.5" ry="9" stroke="url(#ag-orbit)" stroke-width="1.75" />
+    <circle cx="55.5" cy="32" r="2" fill="#fbbf24" />
+    <circle cx="8.5" cy="32" r="1.75" fill="#10b981" />
+  </g>
+
+  <!-- Faceted Compass Needle -->
+  <polygon points="32,32 27.5,27.5 16,48" fill="url(#ag-emerald-l)" />
+  <polygon points="32,32 36.5,36.5 16,48" fill="url(#ag-emerald-d)" />
+  <polygon points="32,32 27.5,27.5 48,16" fill="url(#ag-amber-l)" />
+  <polygon points="32,32 36.5,36.5 48,16" fill="url(#ag-amber-d)" />
+
+  <!-- Core Pivot -->
+  <circle cx="32" cy="32" r="3.2" fill="#0c0d10" stroke="#ffffff" stroke-opacity="0.3" stroke-width="1" />
+  <circle cx="32" cy="32" r="1.5" fill="#fbbf24" />
+</svg>

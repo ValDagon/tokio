@@ -1,0 +1,299 @@
+{
+  "convertCases": [
+    {
+      "amount": 10.005,
+      "amountCents": 1001,
+      "currency": "USD",
+      "id": "convert-0-USD-10.005",
+      "pythonEur": 9.26,
+      "pythonEurCents": 926
+    },
+    {
+      "amount": 1234.56,
+      "amountCents": 123456,
+      "currency": "USD",
+      "id": "convert-1-USD-1234.56",
+      "pythonEur": 1143.11,
+      "pythonEurCents": 114311
+    },
+    {
+      "amount": 0.005,
+      "amountCents": 0,
+      "currency": "USD",
+      "id": "convert-2-USD-0.005",
+      "pythonEur": 0.0,
+      "pythonEurCents": 0
+    },
+    {
+      "amount": 2.675,
+      "amountCents": 268,
+      "currency": "USD",
+      "id": "convert-3-USD-2.675",
+      "pythonEur": 2.48,
+      "pythonEurCents": 248
+    },
+    {
+      "amount": 100.01,
+      "amountCents": 10001,
+      "currency": "USDT",
+      "id": "convert-4-USDT-100.01",
+      "pythonEur": 92.6,
+      "pythonEurCents": 9260
+    },
+    {
+      "amount": 0.01,
+      "amountCents": 1,
+      "currency": "USDC",
+      "id": "convert-5-USDC-0.01",
+      "pythonEur": 0.01,
+      "pythonEurCents": 1
+    },
+    {
+      "amount": 98765.43,
+      "amountCents": 9876543,
+      "currency": "RUB",
+      "id": "convert-6-RUB-98765.43",
+      "pythonEur": 940.62,
+      "pythonEurCents": 94062
+    },
+    {
+      "amount": 0.5,
+      "amountCents": 50,
+      "currency": "RUB",
+      "id": "convert-7-RUB-0.5",
+      "pythonEur": 0.0,
+      "pythonEurCents": 0
+    },
+    {
+      "amount": 500000.55,
+      "amountCents": 50000055,
+      "currency": "KZT",
+      "id": "convert-8-KZT-500000.55",
+      "pythonEur": 952.38,
+      "pythonEurCents": 95238
+    },
+    {
+      "amount": 1234.56,
+      "amountCents": 123456,
+      "currency": "TRY",
+      "id": "convert-9-TRY-1234.56",
+      "pythonEur": 33.37,
+      "pythonEurCents": 3337
+    },
+    {
+      "amount": 99.99,
+      "amountCents": 9999,
+      "currency": "BAM",
+      "id": "convert-10-BAM-99.99",
+      "pythonEur": 51.12,
+      "pythonEurCents": 5112
+    },
+    {
+      "amount": 1.95583,
+      "amountCents": 196,
+      "currency": "BAM",
+      "id": "convert-11-BAM-1.95583",
+      "pythonEur": 1.0,
+      "pythonEurCents": 100
+    },
+    {
+      "amount": 12.345,
+      "amountCents": 1234,
+      "currency": "EUR",
+      "id": "convert-12-EUR-12.345",
+      "pythonEur": 12.35,
+      "pythonEurCents": 1235
+    },
+    {
+      "amount": -7.775,
+      "amountCents": -778,
+      "currency": "EUR",
+      "id": "convert-13-EUR--7.775",
+      "pythonEur": -7.78,
+      "pythonEurCents": -778
+    }
+  ],
+  "generatedBy": "tests/parity/generate.py",
+  "now": "2026-11-06T10:00:00+00:00",
+  "rates": {
+    "BAM": 1.95583,
+    "EUR": 1.0,
+    "KZT": 525.0,
+    "RUB": 105.0,
+    "TRY": 37.0,
+    "USD": 1.08,
+    "USDC": 1.08,
+    "USDT": 1.08
+  },
+  "reference": "backend/app/services/fx.py (convert_to_eur), Python round(x, 2)",
+  "roundCases": [
+    {
+      "amount": 0,
+      "id": "round2-0",
+      "pythonRound2": 0.0,
+      "pythonRound2Cents": 0
+    },
+    {
+      "amount": -0.0,
+      "id": "round2--0.0",
+      "pythonRound2": -0.0,
+      "pythonRound2Cents": 0
+    },
+    {
+      "amount": 2.675,
+      "id": "round2-2.675",
+      "pythonRound2": 2.67,
+      "pythonRound2Cents": 267
+    },
+    {
+      "amount": 1.005,
+      "id": "round2-1.005",
+      "pythonRound2": 1.0,
+      "pythonRound2Cents": 100
+    },
+    {
+      "amount": 0.125,
+      "id": "round2-0.125",
+      "pythonRound2": 0.12,
+      "pythonRound2Cents": 12
+    },
+    {
+      "amount": 0.135,
+      "id": "round2-0.135",
+      "pythonRound2": 0.14,
+      "pythonRound2Cents": 14
+    },
+    {
+      "amount": 2.5,
+      "id": "round2-2.5",
+      "pythonRound2": 2.5,
+      "pythonRound2Cents": 250
+    },
+    {
+      "amount": 0.005,
+      "id": "round2-0.005",
+      "pythonRound2": 0.01,
+      "pythonRound2Cents": 1
+    },
+    {
+      "amount": 0.015,
+      "id": "round2-0.015",
+      "pythonRound2": 0.01,
+      "pythonRound2Cents": 1
+    },
+    {
+      "amount": 1.004999,
+      "id": "round2-1.004999",
+      "pythonRound2": 1.0,
+      "pythonRound2Cents": 100
+    },
+    {
+      "amount": 1234.565,
+      "id": "round2-1234.565",
+      "pythonRound2": 1234.57,
+      "pythonRound2Cents": 123457
+    },
+    {
+      "amount": 12.345,
+      "id": "round2-12.345",
+      "pythonRound2": 12.35,
+      "pythonRound2Cents": 1235
+    },
+    {
+      "amount": 12.335,
+      "id": "round2-12.335",
+      "pythonRound2": 12.34,
+      "pythonRound2Cents": 1234
+    },
+    {
+      "amount": 8.845,
+      "id": "round2-8.845",
+      "pythonRound2": 8.85,
+      "pythonRound2Cents": 885
+    },
+    {
+      "amount": 5.555,
+      "id": "round2-5.555",
+      "pythonRound2": 5.55,
+      "pythonRound2Cents": 555
+    },
+    {
+      "amount": 0.999,
+      "id": "round2-0.999",
+      "pythonRound2": 1.0,
+      "pythonRound2Cents": 100
+    },
+    {
+      "amount": 1.115,
+      "id": "round2-1.115",
+      "pythonRound2": 1.11,
+      "pythonRound2Cents": 111
+    },
+    {
+      "amount": 4.35,
+      "id": "round2-4.35",
+      "pythonRound2": 4.35,
+      "pythonRound2Cents": 435
+    },
+    {
+      "amount": -2.675,
+      "id": "round2--2.675",
+      "pythonRound2": -2.67,
+      "pythonRound2Cents": -267
+    },
+    {
+      "amount": -1.005,
+      "id": "round2--1.005",
+      "pythonRound2": -1.0,
+      "pythonRound2Cents": -100
+    },
+    {
+      "amount": -0.125,
+      "id": "round2--0.125",
+      "pythonRound2": -0.12,
+      "pythonRound2Cents": -12
+    },
+    {
+      "amount": -12.345,
+      "id": "round2--12.345",
+      "pythonRound2": -12.35,
+      "pythonRound2Cents": -1235
+    },
+    {
+      "amount": 0.30000000000000004,
+      "id": "round2-0.30000000000000004",
+      "pythonRound2": 0.3,
+      "pythonRound2Cents": 30
+    },
+    {
+      "amount": 1e-07,
+      "id": "round2-1e-07",
+      "pythonRound2": 0.0,
+      "pythonRound2Cents": 0
+    },
+    {
+      "amount": 99999999.995,
+      "id": "round2-99999999.995",
+      "pythonRound2": 100000000.0,
+      "pythonRound2Cents": 10000000000
+    },
+    {
+      "amount": 1000000.005,
+      "id": "round2-1000000.005",
+      "pythonRound2": 1000000.01,
+      "pythonRound2Cents": 100000001
+    },
+    {
+      "amount": 0.335,
+      "id": "round2-0.335",
+      "pythonRound2": 0.34,
+      "pythonRound2Cents": 34
+    },
+    {
+      "amount": 0.665,
+      "id": "round2-0.665",
+      "pythonRound2": 0.67,
+      "pythonRound2Cents": 67
+    }
+  ]
+}

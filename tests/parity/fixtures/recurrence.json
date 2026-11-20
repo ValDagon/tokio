@@ -1,0 +1,242 @@
+{
+  "cases": [
+    {
+      "base": "2026-11-06T09:00:00+00:00",
+      "id": "daily-next-day",
+      "pythonEpochMs": 1794042000000,
+      "pythonIso": "2026-11-07T09:00:00+00:00",
+      "pythonRule": "daily",
+      "tsRule": {
+        "freq": "daily"
+      }
+    },
+    {
+      "base": "2026-11-06T10:00:00+00:00",
+      "id": "daily-same-moment",
+      "pythonEpochMs": 1794045600000,
+      "pythonIso": "2026-11-07T10:00:00+00:00",
+      "pythonRule": "daily",
+      "tsRule": {
+        "freq": "daily"
+      }
+    },
+    {
+      "base": "2026-01-15T07:30:00+00:00",
+      "id": "daily-far-past",
+      "pythonEpochMs": 1794036600000,
+      "pythonIso": "2026-11-07T07:30:00+00:00",
+      "pythonRule": "daily",
+      "tsRule": {
+        "freq": "daily"
+      }
+    },
+    {
+      "base": "2026-11-01T08:15:42.500000+00:00",
+      "id": "daily-tz-aware-ms",
+      "pythonEpochMs": 1794039342500,
+      "pythonIso": "2026-11-07T08:15:42.500000+00:00",
+      "pythonRule": "daily",
+      "tsRule": {
+        "freq": "daily"
+      }
+    },
+    {
+      "base": "2026-11-06T10:00:00+00:00",
+      "id": "weekly",
+      "pythonEpochMs": 1794564000000,
+      "pythonIso": "2026-11-13T10:00:00+00:00",
+      "pythonRule": "weekly",
+      "tsRule": {
+        "freq": "weekly"
+      }
+    },
+    {
+      "base": "2026-10-02T18:00:00+00:00",
+      "id": "weekly-past",
+      "pythonEpochMs": 1793988000000,
+      "pythonIso": "2026-11-06T18:00:00+00:00",
+      "pythonRule": "weekly",
+      "tsRule": {
+        "freq": "weekly"
+      }
+    },
+    {
+      "base": "2026-10-06T09:00:00+00:00",
+      "id": "monthly-simple",
+      "pythonEpochMs": 1796547600000,
+      "pythonIso": "2026-12-06T09:00:00+00:00",
+      "pythonRule": "monthly",
+      "tsRule": {
+        "freq": "monthly"
+      }
+    },
+    {
+      "base": "2026-01-31T09:00:00+00:00",
+      "id": "monthly-jan-31",
+      "pythonEpochMs": 1795856400000,
+      "pythonIso": "2026-11-28T09:00:00+00:00",
+      "pythonRule": "monthly",
+      "tsRule": {
+        "freq": "monthly"
+      }
+    },
+    {
+      "base": "2026-01-30T09:00:00+00:00",
+      "id": "monthly-jan-30",
+      "pythonEpochMs": 1795856400000,
+      "pythonIso": "2026-11-28T09:00:00+00:00",
+      "pythonRule": "monthly",
+      "tsRule": {
+        "freq": "monthly"
+      }
+    },
+    {
+      "base": "2026-02-28T09:00:00+00:00",
+      "id": "monthly-sticky-feb-28",
+      "pythonEpochMs": 1795856400000,
+      "pythonIso": "2026-11-28T09:00:00+00:00",
+      "pythonRule": "monthly",
+      "tsRule": {
+        "freq": "monthly"
+      }
+    },
+    {
+      "base": "2026-03-31T09:00:00+00:00",
+      "id": "monthly-mar-31",
+      "pythonEpochMs": 1796029200000,
+      "pythonIso": "2026-11-30T09:00:00+00:00",
+      "pythonRule": "monthly",
+      "tsRule": {
+        "freq": "monthly"
+      }
+    },
+    {
+      "base": "2024-05-17T09:00:00+00:00",
+      "id": "monthly-past-many",
+      "pythonEpochMs": 1794906000000,
+      "pythonIso": "2026-11-17T09:00:00+00:00",
+      "pythonRule": "monthly",
+      "tsRule": {
+        "freq": "monthly"
+      }
+    },
+    {
+      "base": "2026-11-06T09:00:00+00:00",
+      "id": "yearly",
+      "pythonEpochMs": 1825491600000,
+      "pythonIso": "2027-11-06T09:00:00+00:00",
+      "pythonRule": "yearly",
+      "tsRule": {
+        "freq": "yearly"
+      }
+    },
+    {
+      "base": "2024-02-29T09:00:00+00:00",
+      "id": "yearly-leap-day",
+      "pythonEpochMs": 1803805200000,
+      "pythonIso": "2027-02-28T09:00:00+00:00",
+      "pythonRule": "yearly",
+      "tsRule": {
+        "freq": "yearly"
+      }
+    },
+    {
+      "base": "2023-03-01T09:00:00+00:00",
+      "id": "yearly-past",
+      "pythonEpochMs": 1803891600000,
+      "pythonIso": "2027-03-01T09:00:00+00:00",
+      "pythonRule": "yearly",
+      "tsRule": {
+        "freq": "yearly"
+      }
+    },
+    {
+      "base": "2026-11-01T09:00:00+00:00",
+      "id": "every-2-days",
+      "pythonEpochMs": 1794042000000,
+      "pythonIso": "2026-11-07T09:00:00+00:00",
+      "pythonRule": "every_2_days",
+      "tsRule": {
+        "freq": "daily",
+        "interval": 2
+      }
+    },
+    {
+      "base": "2026-10-01T09:00:00+00:00",
+      "id": "every-10-days",
+      "pythonEpochMs": 1794301200000,
+      "pythonIso": "2026-11-10T09:00:00+00:00",
+      "pythonRule": "every_10_days",
+      "tsRule": {
+        "freq": "daily",
+        "interval": 10
+      }
+    },
+    {
+      "base": "2026-09-01T09:00:00+00:00",
+      "id": "every-3-weeks",
+      "pythonEpochMs": 1795510800000,
+      "pythonIso": "2026-11-24T09:00:00+00:00",
+      "pythonRule": "every_3_weeks",
+      "tsRule": {
+        "freq": "weekly",
+        "interval": 3
+      }
+    },
+    {
+      "base": "2026-01-31T09:00:00+00:00",
+      "id": "every-2-months",
+      "pythonEpochMs": 1796029200000,
+      "pythonIso": "2026-11-30T09:00:00+00:00",
+      "pythonRule": "every_2_months",
+      "tsRule": {
+        "freq": "monthly",
+        "interval": 2
+      }
+    },
+    {
+      "base": "2026-02-28T09:00:00+00:00",
+      "id": "every-6-months",
+      "pythonEpochMs": 1803805200000,
+      "pythonIso": "2027-02-28T09:00:00+00:00",
+      "pythonRule": "every_6_months",
+      "tsRule": {
+        "freq": "monthly",
+        "interval": 6
+      }
+    },
+    {
+      "base": "2026-10-20T09:00:00+00:00",
+      "id": "fallback-unknown-string",
+      "pythonEpochMs": 1795165200000,
+      "pythonIso": "2026-11-20T09:00:00+00:00",
+      "pythonRule": "по будням",
+      "tsRule": {
+        "freq": "monthly"
+      }
+    },
+    {
+      "base": "2026-10-20T09:00:00+00:00",
+      "id": "uppercase-with-spaces",
+      "pythonEpochMs": 1795165200000,
+      "pythonIso": "2026-11-20T09:00:00+00:00",
+      "pythonRule": "  MONTHLY ",
+      "tsRule": {
+        "freq": "monthly"
+      }
+    },
+    {
+      "base": "2026-10-18T10:00:00+00:00",
+      "id": "weekly-across-dst",
+      "pythonEpochMs": 1794132000000,
+      "pythonIso": "2026-11-08T10:00:00+00:00",
+      "pythonRule": "weekly",
+      "tsRule": {
+        "freq": "weekly"
+      }
+    }
+  ],
+  "generatedBy": "tests/parity/generate.py",
+  "now": "2026-11-06T10:00:00+00:00",
+  "reference": "backend/app/services/tasks.py::calculate_next_occurrence (datetime.now зафиксирован)"
+}

@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+title: "Tokio"
+message: "If you use Tokio in your work or build on top of it, please cite it using this metadata."
+type: software
+version: "3.1.0"
+date-released: "2026-11-20"
+license: "Apache-2.0"
+repository-code: "https://github.com/ValDagon/tokio"
+url: "https://github.com/ValDagon/tokio"
+authors:
+  - given-names: "Valentin"
+    family-names: "K."
+    alias: "ValDagon"
+  - given-names: "Yuri"
+    family-names: "Osipov"
+    alias: "yo-urun"
+keywords:
+  - telegram-bot
+  - telegram-mini-app
+  - telegram-serverless
+  - tgcloud
+  - ai-assistant
+  - typescript
+  - sqlite
+  - overlay-architecture
+  - i18n

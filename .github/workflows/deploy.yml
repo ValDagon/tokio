@@ -1,0 +1,50 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root dependencies and check leaks
+        run: |
+          npm ci
+          npm run check:leaks
+
+      - name: Build backend (esbuild -> tgcloud/)
+        run: npm run build
+
+      - name: Build Mini App (vite -> miniapp-dist/)
+        run: |
+          npm ci
+          npm run build
+        working-directory: miniapp
+
+      - name: Push to Telegram Serverless
+        run: |
+          if [ -z "$TGCLOUD_TOKEN" ]; then
+            echo "TGCLOUD_TOKEN (or CLOUD_TOKEN) not set — skipping tgcloud push. Add the BotFather CLI Access token as a repo secret to enable deploys."
+            exit 0
+          fi
+          case "$TGCLOUD_TOKEN" in
+            app*[A-Za-z0-9]*:*) npx tgcloud push --force ;;
+            *)
+              echo "TGCLOUD_TOKEN is set but has wrong format (expected app<id>:<secret> from BotFather -> Serverless -> CLI Access). Skipping tgcloud push."
+              ;;
+          esac
+        env:
+          TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN || secrets.CLOUD_TOKEN }}

@@ -1,0 +1,35 @@
+{
+  "name": "tokio",
+  "version": "3.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Tokio — open-source AI personal assistant core for Telegram Serverless (tgcloud.ai) with declarative overlays and 4-language i18n",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ValDagon/tokio.git"
+  },
+  "homepage": "https://github.com/ValDagon/tokio#readme",
+  "bugs": {
+    "url": "https://github.com/ValDagon/tokio/issues"
+  },
+  "scripts": {
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
+    "build": "node build.mjs && node scripts/check_bundle_graph.mjs tgcloud",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "pretypecheck": "node scripts/ensure-secrets-stub.mjs && node scripts/compile-runtime-assets.mjs",
+    "pretest": "node scripts/ensure-secrets-stub.mjs && node scripts/compile-runtime-assets.mjs",
+    "check:leaks": "node scripts/check-leaks.mjs",
+    "check:leaks:history": "node scripts/check-leaks.mjs --git-history"
+  },
+  "devDependencies": {
+    "@tgcloud/cli": "^0.2.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.6",
+    "better-sqlite3": "^13.0.3",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}
