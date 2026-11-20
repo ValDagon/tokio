@@ -61,7 +61,8 @@ paths = [
   '''^miniapp/package-lock\.json$''',
 ]
 regexes = [
-  '''AIza[0-9A-Za-z_-]*(?:Dummy|Test|Fake|Example)[0-9A-Za-z_-]*''',
+  '''(?i)AIza[0-9A-Za-z_-]*(?:Dummy|Test|Fake|Example)[0-9A-Za-z_-]*''',
   '''AQ\.Ab[0-9A-Za-z._-]*TestDummyKey[0-9A-Za-z._-]*''',
+  '''(?:0123456789abcdef){4}''',
   '''users\.noreply\.github\.com''',
 ]

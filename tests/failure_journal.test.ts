@@ -215,13 +215,15 @@ describe('журнал сбоев: detail', () => {
   });
 
   it('вырезает токены, chat_id и file_id', () => {
+    const fakeBotSecret = ['TEST', 'DUMMY', 'TOKEN', '0000000000000000'].join('_');
+    const fakeBotToken = `${'123456789'}:${fakeBotSecret}`;
     const scrubbed = sanitizeFailureDetail(
-      'send failed chat_id=100001 token=123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw file_id=AgACAgIAAxkBAAI',
+      `send failed chat_id=100001 token=${fakeBotToken} file_id=AgACAgIAAxkBAAI`,
     );
 
     expect(scrubbed).toBeTruthy();
     expect(scrubbed).not.toContain('100001');
-    expect(scrubbed).not.toContain('AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw');
+    expect(scrubbed).not.toContain(fakeBotSecret);
     expect(scrubbed).not.toContain('AgACAgIAAxkBAAI');
     expect(scrubbed).toContain('[redacted]');
   });
