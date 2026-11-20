@@ -86,3 +86,17 @@ npx tgcloud push && npx tgcloud migrate --yes
 2. **No `lib/` → `handlers/` Imports**: `build.mjs` emits only `handlers/message.js` and `handlers/callback_query.js`; helpers in `handlers/` are bundled inside them. `src/lib/` must never import from `src/handlers/`.
 3. **No Persistent Timers**: Background work (reminders, digests, maintenance) runs opportunistically via `due_jobs` (`src/lib/dal/due_jobs.ts`) on incoming webhook or RPC traffic.
 4. **No Filesystem Access in Runtime**: All overlay prompts, manifest settings, demo seeds, and locale dictionaries are compiled at build time into `*.generated.ts`.
+
+---
+
+## 6. Cross-Harness Agent Handoff & Core/Overlay Workflow
+
+- **Cold-Start Read Order (OpenCode, Antigravity, Claude Code, Codex, Gemini CLI, or any model)**:
+  1. `AGENTS.md` (core boundaries, gates, and V8 isolate invariants)
+  2. `docs/system/INDEX.md` (documentation map)
+  3. `docs/system/ARCHITECTURE.md` (runtime layout, module cap, SQLite schema, 54-tool engine)
+  4. `docs/system/OVERLAY-SPEC.md` (Level 1 Overlay manifest, prompt compilation, feature flags)
+- **Branch & PR Workflow**:
+  - Develop core mechanics (tools, bug fixes, Mini App features, i18n, feature flags) on a feature branch and submit a PR to `main` so maintainers can review cleanly.
+  - Downstream private instances consume this repository as a pinned `core/` git submodule and keep all instance-specific branding, prompts, and feature toggles inside their own `overlay/` (or `OVERLAY_DIR`).
+  - Before submitting or handing off work between models/harnesses, run `npm run check:leaks:history`, `npm run typecheck`, `npm test`, `npm run build`, and Mini App `npm run lint && npm test && npm run build`, and leave the branch clean with a concise status summary.
