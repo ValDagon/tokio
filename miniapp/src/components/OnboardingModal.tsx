@@ -262,6 +262,25 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             </div>
           )}
 
+          {/* Plain-language hint: agent-first, no commands */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 8,
+              padding: '10px 12px',
+              borderRadius: 'var(--radius-sm, 6px)',
+              background: 'rgba(245, 158, 11, 0.08)',
+              border: '1px solid rgba(245, 158, 11, 0.22)',
+              color: 'var(--text-secondary)',
+              fontSize: 12.5,
+              lineHeight: 1.4,
+            }}
+          >
+            <Sparkles size={15} color="var(--accent-color)" style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>{t('onboarding.howToHint')}</span>
+          </div>
+
           {/* 1. Name */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label

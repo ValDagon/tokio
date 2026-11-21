@@ -151,8 +151,8 @@ describe('routeMessage: онбординг', () => {
 
     const texts = sentTexts();
     expect(texts).toHaveLength(1);
-    expect(texts[0]).toContain('Добро пожаловать в Tokio');
-    expect(texts[0]).toContain('Пройти обучение');
+    expect(texts[0]).toContain('Как со мной общаться');
+    expect(texts[0]).toContain('Пройти короткое знакомство');
     expect(await getUser(OTHER)).not.toBeNull();
   });
 
@@ -161,12 +161,12 @@ describe('routeMessage: онбординг', () => {
 
     const texts = sentTexts();
     expect(texts).toHaveLength(2);
-    expect(texts[0]).toContain('Как со мной общаться');
-    expect(texts[1]).toContain('Пройти обучение');
+    expect(texts[0]).toContain('твой личный ассистент');
+    expect(texts[1]).toContain('Пройти короткое знакомство');
     const calls = callsOf('sendMessage');
     expect(calls[1]?.params.reply_markup).toEqual({
       inline_keyboard: [
-        [{ text: '🚀 Пройти обучение', callback_data: 'onboard:step:overview' }],
+        [{ text: '🚀 Пройти знакомство', callback_data: 'onboard:step:overview' }],
         [{ text: '⏩ Пропустить', callback_data: 'onboard:skip' }],
       ],
     });
@@ -175,13 +175,13 @@ describe('routeMessage: онбординг', () => {
   it('новый пользователь без текста получает приветствие с вопросом об обучении', async () => {
     await routeMessage(msg(null, { from: { id: OTHER, first_name: 'Новый' } }));
     expect(sentTexts()).toHaveLength(2);
-    expect(sentTexts()[1]).toContain('Пройти обучение');
+    expect(sentTexts()[1]).toContain('Пройти короткое знакомство');
   });
 
   it('известный пользователь /start: только приветствие', async () => {
     await routeMessage(msg('/start'));
     expect(sentTexts()).toHaveLength(1);
-    expect(sentTexts()[0]).toContain('Как со мной общаться');
+    expect(sentTexts()[0]).toContain('твой личный ассистент');
   });
 });
 
@@ -240,7 +240,7 @@ describe('routeMessage: команды', () => {
     expect(sentTexts()[0]).toContain('Tokio');
     expect(callsOf('sendMessage')[0]?.params.reply_markup).toEqual({
       inline_keyboard: [
-        [{ text: '🚀 Пройти обучение заново', callback_data: 'onboard:restart' }],
+        [{ text: '🚀 Пройти знакомство заново', callback_data: 'onboard:restart' }],
       ],
     });
     expect(helpText()).toContain('/diary');

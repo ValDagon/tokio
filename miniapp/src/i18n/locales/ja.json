@@ -405,11 +405,12 @@
   "onboarding": {
     "welcomeTitle": "{{name}} へようこそ",
     "welcomeSubtitle": "30秒でアシスタントを初期設定できます",
+    "howToHint": "書く・話す・写真を送るだけで使えます。コマンドは不要です。",
     "nameLabel": "お名前（呼び方）",
     "namePlaceholder": "お名前 (例: ケンジ)",
     "nameError": "お名前を入力してください。",
     "currencyLabel": "基準通貨",
-    "currencyHint": "総資産、ランウェイ、1日の支出目安はこの通貨で計算されます。",
+    "currencyHint": "残高・支出・資金の余裕はこの通貨で計算されます。",
     "timezoneLabel": "タイムゾーン",
     "personaLabel": "AIアシスタントのスタイル",
     "starterAccountsLabel": "初期口座（今すぐ作成）",
