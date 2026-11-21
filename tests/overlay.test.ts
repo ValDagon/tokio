@@ -58,6 +58,9 @@ describe('overlay system', () => {
       manifest.brand.assistantName = 'CustomBot';
       manifest.brand.localizedNames.en = 'CustomBotEN';
       manifest.features.spendLimitEnabled = false;
+      manifest.miniapp.accountThemes = [
+        { pattern: 'custom', theme: 'primary', shortName: 'Custom', roleLabel: 'Custom role' },
+      ];
       writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
 
       writeFileSync(
@@ -70,6 +73,12 @@ describe('overlay system', () => {
       expect(compiled.overlaySource).toBe('custom');
       expect(compiled.compiledOverlay.manifest.brand.assistantName).toBe('CustomBot');
       expect(compiled.compiledOverlay.manifest.features.spendLimitEnabled).toBe(false);
+      expect(compiled.compiledOverlay.manifest.miniapp.accountThemes[0]).toEqual({
+        pattern: 'custom',
+        theme: 'primary',
+        shortName: 'Custom',
+        roleLabel: 'Custom role',
+      });
       expect(compiled.compiledOverlay.prompts.en.identity).toBe(
         'You are {{assistantName}}, a custom test assistant.',
       );
