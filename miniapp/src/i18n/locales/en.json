@@ -405,11 +405,12 @@
   "onboarding": {
     "welcomeTitle": "Welcome to {{name}}",
     "welcomeSubtitle": "Personalize your assistant in 30 seconds",
+    "howToHint": "Write, speak, or send a photo — no commands needed.",
     "nameLabel": "What should I call you?",
     "namePlaceholder": "Your name (e.g. Alex)",
     "nameError": "Please enter your name.",
     "currencyLabel": "Base balance currency",
-    "currencyHint": "Net worth, runway, and daily spending limit will be calculated in this currency.",
+    "currencyHint": "Balances, spending, and your financial reserve are calculated in this currency.",
     "timezoneLabel": "Timezone",
     "personaLabel": "AI assistant style",
     "starterAccountsLabel": "Starter accounts (create now)",

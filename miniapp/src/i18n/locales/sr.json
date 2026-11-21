@@ -405,11 +405,12 @@
   "onboarding": {
     "welcomeTitle": "Dobrodošli u {{name}}",
     "welcomeSubtitle": "Lično podešavanje asistenta za 30 sekundi",
+    "howToHint": "Piši, govori ili pošalji fotografiju — komande nisu potrebne.",
     "nameLabel": "Kako da vam se obraćam?",
     "namePlaceholder": "Vaše ime (npr. Marko)",
     "nameError": "Molimo unesite vaše ime.",
     "currencyLabel": "Osnovna valuta balansa",
-    "currencyHint": "U ovoj valuti će se računati kapital, runway i dnevni limit potrošnje.",
+    "currencyHint": "U ovoj valuti se računaju stanja, troškovi i finansijska rezerva.",
     "timezoneLabel": "Vremenska zona",
     "personaLabel": "Stil komunikacije AI asistenta",
     "starterAccountsLabel": "Početni računi (kreiraj odmah)",
