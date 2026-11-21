@@ -46,7 +46,10 @@
     "timeoutError": "Сервер не отвечает (таймаут)",
     "networkError": "Не удалось связаться с сервером",
     "initDataPresent": "initData: есть",
-    "initDataMissing": "initData: НЕТ"
+    "initDataMissing": "initData: НЕТ",
+    "rpcWriteUnavailable": "Запись не выполнена: Serverless RPC недоступен ({{error}}). Запись через обходной API запрещена — повторите попытку позже.",
+    "staleCacheBanner": "Показаны сохранённые данные: связи с ботом нет.",
+    "staleFallbackBanner": "Показаны данные резервного сервера — обновите приложение."
   },
   "utils": {
     "today": "Сегодня",

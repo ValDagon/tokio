@@ -70,12 +70,16 @@ import {
   restoreTrashItem,
   deleteTrashItemPermanently,
   emptyTrash,
+  getDataSource,
+  subscribeDataSource,
+  type ApiSource,
 } from './api';
 import './App.css';
 import { TodayTab, TasksTab, FinancesTab, NotesTab, SystemTab } from './tabs';
 import { ReaderSheet } from './components/ReaderSheet';
 import { OnboardingModal } from './components/OnboardingModal';
 import { useI18n, LOCALE_BCP47, normalizeLocale } from './i18n/index';
+import { parseStartParam, readInitialStartParam } from './deepLink';
 
 import {
   groupTasksByDay,
@@ -225,6 +229,8 @@ export function App() {
   const [isSubmittingInline, setIsSubmittingInline] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [dataSource, setDataSource] = useState<ApiSource>(getDataSource());
+  useEffect(() => subscribeDataSource(setDataSource), []);
 
   // Finances state
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -241,6 +247,7 @@ export function App() {
   // Notes state
   const [notes, setNotes] = useState<Note[]>([]);
   const [selectedNoteCol, setSelectedNoteCol] = useState<string | null>(null);
+  const [pendingDeepLinkNoteId, setPendingDeepLinkNoteId] = useState<string | null>(null);
   const [newNoteText, setNewNoteText] = useState('');
   const [notesLoading, setNotesLoading] = useState(false);
   const [noteSearch, setNoteSearch] = useState('');
@@ -313,6 +320,38 @@ export function App() {
     const t1 = setTimeout(configureTelegram, 100);
     const t2 = setTimeout(configureTelegram, 350);
 
+    const initialTarget = parseStartParam(readInitialStartParam());
+    if (initialTarget) {
+      setActiveTab(initialTarget.tab);
+      if (initialTarget.taskId) {
+        const deepLinkTaskId = initialTarget.taskId;
+        setSelectedCategory(null);
+        setSelectedSubcategory(null);
+        setTaskFilter('all');
+        setExpandedTasks(prev => {
+          const next = new Set(prev);
+          next.add(deepLinkTaskId);
+          return next;
+        });
+      }
+      if (initialTarget.liabilityQueue) {
+        setActiveLiabilityQueue(initialTarget.liabilityQueue);
+      }
+      if (initialTarget.bankName) {
+        setActiveBankName(initialTarget.bankName);
+      }
+      if (initialTarget.noteCol) {
+        setSelectedNoteCol(initialTarget.noteCol);
+      }
+      if (initialTarget.noteId) {
+        setSelectedNoteCol(null);
+        setPendingDeepLinkNoteId(initialTarget.noteId);
+      }
+      if (initialTarget.openDossier) {
+        setShowDossierReader(true);
+      }
+    }
+
     const wa = window.Telegram?.WebApp;
     if (wa?.onEvent) {
       wa.onEvent('fullscreenChanged', configureTelegram);
@@ -347,6 +386,16 @@ export function App() {
       if (medications.length === 0) loadMedications();
     }
   }, [activeTab, accounts.length, notes.length, medications.length, lifeContext, docChapters.length, userSettings?.role]);
+
+  // Resolve deep-linked note once notes finish loading
+  useEffect(() => {
+    if (!pendingDeepLinkNoteId || notes.length === 0) return;
+    const match = notes.find(n => String(n.id) === pendingDeepLinkNoteId);
+    if (match) {
+      setActiveReaderNoteId(match.id);
+    }
+    setPendingDeepLinkNoteId(null);
+  }, [pendingDeepLinkNoteId, notes]);
 
   // Wire Telegram BackButton to close open modals & reader sheet
   useEffect(() => {
@@ -1370,6 +1419,16 @@ export function App() {
 
   return (
     <div className="app-container">
+      {dataSource !== 'live' && (
+        <div className="stale-data-banner" role="status">
+          <WifiOff size={14} />
+          <span>
+            {dataSource === 'cache'
+              ? t('errors.staleCacheBanner')
+              : t('errors.staleFallbackBanner')}
+          </span>
+        </div>
+      )}
       {/* Header */}
       <header className="app-header">
         <div className="brand">

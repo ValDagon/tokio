@@ -177,11 +177,37 @@ export const triggerHaptic = (style: 'light' | 'medium' | 'success' = 'light') =
 };
 
 /**
- * Адрес прямого HTTP-API. В проде его нет: Mini App живёт на том же хосте, что
- * и бот, и ходит через Serverless RPC. Пустая база — норма. Чужой origin
- * (Render) сюда не подставляется: иначе запросы молча уходят в другую базу.
+ * Direct HTTP API base URL. Empty in production because the Mini App is served
+ * from the bot's own origin and talks via Telegram Serverless RPC. Set
+ * `VITE_API_BASE_URL` only for local development.
  */
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+
+/** Origin of the most recent successful data read. */
+export type ApiSource = 'live' | 'fallback' | 'cache';
+
+let lastSource: ApiSource = 'live';
+const sourceListeners = new Set<(source: ApiSource) => void>();
+
+function setDataSource(source: ApiSource): void {
+  if (lastSource === source) return;
+  lastSource = source;
+  for (const listener of sourceListeners) listener(source);
+}
+
+/** Source of the last response: live RPC, fallback HTTP API, or local cache. */
+export const getDataSource = (): ApiSource => lastSource;
+
+/** True when the displayed data did not come from live RPC. */
+export const isStaleDataSource = (): boolean => lastSource !== 'live';
+
+/** Subscribe to data source transitions; returns an unsubscribe callback. */
+export function subscribeDataSource(listener: (source: ApiSource) => void): () => void {
+  sourceListeners.add(listener);
+  return () => {
+    sourceListeners.delete(listener);
+  };
+}
 
 const API_TIMEOUT_MS = 25000;
 const API_MAX_ATTEMPTS = 3;
@@ -301,9 +327,13 @@ function callServerlessRpc<T>(payload: ServerlessRpcPayload): Promise<T> {
 
 /**
  * Universal request engine:
- * 1. Prioritizes Telegram Serverless RPC ('rpc' endpoint) on V8 Edge.
- * 2. Falls back to direct FastAPI fetch via API_BASE if Serverless is unavailable.
- * 3. Falls back to localStorage cache for GET requests when offline.
+ * 1. Telegram Serverless RPC ('rpc' endpoint) on the bot's own host — the primary
+ *    production path.
+ * 2. Direct HTTP API via `VITE_API_BASE_URL` for local development only. A failed
+ *    mutating RPC never falls back to direct HTTP writes so it cannot write to a
+ *    stale or unintended backend.
+ * 3. Fallback to the localStorage cache for GET requests when offline. Data
+ *    served by (2) or (3) is flagged stale (`getDataSource`).
  */
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = (options.method || 'GET').toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
@@ -328,17 +358,24 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
         },
       });
 
+      setDataSource('live');
+
       // Cache successful GET responses in localStorage for instant reload
       if (method === 'GET' && !options.skipCache && rpcResult !== undefined) {
         setLocalCache(normPath, rpcResult);
       }
       return rpcResult;
     } catch (err) {
-      console.warn('Serverless RPC call failed, falling back to direct API fetch:', err);
+      if (method !== 'GET') {
+        const loc = getActiveLocale();
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(translate(loc, 'errors.rpcWriteUnavailable', { error: reason }));
+      }
+      console.warn('Serverless RPC call failed, reading through the fallback:', err);
     }
   }
 
-  // 2. Direct fetch to FastAPI backend
+  // 2. Direct fetch to fallback HTTP API
   try {
     const fetchInit: RequestInit = {
       method,
@@ -377,6 +414,9 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     }
     await ensureOk(res, `Request failed: ${method} ${normPath}`);
 
+    const viaForeignHost = API_BASE !== '' && !API_BASE.includes('tgcloud.ai');
+    setDataSource(viaForeignHost ? 'fallback' : 'live');
+
     const text = await res.text();
     if (!text || !text.trim()) {
       return {} as T;
@@ -392,6 +432,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     if (method === 'GET') {
       const cached = getLocalCache<T>(normPath);
       if (cached !== null) {
+        setDataSource('cache');
         return cached;
       }
     }
