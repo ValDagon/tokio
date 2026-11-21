@@ -50,6 +50,7 @@ import {
 } from '../../src/handlers/onboarding';
 import { getMainKeyboard } from '../../src/handlers/keyboards';
 import {
+  isPublicOpenAccessEnabled,
   resetOverlayOverride,
   setOverlayOverride,
   type OverlayOverride,
@@ -183,16 +184,37 @@ describe('checkAccess', () => {
     });
   });
 
-  it('отсутствие флага — это закрытый режим, а не открытый', async () => {
-    setConfigOverrides({ betaWhitelist: [USER], adminIds: [] });
-    setOverlayOverride({
-      manifest: { features: { publicOpenAccess: undefined } },
-    } as unknown as OverlayOverride);
+  it('отсутствие флага читается как закрытый режим (shipped example overlay)', async () => {
+    // Пример-оверлей объявляет `false`; форма личного оверлея — ключа нет
+    // вовсе, и это проверяет `isPublicOpenAccessEnabled({})` в tests/overlay.test.ts.
+    expect(isPublicOpenAccessEnabled()).toBe(false);
 
-    await expect(checkAccess(OTHER, { kind: 'message' })).resolves.toEqual({
+    vi.stubEnv('APP_ENV', 'production');
+    setConfigOverrides({ betaWhitelist: [], adminIds: [] });
+
+    await expect(checkAccess(USER, { kind: 'message' })).resolves.toEqual({
       allowed: false,
-      reply: ACCESS_DENIED_MESSAGE,
+      reply: ACCESS_UNCONFIGURED_MESSAGE,
     });
+  });
+
+  it('открытый режим создаёт строку users для callback до /start', async () => {
+    setConfigOverrides({ betaWhitelist: [ADMIN], adminIds: [ADMIN] });
+    setOverlayOverride({
+      manifest: { features: { publicOpenAccess: true } },
+    } as unknown as OverlayOverride);
+    expect(await getUser(OTHER)).toBeNull();
+
+    await routeCallback({
+      id: 'cb-first-contact',
+      from: { id: OTHER, first_name: 'Новый' },
+      data: 'onboard:step:overview',
+      message: { message_id: 1, chat: { id: OTHER } },
+    });
+
+    const user = await getUser(OTHER);
+    expect(user).not.toBeNull();
+    expect(user?.onboardingStep).toBe('overview');
   });
 
   it('открытый режим нельзя включить переменной окружения', async () => {

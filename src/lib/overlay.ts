@@ -54,6 +54,18 @@ export interface OverlayFeatures {
   publicOpenAccess?: boolean;
 }
 
+/**
+ * True only for a literal `publicOpenAccess: true` in the active overlay.
+ *
+ * A missing key is `false`, not "unset but allowed": keep this predicate as the
+ * single reader of the flag so the default stays closed in one place.
+ */
+export function isPublicOpenAccessEnabled(
+  features: OverlayFeatures = getOverlay().manifest.features,
+): boolean {
+  return features.publicOpenAccess === true;
+}
+
 export interface OverlayAccountAlias {
   account: string;
   patterns: string[];

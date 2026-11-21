@@ -19,7 +19,7 @@ import { EndpointError } from 'sdk';
 import { getConfig } from './config.js';
 import { getUser } from './dal/users.js';
 import { t, type LocaleCode } from './i18n.js';
-import { getOverlay } from './overlay.js';
+import { getOverlay, isPublicOpenAccessEnabled } from './overlay.js';
 
 /** Контекст вызова эндпоинта: то, что платформа кладёт вторым аргументом. */
 export type EndpointCtx = {
@@ -124,7 +124,7 @@ export async function checkAccess(
 ): Promise<AccessResult> {
   // Явный открытый режим: только оверлей, только строгое `true`.
   // Отсутствующий флаг — это `false`, поэтому fail-closed личного бота не слабеет.
-  if (getOverlay().manifest.features.publicOpenAccess === true) {
+  if (isPublicOpenAccessEnabled()) {
     return { allowed: true };
   }
 

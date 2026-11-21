@@ -1695,6 +1695,14 @@ export async function routeCallback(callback: CallbackQuery): Promise<void> {
     return;
   }
 
+  // Открытый режим (`features.publicOpenAccess`) впервые пускает пользователя,
+  // у которого ещё нет строки `users`: кнопку из пересланного сообщения можно
+  // нажать до `/start`. Без строки `updateUser` молча теряет `onboarding_step`,
+  // а `createPresetAccounts` / `seedDemoWorkspace` пишут осиротевшие записи.
+  if (!(await getUser(userId))) {
+    await ensureUserProfile(userId, from.first_name ?? null, from.language_code ?? null);
+  }
+
   const chatId = callback.message?.chat?.id;
   const messageId = callback.message?.message_id;
   if (typeof chatId !== 'number' || typeof messageId !== 'number') {

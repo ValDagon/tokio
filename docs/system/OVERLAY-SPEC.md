@@ -156,9 +156,9 @@ Previously, edition differences were maintained via inline `[public-only]` and `
 
 ### 5.1 `publicOpenAccess` — open registration without weakening fail-closed
 
-`checkAccess` (`src/lib/auth.ts`) is the only access gate. Its default stays fail-closed:
-an empty access list in production replies `ACCESS_UNCONFIGURED_*`, and a non-empty list
-rejects unknown users. `publicOpenAccess` is the single, explicit way to open it:
+The default stays fail-closed: an empty access list in production replies
+`ACCESS_UNCONFIGURED_*`, and a non-empty list rejects unknown users. `publicOpenAccess`
+is the single, explicit way to open it:
 
 - **Only the overlay can set it.** There is no env variable and no config key; the value
   comes from `overlay/manifest.json` (or `OVERLAY_DIR`) at build time.
@@ -171,6 +171,12 @@ rejects unknown users. `publicOpenAccess` is the single, explicit way to open it
   empty `ADMIN_IDS`, and the flag is the statement of intent that makes it safe.
 - **Use it only for a deliberately public bot.** A private/personal instance should omit the
   key or set it to `false`, and keep `ADMIN_IDS` populated so the fail-closed gate stays armed.
+- **Scope.** `checkAccess` is the only gate that admits a Telegram *user*; administrative and
+  machine-only routes keep their own checks (`/api/feedback` `{action:'list'}` still requires
+  `adminIds`, the clock endpoint still requires a `users` row). Consequence for an open
+  instance: an empty `ADMIN_IDS` means nobody is an admin there, so admin-only routes stay
+  unavailable and `adminIds` is still how the shared-key spend cap is bypassed
+  (`src/lib/billing.ts`). Populate `ADMIN_IDS` with the operator even when the flag is on.
 
 ---
 

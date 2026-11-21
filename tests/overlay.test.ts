@@ -19,12 +19,19 @@ import {
   getOverlay,
   getOverlayPrompt,
   getOverlaySource,
+  isPublicOpenAccessEnabled,
   resetOverlayOverride,
   setOverlayOverride,
+  type OverlayFeatures,
   type OverlayOverride,
 } from '../src/lib/overlay';
 import { balanceSummary, debtsSummary, helpText, quickSummary } from '../src/lib/summary';
-import { checkAccess, ensureUserProfile, seedDemoWorkspace } from '../src/handlers/onboarding';
+import {
+  ACCESS_UNCONFIGURED_MESSAGE,
+  checkAccess,
+  ensureUserProfile,
+  seedDemoWorkspace,
+} from '../src/handlers/onboarding';
 // @ts-expect-error ESM build script without .d.ts
 import { compileRuntimeAssets } from '../scripts/compile-runtime-assets.mjs';
 
@@ -123,7 +130,17 @@ describe('overlay system', () => {
     expect(getOverlay().manifest.features.publicOpenAccess).toBe(false);
   });
 
-  it('an overlay without publicOpenAccess keeps production access fail-closed', async () => {
+  it('isPublicOpenAccessEnabled() opens only on a literal true', () => {
+    // A manifest that never declares the key is the personal overlay's shape:
+    // `undefined` must read as closed, in the same place the gate asks.
+    expect(isPublicOpenAccessEnabled({} as OverlayFeatures)).toBe(false);
+    expect(isPublicOpenAccessEnabled({ publicOpenAccess: undefined } as OverlayFeatures)).toBe(false);
+    expect(isPublicOpenAccessEnabled({ publicOpenAccess: false } as OverlayFeatures)).toBe(false);
+    expect(isPublicOpenAccessEnabled({ publicOpenAccess: true } as OverlayFeatures)).toBe(true);
+    expect(isPublicOpenAccessEnabled()).toBe(false);
+  });
+
+  it('a manifest without publicOpenAccess still compiles and keeps the gate closed', async () => {
     const previous = process.env.APP_ENV;
     process.env.APP_ENV = 'production';
     try {
@@ -139,13 +156,18 @@ describe('overlay system', () => {
 
         const compiled = await compileRuntimeAssets({ overlayDir: tmpRoot, write: false });
         expect(compiled.compiledOverlay.manifest.features.publicOpenAccess).toBeUndefined();
+        expect(isPublicOpenAccessEnabled(compiled.compiledOverlay.manifest.features)).toBe(false);
       } finally {
         rmSync(tmpRoot, { recursive: true, force: true });
       }
 
+      // The shipped example overlay declares `false`; production + an empty
+      // access list must still refuse unknown users.
       resetOverlayOverride();
-      const access = await checkAccess(424242, { kind: 'message' });
-      expect(access.allowed).toBe(false);
+      await expect(checkAccess(424242, { kind: 'message' })).resolves.toEqual({
+        allowed: false,
+        reply: ACCESS_UNCONFIGURED_MESSAGE,
+      });
     } finally {
       if (previous === undefined) delete process.env.APP_ENV;
       else process.env.APP_ENV = previous;
