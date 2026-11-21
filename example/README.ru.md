@@ -23,7 +23,7 @@
 2. Отредактируйте `overlay/manifest.json`:
    - `brand`: задайте `assistantName`, `localizedNames`, `backupPrefix`, `supportContact`, `miniAppUrl` и `accessDeniedMessage`.
    - `defaults`: настройте `timezone`, `baseCurrency`, `summaryTime`, `supportedCurrencies` и `inboxCurrencies`.
-   - `features`: включите или отключите флаги возможностей (`spendLimitEnabled`, `spendLimitUsd`, `onboardingWizard`, `byokCommand`, `feedbackEnabled`, `overloadShield`, `microFocusTriage`, `calmModeUi`).
+   - `features`: включите или отключите флаги возможностей (`spendLimitEnabled`, `spendLimitUsd`, `onboardingWizard`, `byokCommand`, `feedbackEnabled`, `overloadShield`, `microFocusTriage`, `calmModeUi`, `publicOpenAccess`).
    - `finance`: укажите `accountAliases`, `defaultAccountByCurrency`, `genericCardAccountByCurrency` и `reserveAmount`.
    - `miniapp`: настройте `tabs` и `accountThemes`.
    - `prompts.personaStyles`: отредактируйте описания стилей общения (`mentor`, `strategist`, `calm_partner`, `concise`).

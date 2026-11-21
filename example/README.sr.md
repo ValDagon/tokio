@@ -23,7 +23,7 @@ Ako fajl `<repo>/overlay/manifest.json` ne postoji, skripta `scripts/compile-run
 2. Izmenite `overlay/manifest.json`:
    - `brand`: podesite `assistantName`, `localizedNames`, `backupPrefix`, `supportContact`, `miniAppUrl` i `accessDeniedMessage`.
    - `defaults`: podesite `timezone`, `baseCurrency`, `summaryTime`, `supportedCurrencies` i `inboxCurrencies`.
-   - `features`: uključite ili isključite feature flag-ove (`spendLimitEnabled`, `spendLimitUsd`, `onboardingWizard`, `byokCommand`, `feedbackEnabled`, `overloadShield`, `microFocusTriage`, `calmModeUi`).
+   - `features`: uključite ili isključite feature flag-ove (`spendLimitEnabled`, `spendLimitUsd`, `onboardingWizard`, `byokCommand`, `feedbackEnabled`, `overloadShield`, `microFocusTriage`, `calmModeUi`, `publicOpenAccess`).
    - `finance`: definišite `accountAliases`, `defaultAccountByCurrency`, `genericCardAccountByCurrency` i `reserveAmount`.
    - `miniapp`: prilagodite `tabs` i `accountThemes`.
    - `prompts.personaStyles`: prilagodite stilove komunikacije (`mentor`, `strategist`, `calm_partner`, `concise`).

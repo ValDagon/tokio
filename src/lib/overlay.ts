@@ -43,6 +43,15 @@ export interface OverlayFeatures {
   overloadShield: boolean;
   microFocusTriage: boolean;
   calmModeUi: boolean;
+  /**
+   * Explicit open registration for a deliberately public instance.
+   *
+   * Optional on purpose: an overlay that never declares it (the personal one)
+   * reads `undefined`, which the access gate treats as `false`, so the
+   * fail-closed whitelist behaviour is unchanged. Only a literal `true` opens
+   * `checkAccess` to unknown users, and only `overlay/manifest.json` can set it.
+   */
+  publicOpenAccess?: boolean;
 }
 
 export interface OverlayAccountAlias {

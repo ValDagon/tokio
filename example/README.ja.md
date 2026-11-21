@@ -23,7 +23,7 @@
 2. `overlay/manifest.json` を編集します：
    - `brand`：`assistantName`、`localizedNames`、`backupPrefix`、`supportContact`、`miniAppUrl`、`accessDeniedMessage` を設定します。
    - `defaults`：`timezone`、`baseCurrency`、`summaryTime`、`supportedCurrencies`、`inboxCurrencies` を設定します。
-   - `features`：機能フラグ（`spendLimitEnabled`、`spendLimitUsd`、`onboardingWizard`、`byokCommand`、`feedbackEnabled`、`overloadShield`、`microFocusTriage`、`calmModeUi`）を切り替えます。
+   - `features`：機能フラグ（`spendLimitEnabled`、`spendLimitUsd`、`onboardingWizard`、`byokCommand`、`feedbackEnabled`、`overloadShield`、`microFocusTriage`、`calmModeUi`, `publicOpenAccess`）を切り替えます。
    - `finance`：`accountAliases`、`defaultAccountByCurrency`、`genericCardAccountByCurrency`、`reserveAmount` を定義します。
    - `miniapp`：`tabs` と `accountThemes` を調整します。
    - `prompts.personaStyles`：会話スタイル（`mentor`、`strategist`、`calm_partner`、`concise`）を編集します。

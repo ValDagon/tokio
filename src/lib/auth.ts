@@ -107,9 +107,12 @@ export function isProduction(): boolean {
  * Проверяет права доступа пользователя.
  *
  * Семантика:
+ *  0. `features.publicOpenAccess === true` в оверлее → доступ открыт всем
+ *     (явный режим публичного инстанса; по умолчанию флага нет и он читается
+ *     как `false`, поэтому личный бот остаётся закрытым);
  *  1. список = `betaWhitelist ∪ adminIds` из конфига;
  *  2. список пуст + production → отказ «список не настроен» (fail-closed);
- *  3. список пуст + не production → доступ открыт (локальная разработка и Public Bot);
+ *  3. список пуст + не production → доступ открыт (локальная разработка);
  *  4. список непуст (Personal Bot mode):
  *     - если userId в списке (adminIds или betaWhitelist) → доступ открыт;
  *     - если пользователь уже существует в таблице users SQLite (одобрен/приглашён) → доступ открыт;
@@ -119,6 +122,12 @@ export async function checkAccess(
   userId: number,
   options: { kind: AccessEventKind } = { kind: 'message' },
 ): Promise<AccessResult> {
+  // Явный открытый режим: только оверлей, только строгое `true`.
+  // Отсутствующий флаг — это `false`, поэтому fail-closed личного бота не слабеет.
+  if (getOverlay().manifest.features.publicOpenAccess === true) {
+    return { allowed: true };
+  }
+
   const config = await getConfig();
   const allowedIds = new Set<number>([...config.betaWhitelist, ...config.adminIds]);
   const isCallback = options.kind === 'callback';

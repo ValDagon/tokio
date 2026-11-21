@@ -49,6 +49,11 @@ import {
   startWelcomeText,
 } from '../../src/handlers/onboarding';
 import { getMainKeyboard } from '../../src/handlers/keyboards';
+import {
+  resetOverlayOverride,
+  setOverlayOverride,
+  type OverlayOverride,
+} from '../../src/lib/overlay';
 import { listAccounts } from '../../src/lib/dal/finances';
 import { listNotes } from '../../src/lib/dal/notes';
 import { listTasks } from '../../src/lib/dal/tasks';
@@ -71,6 +76,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  resetOverlayOverride();
 });
 
 // ---------------------------------------------------------------------------
@@ -143,6 +149,61 @@ describe('checkAccess', () => {
     vi.stubEnv('APP_ENV', 'production');
     setConfigOverrides({ betaWhitelist: [], adminIds: [ADMIN] });
     await expect(checkAccess(ADMIN, { kind: 'callback' })).resolves.toEqual({ allowed: true });
+  });
+
+  it('publicOpenAccess: true открывает вход, даже когда списки пусты в production', async () => {
+    vi.stubEnv('APP_ENV', 'production');
+    setConfigOverrides({ betaWhitelist: [], adminIds: [] });
+    setOverlayOverride({
+      manifest: { features: { publicOpenAccess: true } },
+    } as unknown as OverlayOverride);
+
+    await expect(checkAccess(OTHER, { kind: 'message' })).resolves.toEqual({ allowed: true });
+    await expect(checkAccess(OTHER, { kind: 'callback' })).resolves.toEqual({ allowed: true });
+  });
+
+  it('publicOpenAccess: true пускает неизвестного при непустом списке', async () => {
+    setConfigOverrides({ betaWhitelist: [USER], adminIds: [ADMIN] });
+    setOverlayOverride({
+      manifest: { features: { publicOpenAccess: true } },
+    } as unknown as OverlayOverride);
+
+    await expect(checkAccess(OTHER, { kind: 'message' })).resolves.toEqual({ allowed: true });
+  });
+
+  it('publicOpenAccess: false не ослабляет закрытый режим личного бота', async () => {
+    setConfigOverrides({ betaWhitelist: [USER], adminIds: [ADMIN] });
+    setOverlayOverride({
+      manifest: { features: { publicOpenAccess: false } },
+    } as unknown as OverlayOverride);
+
+    await expect(checkAccess(OTHER, { kind: 'message' })).resolves.toEqual({
+      allowed: false,
+      reply: ACCESS_DENIED_MESSAGE,
+    });
+  });
+
+  it('отсутствие флага — это закрытый режим, а не открытый', async () => {
+    setConfigOverrides({ betaWhitelist: [USER], adminIds: [] });
+    setOverlayOverride({
+      manifest: { features: { publicOpenAccess: undefined } },
+    } as unknown as OverlayOverride);
+
+    await expect(checkAccess(OTHER, { kind: 'message' })).resolves.toEqual({
+      allowed: false,
+      reply: ACCESS_DENIED_MESSAGE,
+    });
+  });
+
+  it('открытый режим нельзя включить переменной окружения', async () => {
+    vi.stubEnv('APP_ENV', 'production');
+    vi.stubEnv('PUBLIC_OPEN_ACCESS', 'true');
+    setConfigOverrides({ betaWhitelist: [], adminIds: [] });
+
+    await expect(checkAccess(USER, { kind: 'message' })).resolves.toEqual({
+      allowed: false,
+      reply: ACCESS_UNCONFIGURED_MESSAGE,
+    });
   });
 
   it('пользователь из таблицы users пускается даже если не в betaWhitelist/adminIds', async () => {

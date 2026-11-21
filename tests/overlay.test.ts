@@ -24,7 +24,7 @@ import {
   type OverlayOverride,
 } from '../src/lib/overlay';
 import { balanceSummary, debtsSummary, helpText, quickSummary } from '../src/lib/summary';
-import { ensureUserProfile, seedDemoWorkspace } from '../src/handlers/onboarding';
+import { checkAccess, ensureUserProfile, seedDemoWorkspace } from '../src/handlers/onboarding';
 // @ts-expect-error ESM build script without .d.ts
 import { compileRuntimeAssets } from '../scripts/compile-runtime-assets.mjs';
 
@@ -117,6 +117,39 @@ describe('overlay system', () => {
     const { user } = await ensureUserProfile(100002, 'Tester', 'en');
     expect(user.onboardingStep).toBe('completed');
     expect(matchExplicitAccount('spent at novabank', 'EUR')).toBe('NovaBank');
+  });
+
+  it('ships publicOpenAccess: false in the example overlay', () => {
+    expect(getOverlay().manifest.features.publicOpenAccess).toBe(false);
+  });
+
+  it('an overlay without publicOpenAccess keeps production access fail-closed', async () => {
+    const previous = process.env.APP_ENV;
+    process.env.APP_ENV = 'production';
+    try {
+      // Compile a manifest that predates the flag — the exact shape of the
+      // personal overlay, which must not need an edit when the core adds it.
+      const tmpRoot = mkdtempSync(join(tmpdir(), 'tokio-overlay-open-'));
+      try {
+        cpSync(resolve(__dirname, '..', 'example', 'overlay'), tmpRoot, { recursive: true });
+        const manifestPath = join(tmpRoot, 'manifest.json');
+        const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+        delete manifest.features.publicOpenAccess;
+        writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+
+        const compiled = await compileRuntimeAssets({ overlayDir: tmpRoot, write: false });
+        expect(compiled.compiledOverlay.manifest.features.publicOpenAccess).toBeUndefined();
+      } finally {
+        rmSync(tmpRoot, { recursive: true, force: true });
+      }
+
+      resetOverlayOverride();
+      const access = await checkAccess(424242, { kind: 'message' });
+      expect(access.allowed).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.APP_ENV;
+      else process.env.APP_ENV = previous;
+    }
   });
 
   it.each(['ru', 'en', 'sr', 'ja'] as const)(
