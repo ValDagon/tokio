@@ -46,7 +46,10 @@
     "timeoutError": "Server not responding (timeout)",
     "networkError": "Failed to reach the server",
     "initDataPresent": "initData: present",
-    "initDataMissing": "initData: missing"
+    "initDataMissing": "initData: missing",
+    "rpcWriteUnavailable": "Write failed: Serverless RPC is unavailable ({{error}}). Direct fallback API writes are disabled — please try again later.",
+    "staleCacheBanner": "Showing cached data: no connection to the bot.",
+    "staleFallbackBanner": "Showing fallback server data — please refresh the app."
   },
   "utils": {
     "today": "Today",

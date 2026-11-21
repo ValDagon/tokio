@@ -138,7 +138,12 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
   const { t, formatNumber, formatDate } = useI18n();
   const currSym = getCurrencySymbol(baseCurrency);
   const [showTotals, setShowTotals] = React.useState(false);
-  const [showAllLiabilities, setShowAllLiabilities] = React.useState(false);
+  const [showAllLiabilities, setShowAllLiabilities] = React.useState(() => Boolean(activeLiabilityQueue));
+  React.useEffect(() => {
+    if (activeLiabilityQueue) {
+      setShowAllLiabilities(true);
+    }
+  }, [activeLiabilityQueue]);
   const [linkingLiability, setLinkingLiability] = React.useState<Liability | null>(null);
 
   // Account Envelope Toggle & Edit state

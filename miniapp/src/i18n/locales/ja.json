@@ -46,7 +46,10 @@
     "timeoutError": "サーバーが応答しません（タイムアウト）",
     "networkError": "サーバーに接続できませんでした",
     "initDataPresent": "initData: あり",
-    "initDataMissing": "initData: なし"
+    "initDataMissing": "initData: なし",
+    "rpcWriteUnavailable": "書き込みに失敗しました：Serverless RPC を利用できません（{{error}}）。代替 API 経由の書き込みは無効です。しばらくしてからもう一度お試しください。",
+    "staleCacheBanner": "キャッシュデータを表示中：ボットに接続できません。",
+    "staleFallbackBanner": "代替サーバーのデータを表示中 — アプリを再読み込みしてください。"
   },
   "utils": {
     "today": "今日",

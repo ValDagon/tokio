@@ -46,7 +46,10 @@
     "timeoutError": "Server ne odgovara (isteklo vreme)",
     "networkError": "Nije moguće povezati se sa serverom",
     "initDataPresent": "initData: prisutno",
-    "initDataMissing": "initData: nedostaje"
+    "initDataMissing": "initData: nedostaje",
+    "rpcWriteUnavailable": "Upis nije uspeo: Serverless RPC nije dostupan ({{error}}). Upis preko rezervnog API-ja je onemogućen — pokušajte ponovo kasnije.",
+    "staleCacheBanner": "Prikazani su keširani podaci: nema veze sa botom.",
+    "staleFallbackBanner": "Prikazani su podaci sa rezervnog servera — osvežite aplikaciju."
   },
   "utils": {
     "today": "Danas",
