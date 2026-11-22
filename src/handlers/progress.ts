@@ -251,7 +251,8 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
       }
     }
     try {
-      await safeSendMessage(chatId, text);
+      // Клавиатуру не трогаем: строка ошибки — не ответ, сетка разделов пусть остаётся.
+      await safeSendMessage(chatId, text, { keepReplyKeyboard: true });
       return true;
     } catch {
       return false;
