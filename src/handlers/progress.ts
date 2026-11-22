@@ -27,6 +27,7 @@
 import { api } from 'sdk';
 
 import type { AgentProgressEvent } from '../lib/agent/engine.js';
+import { kvDelete, kvGetJson, kvSetJson } from '../lib/dal/misc.js';
 import { safeEdit, safeSendMessage } from './formatting.js';
 import { getMainKeyboard } from './keyboards.js';
 
@@ -102,7 +103,12 @@ export interface TurnProgressOptions {
 }
 
 export interface TurnProgress {
-  /** «Печатает…»: сразу на старте хода и перед каждым обращением к модели. */
+  /**
+   * Начало хода: гасит строку от прошлого, убитого платформой хода (в изоляте
+   * нет фоновой уборки) и отправляет «печатает…».
+   */
+  begin(): Promise<void>;
+  /** «Печатает…» перед каждым обращением к модели. */
   typing(): Promise<void>;
   /** Хук движка: стадия прогона. */
   onProgress(event: AgentProgressEvent): Promise<void>;
@@ -121,8 +127,38 @@ function messageIdOf(result: unknown): number | null {
   return typeof id === 'number' ? id : null;
 }
 
+/** Ключ `kv` с открытой строкой прогресса: по нему гасится строка мёртвого хода. */
+const staleKey = (chatId: number): string => `turn_progress:${chatId}`;
+
+interface StaleProgress {
+  chatId: number;
+  messageId: number;
+}
+
 /**
- * Заводит индикатор хода. Ничего не отправляет сам: первый вызов — `typing()`.
+ * Гасит строку прошлого хода, который платформа убила по лимиту времени.
+ *
+ * Без этого обычная строка (фолбэк без эфемерных сообщений) остаётся в чате
+ * навсегда: убитый изолят не выполняет ни `finish()`, ни `finally`. Уборка идёт
+ * в начале следующего хода этого чата, других фоновых процессов в изоляте нет.
+ */
+async function sweepStaleProgress(chatId: number): Promise<void> {
+  try {
+    const stale = await kvGetJson<StaleProgress | null>(staleKey(chatId), null);
+    if (!stale || typeof stale.messageId !== 'number') return;
+    try {
+      await api.deleteMessage({ chat_id: chatId, message_id: stale.messageId });
+    } catch {
+      // Строка уже исчезла (эфемерная погасла сама) — запись всё равно чистим.
+    }
+    await kvDelete(staleKey(chatId));
+  } catch {
+    // Уборка — украшение: сбой хранилища не должен ломать ход
+  }
+}
+
+/**
+ * Заводит индикатор хода. Ничего не отправляет сам: первый вызов — `begin()`.
  *
  * Разметку строки держим обычным текстом (без `parse_mode`): это служебная
  * строка, а не ответ, и лишний HTML-конвейер здесь только добавил бы отказов.
@@ -148,6 +184,29 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
     } catch {
       // «печатает…» — украшение: сбой не должен ломать ход
     }
+  };
+
+  /** Запоминает открытую строку, чтобы следующий ход мог её погасить. */
+  const remember = async (id: number | null): Promise<void> => {
+    if (id === null) return;
+    try {
+      await kvSetJson(staleKey(chatId), { chatId, messageId: id } satisfies StaleProgress);
+    } catch {
+      // уборка — украшение
+    }
+  };
+
+  const forget = async (): Promise<void> => {
+    try {
+      await kvDelete(staleKey(chatId));
+    } catch {
+      // уборка — украшение
+    }
+  };
+
+  const begin = async (): Promise<void> => {
+    await sweepStaleProgress(chatId);
+    await typing();
   };
 
   const send = async (text: string): Promise<void> => {
@@ -181,6 +240,7 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
     visible = true;
     shownText = text;
     shownAt = now();
+    await remember(messageId);
   };
 
   const update = async (text: string): Promise<void> => {
@@ -201,6 +261,7 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
     } catch {
       // Эфемерная строка гаснет сама; обычная могла уже исчезнуть
     }
+    await forget();
   };
 
   const onProgress = async (event: AgentProgressEvent): Promise<void> => {
@@ -270,5 +331,5 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
     }
   };
 
-  return { typing, onProgress, finish, fail };
+  return { begin, typing, onProgress, finish, fail };
 }

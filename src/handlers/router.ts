@@ -936,7 +936,7 @@ async function handleAsk(
   }
 
   const progress = startTurnProgress({ chatId, userId });
-  await progress.typing();
+  await progress.begin();
   try {
     if (seams.agent) {
       const reply = await seams.agent({ userId, chatId, text: effectiveQuery });

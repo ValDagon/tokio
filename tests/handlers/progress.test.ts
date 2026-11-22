@@ -47,6 +47,7 @@ import { ensureAccounts } from '../../src/lib/dal/finances';
 import { ensureUser } from '../../src/lib/dal/users';
 import { LLM_ERROR_TEXT } from '../../src/lib/agent/engine';
 import { listNotes } from '../../src/lib/dal/notes';
+import { kvGet, kvSetJson } from '../../src/lib/dal/misc';
 import { beginReplyTurn, endReplyTurn } from '../../src/lib/reply_turn';
 import { smartIngest } from '../../src/handlers/ingest';
 import { startTurnProgress } from '../../src/handlers/progress';
@@ -319,6 +320,34 @@ describe('живая индикация хода агента', () => {
     expect(attempts).toBe(1);
     expect(callsOf('editMessageText')).toHaveLength(0);
     expect(callsOf('deleteMessage')).toHaveLength(0);
+  });
+
+  it('begin() гасит строку прошлого хода, убитого платформой', async () => {
+    await kvSetJson(`turn_progress:${CHAT}`, { chatId: CHAT, messageId: 777 });
+
+    const progress = startTurnProgress({ chatId: CHAT, userId: USER, now: () => clock.now });
+    await progress.begin();
+
+    expect(callsOf('deleteMessage').at(-1)?.params).toMatchObject({
+      chat_id: CHAT,
+      message_id: 777,
+    });
+    expect(await kvGet(`turn_progress:${CHAT}`)).toBeNull();
+  });
+
+  it('после успешного хода запись об открытой строке убрана', async () => {
+    scriptTurn(
+      [
+        { afterMs: 0, stage: 'model' },
+        { afterMs: 9_000, stage: 'tool', tool: 'add_expense' },
+      ],
+      FINAL_RUN,
+    );
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
+
+    expect(await kvGet(`turn_progress:${CHAT}`)).toBeNull();
+    expect(callsOf('deleteMessage')).toHaveLength(1);
   });
 
   it('падение индикатора не ломает ход', async () => {

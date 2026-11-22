@@ -230,7 +230,7 @@ async function tryAgentAutonomousStep(
   // Живая индикация: «печатает…» сразу, строка прогресса — только на медленном
   // ходе. Вся индикация внутри себя глушит сбои Bot API (handlers/progress.ts).
   const progress = startTurnProgress({ chatId, userId });
-  await progress.typing();
+  await progress.begin();
 
   let agentRes: AgentRunResult;
   try {
