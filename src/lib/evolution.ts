@@ -1574,6 +1574,12 @@ export interface SkillRunReport {
   /** `AgentStopReason` движка; здесь строка, чтобы не тянуть движок в модуль. */
   stopReason: string;
   steps?: ReadonlyArray<{ ok: boolean; action?: { name: string } | null }>;
+  /**
+   * Прогон остановлен мягким дедлайном хода. Причина — время, а не скилл:
+   * применение и исход считаются, а терминальная сигнатура отказа не пишется,
+   * иначе медленная сеть постепенно «обвиняла» бы включённый скилл.
+   */
+  deadline?: boolean;
 }
 
 export function skillRunOutcome(stopReason: string): SkillRunOutcome {
@@ -1617,7 +1623,7 @@ export async function recordSkillRun(userId: number, report: SkillRunReport): Pr
         }),
       );
     }
-    const terminal = terminalSkillSignature(report.stopReason);
+    const terminal = report.deadline === true ? null : terminalSkillSignature(report.stopReason);
     if (terminal) signatures.add(terminal);
 
     for (const skill of report.skills) {

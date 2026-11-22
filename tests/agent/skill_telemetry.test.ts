@@ -307,4 +307,44 @@ describe('проводка движка: терминальные причины
     expect(usage.failedSteps).toBe(1);
     expect(await kvGet(`skill_run:v1:${USER}:${skillId}:agent|none|tool_error|no_such_tool`)).toBeTruthy();
   });
+
+  it('дедлайн хода не обвиняет скилл: применения есть, сигнатуры отказа нет', async () => {
+    const skillId = await seedActiveSkill();
+    const [skill] = await listActiveSkills(USER);
+
+    await recordSkillRun(USER, {
+      skills: [skill as ActiveSkill],
+      stopReason: 'step_limit',
+      steps: [],
+      deadline: true,
+    });
+
+    const usage = await skillUsage(USER, skillId);
+    expect(usage.uses).toBe(1);
+    expect(await kvGet(`skill_run:v1:${USER}:${skillId}:agent|none|step_limit|none`)).toBeNull();
+  });
+
+  it('дедлайн движка доходит до телеметрии как время, а не как отказ скилла', async () => {
+    const skillId = await seedActiveSkill();
+    const [skill] = await listActiveSkills(USER);
+    let clock = 0;
+    const chat: AgentChatFn = async () => {
+      // Модель ответила уже за бюджетом хода: инструмент не зовём.
+      clock += 21_000;
+      return { content: 'Thought: проверяю\nAction: no_such_tool\nAction Input: {}', toolCalls: [] };
+    };
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'разбери инбокс',
+      profile: { activeSkills: [skill as ActiveSkill] },
+      store: null,
+      chatFn: chat,
+      clock: () => clock,
+    });
+
+    expect(result.stopReason).toBe('step_limit');
+    expect((await skillUsage(USER, skillId)).uses).toBe(1);
+    expect(await kvGet(`skill_run:v1:${USER}:${skillId}:agent|none|step_limit|none`)).toBeNull();
+  });
 });
