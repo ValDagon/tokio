@@ -23,6 +23,7 @@ import { createTableStatements } from '../../src/db/ddl';
 import { TABLES } from '../../src/db/tables';
 import { resetConfigCache } from '../../src/lib/config';
 import { ensureAccounts } from '../../src/lib/dal/finances';
+import { listFailureAggregates } from '../../src/lib/evolution';
 import { ensureUser } from '../../src/lib/dal/users';
 import { parseFinancialIntent } from '../../src/lib/financial-parser';
 import { listNotes } from '../../src/lib/dal/notes';
@@ -78,6 +79,34 @@ describe('T0b — свободный текст доходит до агента
     const notes = await listNotes(USER);
     expect(notes.map((note) => note.rawText).join('\n')).toContain(text);
     expect(sentTexts().join('\n')).toContain('инбокс');
+  });
+
+  it('финансовая инструкция без цифр не превращается в заметку молча', async () => {
+    const text =
+      'Все что было на Freedom, пока с Bybit. На Bybit только долларовый счет, ' +
+      'сконвертируй суммы (с округлением в большую сторону)';
+
+    await smartIngest({ userId: USER, chatId: CHAT, text, forwarded: false });
+
+    const sent = sentTexts().join('\n');
+    expect(sent).not.toContain('Заметка сохранена');
+    expect(sent).toContain('Денежную операцию не выполнил');
+    expect(sent).toContain('Наличные (EUR)');
+
+    // Входящее не теряется: текст лежит в инбоксе со своей отменой.
+    const notes = await listNotes(USER);
+    expect(notes.map((note) => note.rawText).join('\n')).toContain('сконвертируй');
+
+    const failures = await listFailureAggregates(USER);
+    expect(failures.some((item) => item.reason === 'parse_failed')).toBe(true);
+  });
+
+  it('просьба перевести текст не считается денежной инструкцией', async () => {
+    const text = 'переведи эту мысль на английский: не забыть про лампу';
+
+    await smartIngest({ userId: USER, chatId: CHAT, text, forwarded: false });
+
+    expect(sentTexts().join('\n')).not.toContain('Денежную операцию');
   });
 
   it('пересланное сообщение к агенту не идёт', async () => {

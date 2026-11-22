@@ -702,6 +702,7 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   'query_spending',
   'can_i_afford',
   'get_fin_balances',
+  'get_fx_rates',
   'get_liabilities',
   'list_transactions',
   'get_medications_today',

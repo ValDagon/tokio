@@ -144,7 +144,7 @@ import { getAllKeyboardLabels, normalizeLocale, SUPPORTED_LOCALES, t, type Local
 import { getAssistantName, getOverlay } from '../lib/overlay';
 import { deferReplyNotice, endReplyTurn } from '../lib/reply_turn';
 import { checkSpendLimit, SPEND_LIMIT_EXCEEDED_MESSAGE } from '../lib/billing';
-import { encryptByok, hasSecureRandom, looksLikeApiKey } from '../lib/crypto';
+import { decryptByok, encryptByok, hasSecureRandom, looksLikeApiKey } from '../lib/crypto';
 import { normalizeApiKey } from '../lib/gemini';
 
 import type { CallbackQuery, Message } from './message';
@@ -703,17 +703,45 @@ async function handleByok(userId: number, chatId: number, keyArg?: string): Prom
     return;
   }
   const cleanKey = (keyArg || '').trim();
+  const lowered = cleanKey.toLowerCase();
+  const isClear = ['clear', 'off', 'delete', 'удалить', 'сброс', 'очистить'].includes(lowered);
+
+  if (isClear) {
+    await updateUser(userId, { byok: null });
+    await safeAnswer(
+      chatId,
+      '🔓 Персональный ключ удалён. Бот снова работает на общем ключе (лимит $2.00).',
+      { replyMarkup: getMainKeyboard() },
+    );
+    return;
+  }
+
   if (!cleanKey) {
     const user = await getUser(userId);
     const hasKey = user !== null && user.byok !== null && Boolean(user.byok.ciphertext);
-    const statusText = hasKey
-      ? '✅ **У вас уже подключен персональный ключ Gemini API (BYOK).**\nВсе лимиты расходов сняты.'
-      : 'ℹ️ **Персональный ключ пока не подключен.** Используется общий ключ ($2.00 лимит).';
+    let keyBroken = false;
+    if (hasKey && user?.byok) {
+      // Ключ хранится зашифрованным: если с момента сохранения сменился
+      // MASTER_KEY, расшифровка даёт мусор. Тогда честно говорим об этом, а не
+      // «всё подключено» — иначе бот молча тратит общий ключ.
+      try {
+        const plaintext = await decryptByok(userId, user.byok.ciphertext, user.byok.nonce);
+        keyBroken = !looksLikeApiKey(plaintext.trim());
+      } catch {
+        keyBroken = true;
+      }
+    }
+    const statusText = keyBroken
+      ? '⚠️ **Сохранённый ключ не читается** (похоже, сменился MASTER_KEY после сохранения).\nСейчас используется общий ключ с лимитом $2.00. Пришли ключ заново: `/byok ВАШ_КЛЮЧ`, или убери его: `/byok clear`.'
+      : hasKey
+        ? '✅ **У вас уже подключен персональный ключ Gemini API (BYOK).**\nВсе лимиты расходов сняты.'
+        : 'ℹ️ **Персональный ключ пока не подключен.** Используется общий ключ ($2.00 лимит).';
     const text =
       `${statusText}\n\n` +
       '🔑 **Как подключить свой ключ Google Gemini API:**\n' +
       '1. Получите бесплатный ключ в Google AI Studio:\nhttps://aistudio.google.com/app/apikey\n' +
-      '2. Отправьте его боту командой:\n`/byok ВАШ_КЛЮЧ`\n\n' +
+      '2. Отправьте его боту командой:\n`/byok ВАШ_КЛЮЧ`\n' +
+      '3. Убрать ключ и вернуться на общий: `/byok clear`\n\n' +
       'Ключ хранится зашифрованным (ChaCha20-Poly1305) и никогда не будет показан в чате. Он снимет все ограничения!';
     await safeAnswer(chatId, text, { replyMarkup: getMainKeyboard() });
     return;

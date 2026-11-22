@@ -78,8 +78,8 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('financeTools: состав', () => {
-  it('экспортирует 23 тулзы с уникальными именами', () => {
-    expect(financeTools).toHaveLength(23);
+  it('экспортирует 25 тулз с уникальными именами', () => {
+    expect(financeTools).toHaveLength(25);
     const names = financeTools.map((item) => item.name);
     expect(new Set(names).size).toBe(names.length);
     expect(names).toEqual(
@@ -92,6 +92,7 @@ describe('financeTools: состав', () => {
         'query_spending',
         'can_i_afford',
         'get_fin_balances',
+        'get_fx_rates',
         'set_account_balance',
         'reset_finance_history',
         'undo_last_transaction',
@@ -301,6 +302,290 @@ describe('add_exchange', () => {
     await expect(
       run('add_exchange', { from_account: 'Main', from_amount: '100' }, ctxA),
     ).resolves.toMatchObject({ ok: false });
+  });
+});
+
+describe('add_exchange: курс, округление и подтверждение', () => {
+  it('без to_amount считает сумму по курсу на дату операции', async () => {
+    await setRates('2026-03-15', { USD: 1.08 });
+    const eur = await createAccount(USER_A, {
+      name: 'Freedom Bank',
+      currency: 'EUR',
+      initialBalanceCents: 50_000,
+    });
+    const usd = await createAccount(USER_A, { name: 'ByBit', currency: 'USD' });
+
+    const outcome = await run(
+      'add_exchange',
+      {
+        from_account: 'Freedom Bank',
+        from_amount: '100',
+        from_currency: 'EUR',
+        to_account: 'ByBit',
+        to_currency: 'USD',
+      },
+      ctxA,
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.content).toContain('108,00');
+    expect(outcome.content).toContain('2026-03-15');
+    expect(await balanceOf(USER_A, usd.id)).toBe(10_800);
+    expect(await balanceOf(USER_A, eur.id)).toBe(40_000);
+    const data = outcome.data as Record<string, unknown>;
+    expect(data.rate_date).toBe('2026-03-15');
+  });
+
+  it('округляет сумму зачисления вверх до ,99', async () => {
+    await setRates('2026-03-15', { USD: 1.0023 });
+    await createAccount(USER_A, {
+      name: 'Freedom Bank',
+      currency: 'EUR',
+      initialBalanceCents: 50_000,
+    });
+    const usd = await createAccount(USER_A, { name: 'ByBit', currency: 'USD' });
+
+    const outcome = await run(
+      'add_exchange',
+      {
+        from_account: 'Freedom Bank',
+        from_amount: '100',
+        from_currency: 'EUR',
+        to_account: 'ByBit',
+        to_currency: 'USD',
+      },
+      ctxA,
+    );
+
+    expect(outcome.ok).toBe(true);
+    // 100 * 1.0023 = 100,23 → 100,99
+    expect(await balanceOf(USER_A, usd.id)).toBe(10_099);
+  });
+  it('без курсов — отказ, счета не тронуты', async () => {
+    const eur = await createAccount(USER_A, {
+      name: 'Freedom Bank',
+      currency: 'EUR',
+      initialBalanceCents: 50_000,
+    });
+    await createAccount(USER_A, { name: 'ByBit', currency: 'USD' });
+
+    const outcome = await run(
+      'add_exchange',
+      {
+        from_account: 'Freedom Bank',
+        from_amount: '100',
+        from_currency: 'EUR',
+        to_account: 'ByBit',
+        to_currency: 'USD',
+      },
+      ctxA,
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.content).toMatch(/[Кк]урс/);
+    expect(await balanceOf(USER_A, eur.id)).toBe(50_000);
+  });
+
+  it('протухший курс не используется', async () => {
+    // NOW = 2026-03-15, курс двухнедельной давности
+    await setRates('2026-03-01', { USD: 1.08 });
+    const eur = await createAccount(USER_A, {
+      name: 'Freedom Bank',
+      currency: 'EUR',
+      initialBalanceCents: 50_000,
+    });
+    await createAccount(USER_A, { name: 'ByBit', currency: 'USD' });
+
+    const outcome = await run(
+      'add_exchange',
+      {
+        from_account: 'Freedom Bank',
+        from_amount: '100',
+        from_currency: 'EUR',
+        to_account: 'ByBit',
+        to_currency: 'USD',
+      },
+      ctxA,
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.content).toContain('устарел');
+    expect(await balanceOf(USER_A, eur.id)).toBe(50_000);
+  });
+
+  it('обмен всего остатка требует подтверждения', async () => {
+    await setRates('2026-03-15', { USD: 1.08 });
+    const eur = await createAccount(USER_A, {
+      name: 'Freedom Bank',
+      currency: 'EUR',
+      initialBalanceCents: 30_000,
+    });
+    await createAccount(USER_A, { name: 'ByBit', currency: 'USD' });
+
+    const args = {
+      from_account: 'Freedom Bank',
+      from_amount: '300',
+      from_currency: 'EUR',
+      to_account: 'ByBit',
+      to_currency: 'USD',
+    };
+
+    const unconfirmed = await run('add_exchange', args, ctxA);
+    expect(unconfirmed.ok).toBe(false);
+    expect(unconfirmed.content).toContain('опустошит');
+    expect(await balanceOf(USER_A, eur.id)).toBe(30_000);
+    expect(await listTransactions(USER_A, { limit: 10 })).toHaveLength(0);
+
+    const confirmed = await run('add_exchange', { ...args, confirm: true }, ctxA);
+    expect(confirmed.ok).toBe(true);
+    expect(await balanceOf(USER_A, eur.id)).toBe(0);
+  });
+
+  it('get_fx_rates показывает дату и живые курсы', async () => {
+    await setRates('2026-03-15', { USD: 1.08 });
+    const outcome = await run('get_fx_rates', {}, ctxA);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.content).toContain('2026-03-15');
+    expect(outcome.content).toContain('1.08');
+  });
+
+  it('обмен внутри одной валюты не округляется вверх', async () => {
+    const eurA = await createAccount(USER_A, {
+      name: 'Main',
+      currency: 'EUR',
+      initialBalanceCents: 50_000,
+    });
+    const eurB = await createAccount(USER_A, { name: 'Reserve', currency: 'EUR' });
+
+    const outcome = await run(
+      'add_exchange',
+      {
+        from_account: 'Main',
+        from_amount: '100,23',
+        from_currency: 'EUR',
+        to_account: 'Reserve',
+        to_currency: 'EUR',
+      },
+      ctxA,
+    );
+
+    expect(outcome.ok, outcome.content).toBe(true);
+    expect(await balanceOf(USER_A, eurB.id)).toBe(10_023);
+    expect(await balanceOf(USER_A, eurA.id)).toBe(50_000 - 10_023);
+  });
+
+  it('несовпадение валюты счёта и запроса — отказ без записи', async () => {
+    await setRates('2026-03-15', { USD: 1.08, KZT: 500 });
+    const kzt = await createAccount(USER_A, {
+      name: 'Freedom Bank',
+      currency: 'KZT',
+      initialBalanceCents: 100_000,
+    });
+    await createAccount(USER_A, { name: 'ByBit', currency: 'USD' });
+
+    const outcome = await run(
+      'add_exchange',
+      {
+        from_account: 'Freedom Bank',
+        from_amount: '100',
+        from_currency: 'EUR',
+        to_account: 'ByBit',
+        to_currency: 'USD',
+      },
+      ctxA,
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.content).toContain('не совпадает');
+    expect(await balanceOf(USER_A, kzt.id)).toBe(100_000);
+  });
+
+  it('set_fx_rate сохраняет курс на сегодня и включает конвертацию', async () => {
+    await createAccount(USER_A, {
+      name: 'Freedom Bank',
+      currency: 'EUR',
+      initialBalanceCents: 50_000,
+    });
+    const usd = await createAccount(USER_A, { name: 'ByBit', currency: 'USD' });
+
+    const saved = await run('set_fx_rate', { code: 'USD', per_eur: '1.08' }, ctxA);
+    expect(saved.ok).toBe(true);
+    expect(saved.content).toContain('2026-03-15');
+
+    const outcome = await run(
+      'add_exchange',
+      {
+        from_account: 'Freedom Bank',
+        from_amount: '100',
+        from_currency: 'EUR',
+        to_account: 'ByBit',
+        to_currency: 'USD',
+      },
+      ctxA,
+    );
+    expect(outcome.ok).toBe(true);
+    expect(await balanceOf(USER_A, usd.id)).toBe(10_800);
+  });
+});
+
+describe('set_account_balance / adjust: подтверждение нуля', () => {
+  it('установка нуля на непустом счёте требует подтверждения', async () => {
+    const { main } = await seedAccounts(USER_A, 10_000);
+
+    const unconfirmed = await run(
+      'set_account_balance',
+      { account_name: 'Main', new_balance: '0' },
+      ctxA,
+    );
+    expect(unconfirmed.ok).toBe(false);
+    expect(unconfirmed.content).toContain('опустошит');
+    expect(await balanceOf(USER_A, main.id)).toBe(10_000);
+
+    const confirmed = await run(
+      'set_account_balance',
+      { account_name: 'Main', new_balance: '0', confirm: true },
+      ctxA,
+    );
+    expect(confirmed.ok).toBe(true);
+    expect(await balanceOf(USER_A, main.id)).toBe(0);
+  });
+
+  it('корректировка до нуля требует подтверждения', async () => {
+    const { main } = await seedAccounts(USER_A, 10_000);
+
+    const unconfirmed = await run(
+      'adjust_account_balance',
+      { account_name: 'Main', delta: '-100' },
+      ctxA,
+    );
+    expect(unconfirmed.ok).toBe(false);
+    expect(await balanceOf(USER_A, main.id)).toBe(10_000);
+  });
+});
+
+describe('add_transfer: подтверждение опустошения', () => {
+  it('перевод всего остатка спрашивает подтверждение', async () => {
+    const { main } = await seedAccounts(USER_A, 10_000);
+    const outcome = await run(
+      'add_transfer',
+      { amount: '100', from_account: 'Main', to_account: 'Cash' },
+      ctxA,
+    );
+    expect(outcome.ok).toBe(false);
+    expect(outcome.content).toContain('опустошит');
+    expect(await balanceOf(USER_A, main.id)).toBe(10_000);
+  });
+
+  it('подтверждённый перевод исполняется', async () => {
+    const { main, cash } = await seedAccounts(USER_A, 10_000);
+    const outcome = await run(
+      'add_transfer',
+      { amount: '100', from_account: 'Main', to_account: 'Cash', confirm: true },
+      ctxA,
+    );
+    expect(outcome.ok).toBe(true);
+    expect(await balanceOf(USER_A, main.id)).toBe(0);
+    expect(await balanceOf(USER_A, cash.id)).toBe(10_000);
   });
 });
 

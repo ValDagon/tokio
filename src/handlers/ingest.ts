@@ -156,6 +156,41 @@ export function isAgentTrigger(text: string): boolean {
   );
 }
 
+/** Глаголы денежного перемещения: «переведи всё», «сконвертируй», «переложи». */
+const FINANCE_MOVE_VERBS =
+  /(?:перевед|переведи|переве|перелож|перекин|перемест|сконверт|конвертир|обменя|пересчита|перепривяж)/iu;
+
+/** Слова и коды валют: без них фраза про «перевод» — не денежная операция. */
+const CURRENCY_HINTS =
+  /(?:евро|доллар|рубл|тенге|лир|юан|usd|eur|rub|kzt|try|cny|usdt|usdc|₽|\$|€)/iu;
+
+/**
+ * Похоже ли сообщение на инструкцию переложить или сконвертировать деньги.
+ *
+ * Нужны оба признака: глагол перемещения и валюта либо имя существующего счёта.
+ * Иначе «переведи текст на английский» попадал бы в финансовый гард. Вопросы
+ * (`?`) сюда не относятся — на них отвечает агент.
+ */
+export function isFinanceMoveInstruction(text: string, accountNames: readonly string[]): boolean {
+  const value = String(text ?? '').trim();
+  if (!value || value.includes('?')) return false;
+  if (!FINANCE_MOVE_VERBS.test(value)) return false;
+  if (CURRENCY_HINTS.test(value)) return true;
+  const lower = value.toLowerCase();
+  return accountNames.some((name) => {
+    const token = name.trim().toLowerCase();
+    return token.length >= 3 && lower.includes(token);
+  });
+}
+
+/** Список счетов одной строкой на каждый счёт: «Freedom Bank (EUR)». */
+function accountHints(accounts: readonly AccountRow[]): string {
+  return accounts
+    .map((account) => `• ${escapeAmpLtGt(account.name)} (${account.currency})`)
+    .join('\n');
+}
+
+
 /** Строит inline-клавиатуру отмены и перехода в Mini App для финансовой записи. */
 function buildFinanceUndoMarkup(params: {
   isLiability?: boolean;
@@ -368,6 +403,44 @@ export async function smartIngest(ctx: IngestContext): Promise<void> {
           detail: errorDetail(err),
         });
       }
+    }
+  }
+
+  // 2.4. Инструкция «переложи / сконвертируй» не превращается в заметку молча.
+  // Агент промолчал, офлайн-парсер не разобрал (в такой фразе нет сумм) —
+  // сохраняем входящее, но отвечаем уточняющим вопросом по реальным счетам и
+  // пишем причину в журнал сбоев (`parse_failed`), чтобы сбой был виден в
+  // `/diagnostics`, а не выглядел выполненной операцией.
+  if (!forwarded) {
+    const accounts = await listAccounts(userId, { includeInactive: true });
+    if (isFinanceMoveInstruction(userText, accounts.map((account) => account.name))) {
+      const note = await createNote(userId, userText, {
+        column: 'raw',
+        sourceType: ctx.source ?? 'text',
+        metadata: { title: userText.slice(0, 60), tags: [], category: 'raw' },
+      });
+      await recordFailure(userId, {
+        stage: 'ingest',
+        media: 'text',
+        reason: 'parse_failed',
+        detail: `finance_instruction: ${truncate(userText, 120)}`,
+      });
+
+      const hints = accountHints(accounts);
+      const reply =
+        '⚠️ <b>Денежную операцию не выполнил:</b> не хватает данных — откуда, куда и сколько.\n\n' +
+        (hints ? `${hints}\n\n` : '') +
+        'Скажи одной строкой, например: «переведи 50 EUR со счёта Freedom Bank на ByBit» — ' +
+        'посчитаю по курсу на сегодня.\n' +
+        '<i>Текст сохранил в инбокс, чтобы не потерялся.</i>';
+
+      await safeAnswer(chatId, prefixQuote ? `${prefixQuote}${reply}` : reply, {
+        replyMarkup: {
+          inline_keyboard: [[{ text: '🗑️ Отменить', callback_data: `undo_note:${note.id}` }]],
+        },
+        isHtml: true,
+      });
+      return;
     }
   }
 
