@@ -410,7 +410,7 @@
     "namePlaceholder": "お名前 (例: ケンジ)",
     "nameError": "お名前を入力してください。",
     "currencyLabel": "基準通貨",
-    "currencyHint": "残高・支出・資金の余裕はこの通貨で計算されます。",
+    "currencyHint": "残高・支出・予備費はこの通貨で計算されます。",
     "timezoneLabel": "タイムゾーン",
     "personaLabel": "AIアシスタントのスタイル",
     "starterAccountsLabel": "初期口座（今すぐ作成）",
