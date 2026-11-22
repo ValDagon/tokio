@@ -24,8 +24,25 @@
     "timezone": "UTC",
     "baseCurrency": "EUR",
     "summaryTime": "07:00",
-    "supportedCurrencies": ["EUR", "USD", "GBP", "RUB", "RSD", "JPY", "UAH", "KZT", "TRY", "GEL"],
-    "inboxCurrencies": ["EUR", "USD", "RUB", "RSD", "JPY"]
+    "supportedCurrencies": [
+      "EUR",
+      "USD",
+      "GBP",
+      "RUB",
+      "RSD",
+      "JPY",
+      "UAH",
+      "KZT",
+      "TRY",
+      "GEL"
+    ],
+    "inboxCurrencies": [
+      "EUR",
+      "USD",
+      "RUB",
+      "RSD",
+      "JPY"
+    ]
   },
   "features": {
     "spendLimitEnabled": true,
@@ -35,14 +52,48 @@
     "feedbackEnabled": true,
     "overloadShield": true,
     "microFocusTriage": true,
-    "calmModeUi": true
+    "calmModeUi": true,
+    "publicOpenAccess": false
   },
   "finance": {
     "accountAliases": [
-      { "account": "Наличные", "patterns": ["cash", "кэш", "налич", "gotovina", "現金"] },
-      { "account": "Карта", "patterns": ["card", "карт", "kartic", "カード"] },
-      { "account": "Накопительный", "patterns": ["savings", "накопит", "štednj", "貯蓄"] },
-      { "account": "Крипта", "patterns": ["crypto", "крипт", "kripto", "暗号資産"] }
+      {
+        "account": "Наличные",
+        "patterns": [
+          "cash",
+          "кэш",
+          "налич",
+          "gotovina",
+          "現金"
+        ]
+      },
+      {
+        "account": "Карта",
+        "patterns": [
+          "card",
+          "карт",
+          "kartic",
+          "カード"
+        ]
+      },
+      {
+        "account": "Накопительный",
+        "patterns": [
+          "savings",
+          "накопит",
+          "štednj",
+          "貯蓄"
+        ]
+      },
+      {
+        "account": "Крипта",
+        "patterns": [
+          "crypto",
+          "крипт",
+          "kripto",
+          "暗号資産"
+        ]
+      }
     ],
     "defaultAccountByCurrency": {
       "EUR": "Наличные",
@@ -61,12 +112,30 @@
     "reserveAmount": 0
   },
   "miniapp": {
-    "tabs": ["today", "tasks", "finances", "notes", "system"],
+    "tabs": [
+      "today",
+      "tasks",
+      "finances",
+      "notes",
+      "system"
+    ],
     "accountThemes": [
-      { "pattern": "карт|card|kartic|カード", "theme": "primary" },
-      { "pattern": "накоп|saving|šted|貯蓄", "theme": "secondary" },
-      { "pattern": "крипт|crypto|kripto|暗号", "theme": "accent" },
-      { "pattern": "налич|cash|gotov|現金", "theme": "neutral" }
+      {
+        "pattern": "карт|card|kartic|カード",
+        "theme": "primary"
+      },
+      {
+        "pattern": "накоп|saving|šted|貯蓄",
+        "theme": "secondary"
+      },
+      {
+        "pattern": "крипт|crypto|kripto|暗号",
+        "theme": "accent"
+      },
+      {
+        "pattern": "налич|cash|gotov|現金",
+        "theme": "neutral"
+      }
     ]
   },
   "prompts": {
