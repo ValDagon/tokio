@@ -572,7 +572,7 @@ function stepLimitReply(steps: readonly AgentStep[]): string {
 function deadlineReply(steps: readonly AgentStep[]): string {
   const lastObservation = [...steps].reverse().find((step) => step.observation)?.observation;
   const gathered = lastObservation ? truncate(lastObservation.trim(), 400).trim() : '';
-  const base = '⏱ Ход получился слишком длинным, и я остановился, чтобы успеть ответить.';
+  const base = '⏱ Не успел всё за один ход и остановился, чтобы успеть ответить.';
   const detail = gathered ? `\n\nУспел собрать вот это:\n${gathered}` : '';
   return `${base}${detail}\n\nОстальное — следующим сообщением.`;
 }
