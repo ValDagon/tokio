@@ -29,7 +29,7 @@ import { clockHeartbeatKey } from '../src/lib/jobs';
 import { createAccount, createLiability, createTransaction } from '../src/lib/dal/finances';
 import { createMedication } from '../src/lib/dal/medications';
 import { createTask } from '../src/lib/dal/tasks';
-import { ensureUser } from '../src/lib/dal/users';
+import { ensureUser, updateUser } from '../src/lib/dal/users';
 import { setRates } from '../src/lib/dal/fx';
 import type { LiabilityQueue } from '../src/types';
 
@@ -632,5 +632,69 @@ describe('diagnosticsReply', () => {
 
     expect(text).toContain('оборвана');
     expect(text).toContain('/digest');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Локализация `/diagnostics` и имена тулз в строке ходов
+// ---------------------------------------------------------------------------
+
+describe('diagnosticsReply: локаль владельца', () => {
+  it('при language=en заголовок, пустой журнал и часы английские', async () => {
+    await ensureUser(USER);
+    await updateUser(USER, { language: 'en' });
+
+    const empty = await diagnosticsReply(USER);
+    expect(empty).toContain('Diagnostics');
+    expect(empty).toContain('No failures recorded');
+    expect(empty).not.toContain('Диагностика');
+
+    await recordFailure(USER, { stage: 'agent', reason: 'llm_error' });
+    await kvSetJson('llm_last_failure', {
+      status: 429,
+      at: '2026-11-22T14:41:00.000Z',
+      detail: 'quota exceeded',
+    });
+    const filled = await diagnosticsReply(USER);
+    expect(filled).toContain('<b>Diagnostics</b>');
+    expect(filled).toContain('Last model failure: rate limit');
+    expect(filled).toContain('External alarm');
+    expect(filled).not.toContain('Внешний будильник');
+    expect(filled).not.toContain('лимит запросов');
+  });
+
+  it('при language=ru строки прежние — локаль не ломает русский вывод', async () => {
+    await ensureUser(USER);
+    await recordFailure(USER, { stage: 'agent', reason: 'llm_error' });
+
+    const text = await diagnosticsReply(USER);
+
+    expect(text).toContain('📊 <b>Диагностика</b>');
+    expect(text).toContain('Внешний будильник');
+  });
+
+  it('показывает имена тулз в строке ходов: максимум шесть и счётчик остальных', async () => {
+    await ensureUser(USER);
+    await startTurnTrace(USER);
+    const names = [
+      'list_tasks',
+      'search_notes',
+      'get_fin_balances',
+      'get_fx_rates',
+      'get_liabilities',
+      'list_transactions',
+      'view_trash',
+      'create_task',
+    ];
+    for (const name of names) await patchTurnTrace(USER, { stage: 'tool', tool: name });
+
+    const text = await diagnosticsReply(USER);
+
+    expect(text).toContain(
+      'тулзы list_tasks, search_notes, get_fin_balances, get_fx_rates, get_liabilities, list_transactions, ещё 2',
+    );
+    // Седьмое и дальше имена — счётчиком, а не простынёй.
+    expect(text).not.toContain('view_trash');
+    expect(text).not.toContain('create_task');
   });
 });

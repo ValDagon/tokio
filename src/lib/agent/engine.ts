@@ -38,7 +38,9 @@ import { getChapter } from '../dal/docs.js';
 import { listDoses } from '../dal/medications.js';
 import {
   kvSetJson,
+  patchAgentTurnState,
   patchTurnTrace,
+  readAgentTurnState,
   startTurnTrace,
   type TurnDeadlineCause,
   type TurnTracePatch,
@@ -78,6 +80,8 @@ import {
 import {
   observationMeta,
   sanitizeThread,
+  CONFIRM_PROMPT_KEY,
+  dropUnfinishedTail,
   toChatMessages,
   toProviderMessages,
   toolCallsMeta,
@@ -342,6 +346,34 @@ export const LLM_ERROR_TEXT = 'Не удалось получить ответ �
  */
 export function isLlmErrorReply(reply: string): boolean {
   return reply.trim() === LLM_ERROR_TEXT;
+}
+
+/**
+ * Сколько тред живёт без нового хода. Больше часа — незакрытая инструкция
+ * (просьба, вызовы, вопрос подтверждения) новому ходу не наследуется.
+ *
+ * Час, а не минуты: закрываемый сценарий — «мне скучно» на следующий день после
+ * старой просьбы, и это часы. Граница экспортируется, поэтому подстройка — одна
+ * константа, а не поиск по коду.
+ */
+export const THREAD_STALE_AFTER_MS = 60 * 60_000;
+
+/**
+ * Ответ «да» на вопрос подтверждения — якорный whitelist, а не поиск слова:
+ * «да, но не сейчас» согласием не считается. Знаки и эмодзи по краям снимаются
+ * («да.», «ок!», «да 👍»).
+ */
+export const AFFIRMATIVE_REPLY_RE =
+  /^(?:да|ага|ок|окей|давай|подтверждаю|выполняй|выполни|удаляй|конечно|yes|yep|ok|okay|confirm|do it|go ahead)$/i;
+
+/** Открылся ли ход репликой-согласием (движок исполняет подтверждение сам). */
+export function isAffirmativeReply(text: string): boolean {
+  const cleaned = String(text ?? '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return AFFIRMATIVE_REPLY_RE.test(cleaned);
 }
 
 /** Подпись подтверждения в схеме деструктивного инструмента. */
@@ -768,6 +800,21 @@ function needsConfirmation(tool: Tool | null, args: Record<string, unknown>): bo
   return tool != null && requiresConfirmation(tool.effect) && args.confirm !== true;
 }
 
+/** Сколько прошло с прошлого хода; `null` — отметки нет или она битая. */
+function idleSince(lastTurnAt: string | null, nowMs: number): number | null {
+  if (!lastTurnAt) return null;
+  const parsed = Date.parse(lastTurnAt);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, nowMs - parsed);
+}
+
+/** Аргументы подтверждения без самого `confirm`: ровно их видел владелец в вопросе. */
+function withoutConfirm(args: Record<string, unknown>): Record<string, unknown> {
+  const payload = { ...args };
+  delete payload.confirm;
+  return payload;
+}
+
 /** Инструменты без побочных эффектов: смежные вызовы в одном ходе безопасны для Promise.all. */
 export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   'list_tasks',
@@ -869,7 +916,44 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       now,
     };
 
-    const stored = store ? sanitizeThread(await store.load(userId)) : [];
+    let stored = store ? sanitizeThread(await store.load(userId)) : [];
+    // Состояние прошлого хода: когда он закончился и ждёт ли ответа действие.
+    // `kv` вспомогательное: пустое состояние просто выключает обе проверки,
+    // поэтому сбой чтения не мешает обычному прогону.
+    const turnState = await readAgentTurnState(userId, clock());
+    const idleMs = idleSince(turnState.lastTurnAt, clock());
+    const staleThread = idleMs !== null && idleMs >= THREAD_STALE_AFTER_MS;
+    if (staleThread) {
+      // Час без хода: просьба, наблюдения и вопрос подтверждения часовой
+      // давности не наследуются — иначе «мне скучно» поднимает старое удаление,
+      // которого владелец уже не помнит.
+      stored = dropUnfinishedTail(stored);
+    }
+    // «Да» исполняет движок, а не модель, — но только если тулза всё ещё есть в
+    // текущем списке и всё ещё требует подтверждения. Иначе право сгорает: тред
+    // мог переехать в другой тулсет (read-only ход, удалённая тулза).
+    const confirmationTool = turnState.confirmation
+      ? (tools.find((tool) => tool.name === normalizeToolName(turnState.confirmation!.name)) ?? null)
+      : null;
+    const pendingConfirm =
+      turnState.confirmation &&
+      confirmationTool &&
+      requiresConfirmation(confirmationTool.effect) &&
+      !staleThread &&
+      isAffirmativeReply(text)
+        ? { name: confirmationTool.name, args: withoutConfirm(turnState.confirmation.args) }
+        : null;
+    if (turnState.confirmation) {
+      if (pendingConfirm) {
+        // Вопрос и висячее «действие не выполнено» в историю не идут: ответ
+        // владельца уже здесь, а исполнение ниже — детерминированное.
+        stored = dropUnfinishedTail(stored);
+      } else if (text) {
+        // Любая другая реплика — владелец занят другим: право на исполнение
+        // сгорает, и «вспомнить» его моделью больше нельзя.
+        await patchAgentTurnState(userId, { confirmation: null });
+      }
+    }
     if (!text) {
       return {
         reply: '',
@@ -954,6 +1038,43 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         // индикация — украшение, а не часть прогона
       }
     };
+
+    if (pendingConfirm) {
+      // «Да» исполняет движок: ровно тот вызов (имя + аргументы), который видел
+      // владелец. Модель к решению не допускается — иначе она может подменить
+      // инструмент или аргументы, а «да» относится к показанному вопросу.
+      // Парность вызова и наблюдения сохраняется, поэтому `sanitizeThread` её
+      // не «починит» синтезированным успехом.
+      const args = { ...pendingConfirm.args, confirm: true };
+      const call: ThreadToolCall = {
+        id: `call_confirm_${steps.length + 1}`,
+        name: pendingConfirm.name,
+        args,
+      };
+      working.push({ role: 'assistant', content: '', meta: toolCallsMeta([call]) });
+      await notifyProgress({ stage: 'tool', step: iteration, tool: pendingConfirm.name });
+      await traceTurn({ stage: 'tool', tool: pendingConfirm.name });
+      const outcome = await runTool(pendingConfirm.name, args, ctx, tools);
+      if (outcome.unexpected === true) unexpectedTools.add(pendingConfirm.name);
+      const observation = toolObservation(outcome, pendingConfirm.name);
+      working.push({
+        role: 'user',
+        content: observation.content,
+        meta: observationMeta({ id: call.id, name: call.name, ok: observation.ok }),
+      });
+      steps.push({
+        index: steps.length,
+        thought: null,
+        action: { name: call.name, args },
+        observation: observation.content,
+        ok: observation.ok,
+        data: outcome.data,
+      });
+      totalToolCalls += 1;
+      // Подтверждение одноразовое: исполненное или отказавшее — оно больше не
+      // ждёт ответа. Дальше модель видит результат и отвечает словами.
+      await patchAgentTurnState(userId, { confirmation: null });
+    }
 
     const registerTurnSignature = (
       calls: ReadonlyArray<{ name: string; args?: Record<string, unknown> }>,
@@ -1181,6 +1302,11 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
               batch.push(calls[i]!);
               i += 1;
             }
+            // Имена в крошку пишутся до параллельного запуска и по одному: запись
+            // в `kv` — read-merge-write, параллельные записи потеряли бы имена.
+            for (const c of batch) {
+              await traceTurn({ stage: 'tool', tool: normalizeToolName(c.name)! });
+            }
             const outcomes = await Promise.all(
               batch.map(async (c) => {
                 const name = normalizeToolName(c.name)!;
@@ -1224,6 +1350,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           const outcome: ToolOutcome = validName
             ? await (async () => {
                 await notifyProgress({ stage: 'tool', step: iteration, tool: validName });
+                await traceTurn({ stage: 'tool', tool: validName });
                 return runTool(validName, args, ctx, tools);
               })()
             : {
@@ -1243,7 +1370,26 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         if (pendingConfirmation) {
           stopReason = 'confirm';
           reply = confirmationPrompt(pendingConfirmation.name, pendingConfirmation.args, profile.locale);
-          working.push({ role: 'assistant', content: reply });
+          // Метка в `meta`: вопрос — не финальный ответ, иначе срез незакрытого
+          // хвоста принял бы его за закрытую просьбу.
+          working.push({
+            role: 'assistant',
+            content: reply,
+            meta: { [CONFIRM_PROMPT_KEY]: pendingConfirmation.name },
+          });
+          // Право на исполнение переезжает из треда в `kv`: следующее «да»
+          // исполнит ровно этот вызов, решать модели нечего.
+          await patchAgentTurnState(
+            userId,
+            {
+              confirmation: {
+                name: pendingConfirmation.name,
+                args: withoutConfirm(pendingConfirmation.args),
+                createdAt: new Date(clock()).toISOString(),
+              },
+            },
+            clock(),
+          );
           break;
         }
         iteration += 1;
@@ -1316,13 +1462,31 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         totalToolCalls += 1;
         stopReason = 'confirm';
         reply = confirmationPrompt(call.name, args, profile.locale);
-        working.push({ role: 'assistant', content: reply });
+        working.push({
+          role: 'assistant',
+          content: reply,
+          meta: { [CONFIRM_PROMPT_KEY]: call.name },
+        });
+        // Текстовый путь тот же по смыслу: подтверждение живёт в `kv`, а не в
+        // надежде на то, что модель в следующий раз повторит вызов.
+        await patchAgentTurnState(
+          userId,
+          {
+            confirmation: {
+              name: call.name,
+              args: withoutConfirm(args),
+              createdAt: new Date(clock()).toISOString(),
+            },
+          },
+          clock(),
+        );
         break;
       }
 
       const outcome: ToolOutcome = name
         ? await (async () => {
             await notifyProgress({ stage: 'tool', step: iteration, tool: name });
+            await traceTurn({ stage: 'tool', tool: name });
             return runTool(name, args, ctx, tools);
           })()
         : {
@@ -1425,6 +1589,11 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         // сбой записи не должен отнимать у пользователя готовый ответ
       }
     }
+
+    // Граница хода для экспирации треда: без неё следующая реплика всегда
+    // считает старую инструкцию живой. Считается вместе с `turn_trace`, но в
+    // своём ключе — диагностика не имеет права влиять на поведение.
+    await patchAgentTurnState(userId, { lastTurnAt: new Date(clock()).toISOString() }, clock());
 
     // Крошка хода: последняя метка — «ответ собран и тред сохранён». Если её нет
     // в `kv`, а есть только `model-start`, значит ход убит внутри вызова модели.

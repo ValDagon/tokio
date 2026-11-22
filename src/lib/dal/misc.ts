@@ -164,7 +164,7 @@ export async function kvSetJson(key: string, value: unknown): Promise<KvRow> {
 export type TurnDeadlineCause = 'budget' | 'tools-skipped';
 
 /** Стадия, до которой ход дошёл: последняя перезаписывает предыдущую. */
-export type TurnTraceStage = 'start' | 'model-start' | 'model-end' | 'send';
+export type TurnTraceStage = 'start' | 'model-start' | 'model-end' | 'tool' | 'send';
 
 /** Судьба живой строки «⏳ …»: показана, оба способа отправки отказали, не открывалась. */
 export type TurnIndicatorState = 'none' | 'shown' | 'unavailable';
@@ -178,6 +178,8 @@ export interface TurnTrace {
   modelCalls: number;
   /** Модели, которые ответили: запасная в цепочке видна сразу. */
   models: string[];
+  /** Имена вызванных инструментов: только имена, аргументы уже лежат в треде. */
+  tools: string[];
   deadlineAt: IsoTimestamp | null;
   deadlineCause: TurnDeadlineCause | null;
   indicator: TurnIndicatorState;
@@ -198,6 +200,8 @@ export interface TurnTracePatch {
   modelStarted?: boolean;
   /** Модель, которая ответила (пустая строка/`null` — не записываем). */
   model?: string | null;
+  /** Имя вызванного инструмента: дописывается в `tools` без дублей. */
+  tool?: string | null;
   /** Дедлайн сработал: время, причина и счётчик дедлайнов. */
   deadline?: TurnDeadlineCause;
   indicator?: TurnIndicatorState;
@@ -211,6 +215,18 @@ const turnTraceKey = (userId: number): string => `${TURN_TRACE_PREFIX}${Number(u
 const turnStatsKey = (userId: number): string => `${TURN_STATS_PREFIX}${Number(userId)}`;
 
 const EMPTY_TURN_STATS: TurnStats = { turns: 0, deadlineTurns: 0, updatedAt: '' };
+
+/**
+ * Крошка, записанная до появления поля `tools`, читается как «инструментов не
+ * было»: формат `v1` не переписан, поле аддитивное.
+ */
+function normalizeTrace(trace: TurnTrace): TurnTrace {
+  return {
+    ...trace,
+    models: Array.isArray(trace.models) ? trace.models.filter((model) => typeof model === 'string') : [],
+    tools: Array.isArray(trace.tools) ? trace.tools.filter((name) => typeof name === 'string') : [],
+  };
+}
 
 /**
  * Крошка хода и счётчики.
@@ -231,7 +247,7 @@ export async function readTurnTrace(
       kvGetJson<TurnTrace | null>(turnTraceKey(userId), null),
       kvGetJson<TurnStats | null>(turnStatsKey(userId), null),
     ]);
-    return { trace, stats };
+    return { trace: trace ? normalizeTrace(trace) : null, stats };
   } catch {
     return { trace: null, stats: null };
   }
@@ -248,6 +264,7 @@ export async function startTurnTrace(userId: number): Promise<void> {
       stage: 'start',
       modelCalls: 0,
       models: [],
+      tools: [],
       deadlineAt: null,
       deadlineCause: null,
       indicator: 'none',
@@ -275,6 +292,7 @@ export async function patchTurnTrace(userId: number, patch: TurnTracePatch): Pro
       stage: patch.stage ?? current?.stage ?? 'start',
       modelCalls: (Math.max(0, Number(current?.modelCalls) || 0) || 0) + (patch.modelStarted ? 1 : 0),
       models: [...(Array.isArray(current?.models) ? current.models : [])],
+      tools: [...(Array.isArray(current?.tools) ? current.tools : [])],
       deadlineAt: patch.deadline ? at : (current?.deadlineAt ?? null),
       deadlineCause: patch.deadline ?? current?.deadlineCause ?? null,
       indicator: patch.indicator ?? current?.indicator ?? 'none',
@@ -282,6 +300,8 @@ export async function patchTurnTrace(userId: number, patch: TurnTracePatch): Pro
     };
     const model = typeof patch.model === 'string' ? patch.model.trim() : '';
     if (model && !trace.models.includes(model)) trace.models.push(model);
+    const tool = typeof patch.tool === 'string' ? patch.tool.trim() : '';
+    if (tool && !trace.tools.includes(tool)) trace.tools.push(tool);
     await kvSetJson(turnTraceKey(userId), trace);
 
     // Счётчик дедлайнов идёт отдельно от крошки: он переживает следующий ход.
@@ -295,6 +315,114 @@ export async function patchTurnTrace(userId: number, patch: TurnTracePatch): Pro
     }
   } catch {
     // крошка — украшение диагностики
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Состояние хода агента: граница треда и действие, ждущее подтверждения
+// ---------------------------------------------------------------------------
+
+/**
+ * Необратимый вызов, который владелец ещё не подтвердил.
+ *
+ * Хранится вместе с аргументами, потому что «да» следующего хода обязано
+ * исполнить ровно тот вызов, который владелец видел в вопросе, — движок, а не
+ * модель. Модель могла бы подменить инструмент или аргументы, и проверки «ей
+ * доверяем» здесь нет.
+ */
+export interface PendingConfirmation {
+  name: string;
+  args: Record<string, unknown>;
+  createdAt: IsoTimestamp;
+}
+
+/** Состояние прошлого хода: когда он закончился и что ждёт ответа. */
+export interface AgentTurnState {
+  lastTurnAt: IsoTimestamp | null;
+  confirmation: PendingConfirmation | null;
+}
+
+/**
+ * Ключ состояния хода. Отдельный от `turn_trace` намеренно: крошка — диагностика,
+ * её сбой не должен менять поведение, а промах этого ключа означает «права на
+ * исполнение нет» — то есть отказ в безопасную сторону.
+ */
+export const AGENT_TURN_KEY_PREFIX = 'agent_turn:v1:';
+
+/**
+ * Сколько живёт неподтверждённое действие. 30 минут — это «тот же разговор»
+ * (владелец успел прочитать вопрос и ответить), но уже не «вчерашняя просьба».
+ * Час простоя треда (`THREAD_STALE_AFTER_MS`) намеренно длиннее: сначала
+ * протухает право на исполнение, потом — сама инструкция.
+ */
+export const PENDING_CONFIRM_TTL_MS = 30 * 60_000;
+
+const agentTurnKey = (userId: number): string => `${AGENT_TURN_KEY_PREFIX}${Number(userId)}`;
+
+function isTurnRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Подтверждение из `kv` в доменном виде; мусор и битая форма — `null`. */
+function parseConfirmation(raw: unknown): PendingConfirmation | null {
+  if (!isTurnRecord(raw)) return null;
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  const createdAt = typeof raw.createdAt === 'string' ? raw.createdAt.trim() : '';
+  if (!name || !createdAt) return null;
+  const args = isTurnRecord(raw.args) ? raw.args : {};
+  return { name, args: { ...args }, createdAt };
+}
+
+function parseLastTurnAt(raw: unknown): IsoTimestamp | null {
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+/**
+ * Состояние прошлого хода. Просроченное подтверждение читается как `null`:
+ * молчаливое исполнение старого удаления невозможно, даже если запись осталась
+ * в `kv` (следующая запись штатно её затрёт — `patchAgentTurnState`).
+ */
+export async function readAgentTurnState(userId: number, nowMs: number): Promise<AgentTurnState> {
+  try {
+    const raw = await kvGetJson<Record<string, unknown> | null>(agentTurnKey(userId), null);
+    return {
+      lastTurnAt: parseLastTurnAt(raw?.lastTurnAt),
+      confirmation: freshConfirmation(raw?.confirmation, nowMs),
+    };
+  } catch {
+    return { lastTurnAt: null, confirmation: null };
+  }
+}
+
+/** Подтверждение, если оно ещё не старше TTL; иначе `null` (исполнять нельзя). */
+function freshConfirmation(raw: unknown, nowMs: number): PendingConfirmation | null {
+  const confirmation = parseConfirmation(raw);
+  if (!confirmation) return null;
+  const createdAtMs = Date.parse(confirmation.createdAt);
+  const fresh = Number.isFinite(createdAtMs) && nowMs - createdAtMs < PENDING_CONFIRM_TTL_MS;
+  return fresh ? confirmation : null;
+}
+
+/**
+ * Дописывает состояние хода (read-merge-write), молча: сбой `kv` не рвёт прогон.
+ *
+ * `nowMs` — те же часы, что у чтения (`clock()` прогона): просроченное
+ * подтверждение не переезжает в следующую запись, а затирается ею. Без
+ * аргумента берётся системное время — так `kv` не зависит от инъекции часов.
+ */
+export async function patchAgentTurnState(
+  userId: number,
+  patch: { lastTurnAt?: IsoTimestamp; confirmation?: PendingConfirmation | null },
+  nowMs: number = Date.now(),
+): Promise<void> {
+  try {
+    const current = await kvGetJson<Record<string, unknown> | null>(agentTurnKey(userId), null);
+    const lastTurnAt = patch.lastTurnAt !== undefined ? patch.lastTurnAt : parseLastTurnAt(current?.lastTurnAt);
+    const confirmation =
+      patch.confirmation !== undefined ? patch.confirmation : freshConfirmation(current?.confirmation, nowMs);
+    await kvSetJson(agentTurnKey(userId), { lastTurnAt, confirmation });
+  } catch {
+    // состояние хода — вспомогательное хранилище, а не часть ответа
   }
 }
 

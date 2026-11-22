@@ -345,7 +345,7 @@ async function llmFailureReason(): Promise<string> {
 // Диагностика: что сломалось и сколько раз
 // ---------------------------------------------------------------------------
 
-/** Пустой журнал — это ответ, а не пустой экран. */
+/** Пустой журнал — это ответ, а не пустой экран. Русский текст остаётся экспортом для совместимости. */
 export const DIAGNOSTICS_EMPTY_TEXT = '📊 <b>Диагностика</b>\n\nСбоев не записано — журнал пуст.';
 
 /** Сколько кластеров максимум: одна строка на кластер. */
@@ -354,69 +354,97 @@ const DIAGNOSTICS_CLUSTER_LIMIT = 10;
 /** Жёсткий потолок строк — диагностика не должна быть простынёй. */
 const DIAGNOSTICS_MAX_LINES = 20;
 
-function diagnosticsStamp(at: string | null, timeZone: string): string {
-  if (!at) return 'время неизвестно';
+/** Сколько имён тулз показываем: остальное — счётчиком, а не простынёй. */
+const DIAGNOSTICS_TOOL_LIMIT = 6;
+
+function diagnosticsStamp(at: string | null, timeZone: string, locale: LocaleCode): string {
+  if (!at) return t(locale, 'diagnostics.timeUnknown');
   const parsed = Date.parse(at);
-  if (Number.isNaN(parsed)) return 'время неизвестно';
+  if (Number.isNaN(parsed)) return t(locale, 'diagnostics.timeUnknown');
   return formatDateTime(new Date(parsed), timeZone);
 }
 
 /**
  * Строка крошки хода: сколько ходов было, сколько упёрлось в дедлайн, до какой
- * стадии дошёл последний и что стало с индикатором. Нужна, чтобы отличать
- * «дедлайн по бюджету» от «дедлайн после отказа основной модели» и видеть
- * судьбу строки «⏳ …»; поэтому пишется и в пустой журнал.
+ * стадии дошёл последний, что стало с индикатором и какие тулзы он звал. Нужна,
+ * чтобы отличать «дедлайн по бюджету» от «дедлайн после отказа основной модели»,
+ * видеть судьбу строки «⏳ …» и имя инструмента, на котором всё встало; поэтому
+ * пишется и в пустой журнал.
+ *
+ * Обрамление локализовано, токены стадий и причин (`model-start`, `budget`) —
+ * нет: это идентификаторы для форензики, а не проза.
  */
 function turnTraceLine(
   trace: Awaited<ReturnType<typeof readTurnTrace>>['trace'],
   stats: Awaited<ReturnType<typeof readTurnTrace>>['stats'],
   timeZone: string,
+  locale: LocaleCode,
 ): string | null {
   if (!trace && !stats) return null;
   const parts: string[] = [];
   if (stats && (stats.turns > 0 || stats.deadlineTurns > 0)) {
-    parts.push(`ходов ${stats.turns}`);
-    parts.push(`с дедлайном ${stats.deadlineTurns}`);
+    parts.push(t(locale, 'diagnostics.turns', { count: stats.turns }));
+    parts.push(t(locale, 'diagnostics.deadlineTurns', { count: stats.deadlineTurns }));
   }
   if (trace) {
     // Форму значения крошки проверяем здесь: она приходит из `kv` строкой JSON,
     // а битая форма не должна ломать разбор всего `/diagnostics`.
     const models = Array.isArray(trace.models) ? trace.models : [];
+    const tools = Array.isArray(trace.tools) ? trace.tools : [];
     const cause =
       trace.deadlineCause === 'tools-skipped'
-        ? 'инструменты не успели'
+        ? t(locale, 'diagnostics.causeToolsSkipped')
         : trace.deadlineCause === 'budget'
-          ? 'бюджет'
+          ? t(locale, 'diagnostics.causeBudget')
           : null;
     const indicator =
       trace.indicator === 'shown'
-        ? 'показан'
+        ? t(locale, 'diagnostics.indicatorShown')
         : trace.indicator === 'unavailable'
-          ? 'недоступен'
-          : 'не открывался';
+          ? t(locale, 'diagnostics.indicatorUnavailable')
+          : t(locale, 'diagnostics.indicatorNone');
+    const shownTools = tools
+      .slice(0, DIAGNOSTICS_TOOL_LIMIT)
+      .map((name) => escapeHtml(String(name)));
+    const toolsText =
+      tools.length > shownTools.length
+        ? `${shownTools.join(', ')}, ${t(locale, 'diagnostics.toolsMore', {
+            count: tools.length - shownTools.length,
+          })}`
+        : shownTools.join(', ');
     const details = [
-      `стадия ${trace.stage}`,
-      ...(cause ? [`дедлайн: ${cause}`] : []),
-      `индикатор ${indicator}`,
+      t(locale, 'diagnostics.stage', { stage: trace.stage }),
+      ...(cause ? [t(locale, 'diagnostics.deadline', { cause })] : []),
+      t(locale, 'diagnostics.indicator', { state: indicator }),
       ...(models.length > 0
-        ? [`модели ${models.map((model) => escapeHtml(String(model))).join(', ')}`]
+        ? [
+            t(locale, 'diagnostics.models', {
+              models: models.map((model) => escapeHtml(String(model))).join(', '),
+            }),
+          ]
         : []),
-      ...(trace.stopReason ? [`стоп ${escapeHtml(trace.stopReason)}`] : []),
+      ...(shownTools.length > 0 ? [t(locale, 'diagnostics.tools', { tools: toolsText })] : []),
+      ...(trace.stopReason ? [t(locale, 'diagnostics.stop', { reason: escapeHtml(trace.stopReason) })] : []),
     ];
-    parts.push(`${diagnosticsStamp(trace.updatedAt, timeZone)} · ${details.join(' · ')}`);
+    parts.push(`${diagnosticsStamp(trace.updatedAt, timeZone, locale)} · ${details.join(' · ')}`);
   }
-  return parts.length > 0 ? `⏱ <b>Ходы:</b> ${parts.join(' · ')}` : null;
+  return parts.length > 0 ? t(locale, 'diagnostics.turnsLine', { line: parts.join(' · ') }) : null;
 }
 
 /** Один кластер одной строкой: код, сколько раз, когда, восстановлен ли. */
-function failureLine(item: FailureAggregate, timeZone: string): string {
+function failureLine(item: FailureAggregate, timeZone: string, locale: LocaleCode): string {
   const code = item.signature
     .split('|')
     .filter((part) => part !== '-' && part !== 'none')
     .join(' · ');
-  const recovered = item.recoveredAt ? ' · ✅ восстановлен' : '';
-  const task = item.evolutionItemId ? ` · задача #${item.evolutionItemId}` : '';
-  return `• <code>${escapeHtml(code)}</code> ×${item.count} · ${diagnosticsStamp(item.lastAt, timeZone)}${recovered}${task}`;
+  const recovered = item.recoveredAt ? t(locale, 'diagnostics.recovered') : '';
+  const task = item.evolutionItemId ? t(locale, 'diagnostics.taskRef', { id: item.evolutionItemId }) : '';
+  const line = t(locale, 'diagnostics.failureLine', {
+    code: escapeHtml(code),
+    count: item.count,
+    at: diagnosticsStamp(item.lastAt, timeZone, locale),
+  });
+  return `${line}${recovered}${task}`;
 }
 
 /**
@@ -425,6 +453,8 @@ function failureLine(item: FailureAggregate, timeZone: string): string {
  * нужен короткий список «что сломалось», а не весь журнал.
  *
  * Пустой журнал не маскируется: команда честно говорит «сбоев не записано».
+ * Язык берётся из профиля владельца — ответ не должен быть русским при
+ * `language='en'`.
  */
 export async function diagnosticsReply(
   userId: number,
@@ -432,7 +462,7 @@ export async function diagnosticsReply(
 ): Promise<string> {
   const now = options.now ?? new Date();
   const limit = Math.max(1, Math.trunc(options.limit ?? DIAGNOSTICS_CLUSTER_LIMIT));
-  const [clusters, lastFailure, timeZone] = await Promise.all([
+  const [clusters, lastFailure, user] = await Promise.all([
     listFailureAggregates(userId, { limit }),
     kvGetJson<{
       status?: number;
@@ -440,39 +470,42 @@ export async function diagnosticsReply(
       detail?: string;
       providerBody?: string | null;
     } | null>('llm_last_failure', null),
-    userTimezone(userId),
+    getUser(userId),
   ]);
+  const timeZone = user?.timezone ?? 'UTC';
+  const locale: LocaleCode = user?.language ?? 'ru';
   const { trace: turnTrace, stats: turnStats } = await readTurnTrace(userId);
-  const turnLine = turnTraceLine(turnTrace, turnStats, timeZone);
+  const turnLine = turnTraceLine(turnTrace, turnStats, timeZone, locale);
 
   if (clusters.length === 0 && !lastFailure) {
     // Пустой журнал не пустой экран: крошка хода показывает, чем живёт агент.
-    const empty = turnLine ? [DIAGNOSTICS_EMPTY_TEXT, '', turnLine] : [DIAGNOSTICS_EMPTY_TEXT];
-    return empty.slice(0, DIAGNOSTICS_MAX_LINES).join('\n');
+    const empty = t(locale, 'diagnostics.empty');
+    const lines = turnLine ? [empty, '', turnLine] : [empty];
+    return lines.slice(0, DIAGNOSTICS_MAX_LINES).join('\n');
   }
 
-  const lines: string[] = ['📊 <b>Диагностика</b>', ''];
+  const lines: string[] = [t(locale, 'diagnostics.title'), ''];
 
   if (lastFailure) {
     const status = Number(lastFailure.status ?? 0);
     const reason =
       status === 429
-        ? 'лимит запросов'
+        ? t(locale, 'diagnostics.reasonRateLimit')
         : status === 0
-          ? 'провайдер не ответил'
+          ? t(locale, 'diagnostics.reasonNoProvider')
           : status >= 500
-            ? 'сбой провайдера'
-            : `ответ ${status}`;
-    const at = diagnosticsStamp(lastFailure.at ?? null, timeZone);
-    lines.push(`Последний отказ модели: ${escapeHtml(reason)} · ${at}`);
+            ? t(locale, 'diagnostics.reasonProviderFailure')
+            : t(locale, 'diagnostics.reasonStatus', { status });
+    const at = diagnosticsStamp(lastFailure.at ?? null, timeZone, locale);
+    lines.push(t(locale, 'diagnostics.lastFailure', { reason: escapeHtml(reason), at }));
     const providerText = providerFailureText(lastFailure);
-    if (providerText) lines.push(`Текст отказа: <code>${escapeHtml(providerText)}</code>`);
+    if (providerText) lines.push(t(locale, 'diagnostics.failureText', { text: escapeHtml(providerText) }));
   }
 
   if (clusters.length > 0) {
     if (lastFailure) lines.push('');
-    lines.push(`<b>Кластеры сбоев</b> (${clusters.length}):`);
-    for (const cluster of clusters) lines.push(failureLine(cluster, timeZone));
+    lines.push(t(locale, 'diagnostics.clustersHeader', { count: clusters.length }));
+    for (const cluster of clusters) lines.push(failureLine(cluster, timeZone, locale));
   }
 
   if (turnLine) {
@@ -483,38 +516,32 @@ export async function diagnosticsReply(
   const clock = await kvGetJson<ClockHeartbeat | null>(clockHeartbeatKey(userId), null);
   lines.push('');
   if (!clock || clock.lastExternalAttemptAt === null) {
-    lines.push('Внешний будильник: тиков ещё не было — напоминания приходят только при касании.');
+    lines.push(t(locale, 'diagnostics.clockNone'));
   } else {
-    const attempted = diagnosticsStamp(clock.lastExternalAttemptAt, timeZone);
+    const attempted = diagnosticsStamp(clock.lastExternalAttemptAt, timeZone, locale);
     const succeeded = clock.lastExternalSuccessAt
-      ? diagnosticsStamp(clock.lastExternalSuccessAt, timeZone)
-      : '«ещё не было»';
-    lines.push(`Внешний будильник: последний тик ${attempted}, последний успех ${succeeded}.`);
+      ? diagnosticsStamp(clock.lastExternalSuccessAt, timeZone, locale)
+      : t(locale, 'diagnostics.clockNever');
+    lines.push(t(locale, 'diagnostics.clockLast', { attempted, succeeded }));
     // Фактический такт проговаривается всегда: иначе редкий тик читается как
     // поломка. GitHub отдаёт лишь часть запусков `*/15` (2–6 в сутки), поэтому
     // «молчание» в несколько часов — норма, а не остановка расписания.
-    lines.push(
-      'Такт внешних часов — best-effort: GitHub отдаёт лишь часть запусков расписания (фактически 2–6 в сутки). Напоминания добираются при каждом касании бота.',
-    );
+    lines.push(t(locale, 'diagnostics.clockCadence'));
     const successMs = clock.lastExternalSuccessAt ? Date.parse(clock.lastExternalSuccessAt) : NaN;
     const ageMinutes = Number.isFinite(successMs)
       ? Math.floor((now.getTime() - successMs) / 60_000)
       : null;
     if (ageMinutes === null) {
-      lines.push(
-        'Внешние часы: успешных тиков ещё не было — проверь personal-clock.yml в GitHub Actions. Напоминания пока добираются при касании бота.',
-      );
+      lines.push(t(locale, 'diagnostics.clockNoSuccess'));
     } else if (ageMinutes >= CLOCK_STALL_AFTER_MINUTES) {
-      lines.push(
-        'Внешние часы: больше суток без успешного тика — проверь personal-clock.yml в GitHub Actions. Напоминания пока добираются при касании бота.',
-      );
+      lines.push(t(locale, 'diagnostics.clockStalled'));
     }
     if (clock.kinds.morning_digest === 'failed') {
-      lines.push('Утренняя сводка оборвана на середине — недостающее добирается командой /digest.');
+      lines.push(t(locale, 'diagnostics.morningDigestFailed'));
     }
   }
 
-  lines.push('', '<i>В журнале нет ключей и содержимого медиа; текст отказа провайдера может включать фрагмент сообщения.</i>');
+  lines.push('', t(locale, 'diagnostics.footnote'));
 
   return lines.slice(0, DIAGNOSTICS_MAX_LINES).join('\n');
 }

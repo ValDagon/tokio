@@ -17,9 +17,11 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentMessage } from '../../src/types';
 import {
+  CONFIRM_PROMPT_KEY,
   OBSERVATION_PREFIX,
   SYNTHESIZED_OBSERVATION,
   approximateTokens,
+  dropUnfinishedTail,
   isObservation,
   sanitizeThread,
   toChatMessages,
@@ -305,5 +307,73 @@ describe('toChatMessages', () => {
       { role: 'user', content: `${OBSERVATION_PREFIX}Задача создана.` },
       { role: 'assistant', content: 'Final Answer: Готово.' },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Незакрытый хвост треда
+// ---------------------------------------------------------------------------
+
+describe('dropUnfinishedTail: срез незакрытого хвоста', () => {
+  /** Вопрос подтверждения: шаг ассистента без вызовов, но с маркером в `meta`. */
+  function confirmPrompt(name = 'delete_liability'): AgentMessage {
+    return {
+      role: 'assistant',
+      content: `⚠️ Подтвердите действие: ${name}`,
+      meta: { [CONFIRM_PROMPT_KEY]: name },
+    };
+  }
+
+  it('режет по последнему финальному ответу: просьба и незакрытые вызовы уходят', () => {
+    const thread: AgentMessage[] = [
+      { role: 'user', content: 'Старая просьба' },
+      { role: 'assistant', content: 'Final Answer: Старый ответ.' },
+      { role: 'user', content: 'Удали задачу 7' },
+      assistantWithCall('c1'),
+      observation('c1', 'Требуется подтверждение пользователя: add_task.'),
+      { role: 'assistant', content: 'Thought: ещё шаг', meta: toolCallsMeta([call('c2')]) },
+    ];
+
+    const kept = dropUnfinishedTail(thread);
+
+    expect(kept).toEqual(thread.slice(0, 2));
+    expect(kept.some((message) => message.content.includes('Удали задачу 7'))).toBe(false);
+  });
+
+  it('вопрос подтверждения — не финальный ответ: срез идёт по нему', () => {
+    const thread: AgentMessage[] = [
+      { role: 'user', content: 'Закрытая просьба' },
+      { role: 'assistant', content: 'Final Answer: Готово.' },
+      { role: 'user', content: 'Удали обязательство' },
+      assistantWithCall('c1'),
+      observation('c1', 'Требуется подтверждение пользователя: add_task.'),
+      confirmPrompt(),
+    ];
+
+    expect(dropUnfinishedTail(thread)).toEqual(thread.slice(0, 2));
+  });
+
+  it('без финального ответа история пуста — наблюдения не наследуются', () => {
+    const thread: AgentMessage[] = [
+      { role: 'user', content: 'Удали задачу 7' },
+      assistantWithCall('c1'),
+      observation('c1', 'Задача удалена.'),
+    ];
+
+    expect(dropUnfinishedTail(thread)).toEqual([]);
+  });
+
+  it('пустой вход и идемпотентность', () => {
+    expect(dropUnfinishedTail([])).toEqual([]);
+
+    const thread: AgentMessage[] = [
+      { role: 'user', content: 'Поставь задачу' },
+      { role: 'assistant', content: 'Final Answer: Готово.' },
+      { role: 'user', content: 'А теперь удали её' },
+      assistantWithCall('c1'),
+    ];
+    const once = dropUnfinishedTail(thread);
+    expect(dropUnfinishedTail(once)).toEqual(once);
+    expect(once).toHaveLength(2);
   });
 });
