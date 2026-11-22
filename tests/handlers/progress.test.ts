@@ -176,6 +176,31 @@ describe('живая индикация хода агента', () => {
     expect(tail).toEqual(['sendMessage', 'deleteMessage']);
   });
 
+  it('предел хода: детерминированный ответ уходит, строка индикатора гаснет', async () => {
+    // Ход уперся в мягкий дедлайн движка: модели больше не зовём, но ответ
+    // пользователь получает — иначе платформа убивает изолят в тишине.
+    scriptTurn(
+      [
+        { afterMs: 0, stage: 'model' },
+        { afterMs: 9_000, stage: 'tool', tool: 'get_inbox_digest' },
+      ],
+      {
+        reply:
+          '⏱ Ход получился слишком длинным, и я остановился, чтобы успеть ответить.\n\nОстальное — следующим сообщением.',
+        mode: 'auto',
+        steps: [],
+        stopReason: 'step_limit',
+        thread: [],
+      },
+    );
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'разбери инбокс', forwarded: false });
+
+    expect(ephemeralSends()).toHaveLength(1);
+    expect(sentTexts().at(-1)).toContain('Остальное — следующим сообщением');
+    expect(callsOf('deleteMessage')).toHaveLength(1);
+  });
+
   it('быстрый ход индикатора не показывает и ничего не удаляет', async () => {
     scriptTurn([{ afterMs: 0, stage: 'model' }], FINAL_RUN);
 

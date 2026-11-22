@@ -128,3 +128,98 @@ describe('runAgent: хук прогресса', () => {
     expect(order).toEqual(['tool:привет']);
   });
 });
+
+describe('runAgent: мягкий дедлайн хода', () => {
+  it('шаг вышел за бюджет — ответ есть, второго вызова модели нет', async () => {
+    // Живой сбой 22.11.2026: «Разбери инбокс» шёл дольше лимита платформы
+    // (~30 с), изолят убивали, и пользователь не получал ничего.
+    let clock = 0;
+    const requests: unknown[] = [];
+    const chat: AgentChatFn = async (request) => {
+      requests.push(request);
+      // Модель ответила уже за дедлайном: инструменты звать нельзя.
+      clock += 21_000;
+      return { content: '', toolCalls: [{ id: 'c1', name: 'echo', args: { text: 'привет' } }] };
+    };
+    const order: string[] = [];
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'разбери инбокс и разложи всё по задачам',
+      mode: 'action',
+      tools: [echoTool(order)],
+      store: null,
+      chatFn: chat,
+      profile: PROFILE,
+      now: NOW,
+      clock: () => clock,
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(order).toEqual([]);
+    expect(result.stopReason).toBe('step_limit');
+    expect(result.reply.trim().length).toBeGreaterThan(0);
+  });
+
+  it('на дедлайне отдаёт собранное, без синтеза и новых инструментов', async () => {
+    let clock = 0;
+    const requests: unknown[] = [];
+    let replyIndex = 0;
+    const chat: AgentChatFn = async (request) => {
+      requests.push(request);
+      replyIndex += 1;
+      if (replyIndex === 1) return { content: '', toolCalls: [{ id: 'c1', name: 'echo', args: { text: 'привет' } }] };
+      clock += 21_000;
+      return { content: '', toolCalls: [{ id: 'c2', name: 'echo', args: { text: 'ещё' } }] };
+    };
+    const order: string[] = [];
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'разбери инбокс',
+      mode: 'action',
+      tools: [echoTool(order)],
+      store: null,
+      chatFn: chat,
+      profile: PROFILE,
+      now: NOW,
+      clock: () => clock,
+    });
+
+    // Первый ход успел выполнить инструмент, второй — уже нет.
+    expect(order).toEqual(['tool:привет']);
+    expect(requests).toHaveLength(2);
+    expect(result.stopReason).toBe('step_limit');
+    expect(result.reply).toContain('эхо: привет');
+    expect(result.reply).toContain('следующим сообщением');
+    expect(result.thread.at(-1)?.content).toBe(result.reply);
+  });
+
+  it('не начинает вызов модели, который сам выведет ход за бюджет', async () => {
+    let clock = 0;
+    let calls = 0;
+    const chat: AgentChatFn = async () => {
+      calls += 1;
+      // Каждый вызов модели — 8 с: третий (8 + 8 + 8 = 24 с) уже не влезает.
+      clock += 8_000;
+      return { content: '', toolCalls: [{ id: `c${calls}`, name: 'echo', args: { text: String(calls) } }] };
+    };
+    const order: string[] = [];
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'разбери инбокс',
+      mode: 'action',
+      tools: [echoTool(order)],
+      store: null,
+      chatFn: chat,
+      profile: PROFILE,
+      now: NOW,
+      clock: () => clock,
+    });
+
+    expect(calls).toBe(2);
+    expect(result.stopReason).toBe('step_limit');
+    expect(result.reply.trim().length).toBeGreaterThan(0);
+  });
+});
