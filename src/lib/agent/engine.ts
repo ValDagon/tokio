@@ -164,6 +164,19 @@ export const dbThreadStore: AgentThreadStore = {
 /** Почему цикл остановился. */
 export type AgentStopReason = 'final' | 'step_limit' | 'empty_reply' | 'llm_error' | 'confirm';
 
+/**
+ * Стадия прогона для живой индикации (`handlers/progress.ts`): перед обращением
+ * к модели и перед выполнением инструмента. Движок ничего не знает про Telegram,
+ * поэтому наружу уходит только факт стадии и имя тулзы.
+ */
+export interface AgentProgressEvent {
+  stage: 'model' | 'tool';
+  /** Номер шага цикла (0 — первый). */
+  step: number;
+  /** Имя инструмента для стадии `tool`. */
+  tool?: string;
+}
+
 /** Один шаг цикла: что модель подумала и что из этого вышло. */
 export interface AgentStep {
   index: number;
@@ -211,6 +224,11 @@ export interface RunAgentOptions {
   profile?: Partial<AgentProfile> | null;
   /** Момент прогона (для промпта и контекста инструментов). */
   now?: Date;
+  /**
+   * Живая индикация стадий («печатает…» и строка прогресса). Хук необязателен,
+   * а его ошибки проглатываются: падение индикатора не должно рвать ход.
+   */
+  onProgress?: (event: AgentProgressEvent) => void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -723,6 +741,16 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     /** Неожиданные отказы инструментов: имя тулзы = часть сигнатуры. */
     const unexpectedTools = new Set<string>();
 
+    /** Стадия прогона наружу: ошибки индикации не рвут ход. */
+    const notifyProgress = async (event: AgentProgressEvent): Promise<void> => {
+      if (!options.onProgress) return;
+      try {
+        await options.onProgress(event);
+      } catch {
+        // индикация — украшение, а не часть прогона
+      }
+    };
+
     const registerTurnSignature = (
       calls: ReadonlyArray<{ name: string; args?: Record<string, unknown> }>,
     ): boolean => {
@@ -743,6 +771,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           ...working,
           { role: 'assistant', content: partialReply },
         ]);
+        await notifyProgress({ stage: 'model', step: iteration });
         const contRaw = await chatFn({
           userId,
           systemPrompt: activeSystemPrompt,
@@ -786,6 +815,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         executiveOverload,
       });
 
+      await notifyProgress({ stage: 'model', step: iteration });
       let raw: AgentChatResult;
       try {
         raw = await chatFn({
@@ -894,7 +924,11 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
               i += 1;
             }
             const outcomes = await Promise.all(
-              batch.map((c) => runTool(normalizeToolName(c.name)!, c.args ?? {}, ctx, tools)),
+              batch.map(async (c) => {
+                const name = normalizeToolName(c.name)!;
+                await notifyProgress({ stage: 'tool', step: iteration, tool: name });
+                return runTool(name, c.args ?? {}, ctx, tools);
+              }),
             );
             for (let k = 0; k < batch.length; k += 1) {
               recordOutcome(batch[k]!, outcomes[k]!);
@@ -930,7 +964,10 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           }
 
           const outcome: ToolOutcome = validName
-            ? await runTool(validName, args, ctx, tools)
+            ? await (async () => {
+                await notifyProgress({ stage: 'tool', step: iteration, tool: validName });
+                return runTool(validName, args, ctx, tools);
+              })()
             : {
                 ok: false,
                 unexpected: true,
@@ -1009,7 +1046,10 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       }
 
       const outcome: ToolOutcome = name
-        ? await runTool(name, args, ctx, tools)
+        ? await (async () => {
+            await notifyProgress({ stage: 'tool', step: iteration, tool: name });
+            return runTool(name, args, ctx, tools);
+          })()
         : {
             ok: false,
             unexpected: true,
@@ -1052,6 +1092,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           executiveOverload,
         })}\n\n${FINAL_SYNTHESIS_DIRECTIVE}`;
 
+        await notifyProgress({ stage: 'model', step: iteration });
         const synthRaw = await chatFn({
           userId,
           systemPrompt: synthesisSystemPrompt,
