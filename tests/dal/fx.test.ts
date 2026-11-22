@@ -26,6 +26,7 @@ import {
   normalizeDate,
   parseRates,
   rateOf,
+  roundUpToNextNinetyNine,
   setRates,
   toBase,
   toRateTable,
@@ -85,6 +86,20 @@ describe('fx: разбор таблицы курсов', () => {
     expect(parseRates('not a json')).toEqual({});
     expect(parseRates('')).toEqual({});
     expect(parseRates(null)).toEqual({});
+  });
+});
+
+describe('fx: округление конвертации вверх до ,99', () => {
+  it('поднимает дробную сумму до ближайшей ,99', () => {
+    expect(roundUpToNextNinetyNine(3_023)).toBe(3_099);
+    expect(roundUpToNextNinetyNine(50)).toBe(99);
+    expect(roundUpToNextNinetyNine(10_001)).toBe(10_099);
+  });
+
+  it('не меняет сумму, которая уже ,99 или целая', () => {
+    expect(roundUpToNextNinetyNine(3_099)).toBe(3_099);
+    expect(roundUpToNextNinetyNine(3_100)).toBe(3_100);
+    expect(roundUpToNextNinetyNine(0)).toBe(0);
   });
 });
 
