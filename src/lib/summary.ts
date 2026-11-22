@@ -379,6 +379,9 @@ function turnTraceLine(
     parts.push(`с дедлайном ${stats.deadlineTurns}`);
   }
   if (trace) {
+    // Форму значения крошки проверяем здесь: она приходит из `kv` строкой JSON,
+    // а битая форма не должна ломать разбор всего `/diagnostics`.
+    const models = Array.isArray(trace.models) ? trace.models : [];
     const cause =
       trace.deadlineCause === 'tools-skipped'
         ? 'инструменты не успели'
@@ -395,8 +398,10 @@ function turnTraceLine(
       `стадия ${trace.stage}`,
       ...(cause ? [`дедлайн: ${cause}`] : []),
       `индикатор ${indicator}`,
-      ...(trace.models.length > 0 ? [`модели ${trace.models.join(', ')}`] : []),
-      ...(trace.stopReason ? [`стоп ${trace.stopReason}`] : []),
+      ...(models.length > 0
+        ? [`модели ${models.map((model) => escapeHtml(String(model))).join(', ')}`]
+        : []),
+      ...(trace.stopReason ? [`стоп ${escapeHtml(trace.stopReason)}`] : []),
     ];
     parts.push(`${diagnosticsStamp(trace.updatedAt, timeZone)} · ${details.join(' · ')}`);
   }
@@ -442,7 +447,8 @@ export async function diagnosticsReply(
 
   if (clusters.length === 0 && !lastFailure) {
     // Пустой журнал не пустой экран: крошка хода показывает, чем живёт агент.
-    return turnLine ? `${DIAGNOSTICS_EMPTY_TEXT}\n\n${turnLine}` : DIAGNOSTICS_EMPTY_TEXT;
+    const empty = turnLine ? [DIAGNOSTICS_EMPTY_TEXT, '', turnLine] : [DIAGNOSTICS_EMPTY_TEXT];
+    return empty.slice(0, DIAGNOSTICS_MAX_LINES).join('\n');
   }
 
   const lines: string[] = ['📊 <b>Диагностика</b>', ''];

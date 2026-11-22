@@ -201,6 +201,28 @@ describe('живая индикация хода агента', () => {
     expect(callsOf('deleteMessage')).toHaveLength(1);
   });
 
+  it('длинный финальный вызов открывает строку на стадии после возврата модели', async () => {
+    // Живой замер 22.11.2026: ход 14,5 с, единственный вызов модели — финальный.
+    // Стадия «перед вызовом» пришла на 0,2 с (окно 8 с не перешло), поэтому
+    // строку открывает та стадия, которую движок шлёт после возврата модели.
+    scriptTurn(
+      [
+        { afterMs: 200, stage: 'model' },
+        { afterMs: 14_500, stage: 'model' },
+      ],
+      FINAL_RUN,
+    );
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
+
+    const [indicator] = ephemeralSends();
+    expect(ephemeralSends()).toHaveLength(1);
+    expect(String(indicator?.params.text)).toBe('⏳ Думаю…');
+    // Ответ ушёл обычным сообщением, строка погашена — ничего не висит.
+    expect(sentTexts().at(-1)).toBe('Готово: посчитал.');
+    expect(callsOf('deleteMessage')).toHaveLength(1);
+  });
+
   it('быстрый ход индикатора не показывает и ничего не удаляет', async () => {
     scriptTurn([{ afterMs: 0, stage: 'model' }], FINAL_RUN);
 

@@ -430,6 +430,23 @@ describe('diagnosticsReply', () => {
     expect(text).toContain('индикатор не открывался');
   });
 
+  it('экранирует модели и причину остановки в крошке хода', async () => {
+    await ensureUser(USER);
+    await startTurnTrace(USER);
+    await patchTurnTrace(USER, {
+      stage: 'send',
+      model: 'bad<script>',
+      stopReason: '<b>final</b>',
+    });
+
+    const text = await diagnosticsReply(USER);
+
+    // Крошка идёт в HTML-ответ: битый тег сломал бы разбор всего /diagnostics.
+    expect(text).not.toContain('<script>');
+    expect(text).toContain('модели bad&lt;script&gt;');
+    expect(text).toContain('стоп &lt;b&gt;final&lt;/b&gt;');
+  });
+
   it('показывает кластеры с количеством и временем, а не сырые тексты', async () => {
     await ensureUser(USER);
     await db.run(sql`

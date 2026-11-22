@@ -103,6 +103,39 @@ describe('runAgent: хук прогресса', () => {
     ]);
   });
 
+  it('медленный финальный вызов шлёт стадию ещё раз — после возврата модели', async () => {
+    // Живой замер 22.11.2026: ход 14,5 с, единственный вызов модели оказался
+    // финальным, и строку «⏳ …» не открыла ни одна стадия. Повторная стадия
+    // после возврата модели даёт индикатору точку, на которой он открывается.
+    let clock = 0;
+    const events: AgentProgressEvent[] = [];
+    const chat: AgentChatFn = async () => {
+      clock += 14_500;
+      return { content: 'Готово.', toolCalls: [] };
+    };
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'посчитай бюджет',
+      mode: 'action',
+      tools: [],
+      store: null,
+      chatFn: chat,
+      profile: PROFILE,
+      now: NOW,
+      clock: () => clock,
+      onProgress: (event) => {
+        events.push(event);
+      },
+    });
+
+    expect(result.stopReason).toBe('final');
+    expect(events.map((event) => [event.stage, event.step])).toEqual([
+      ['model', 0],
+      ['model', 0],
+    ]);
+  });
+
   it('падение хука не рвёт прогон', async () => {
     const order: string[] = [];
     const chat = nativeChat([

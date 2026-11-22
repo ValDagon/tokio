@@ -295,6 +295,16 @@ export const REPLY_RESERVE_MS = 4_000;
  */
 export const MODEL_CALL_FLOOR_MS = 12_000;
 
+/**
+ * Порог медленного хода для живой строки «⏳ …»: индикатор
+ * (`handlers/progress.ts`) открывает её только после этого момента, а движок
+ * повторяет стадию `model` сразу после возврата модели. Без этого повторения
+ * ход, у которого единственный вызов оказался долгим и финальным, не даёт ни
+ * одной стадии после окна показа (живой замер 22.11.2026: ответ на 14,5 с,
+ * строки нет вообще).
+ */
+export const PROGRESS_SHOW_AFTER_MS = 8_000;
+
 /** Сколько подряд одинаковых ходов (tool+args) считаем зацикливанием. */
 export const MAX_CONSECUTIVE_DUPLICATE_TURNS = 3;
 
@@ -887,7 +897,13 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     ): Promise<string> => {
       if (!isTruncatedFinishReason(finishReason) || !partialReply.trim()) return partialReply;
       // Добор обрыва — ещё один вызов модели: после дедлайна отдаём как есть.
-      if (!modelCallFitsBudget()) return partialReply;
+      // Такой ход помечается дедлайном: обрыв по бюджету — не штатное «final»,
+      // иначе он в крошке выглядит нормальным, а `deadlineTurns` не растёт.
+      if (!modelCallFitsBudget()) {
+        deadlineHit = true;
+        deadlineCause = 'budget';
+        return partialReply;
+      }
       try {
         const prepared = sanitizeThread([
           ...working,
@@ -964,6 +980,13 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         });
         slowestModelCallMs = Math.max(slowestModelCallMs, clock() - callStartedAt);
         await traceTurn({ stage: 'model-end', model: answeredModel(raw) });
+        // Стадию отдаём наружу и после возврата модели: длинный вызов (14–17 с)
+        // идёт без промежуточных стадий, и без этой метки ход, у которого вызов
+        // оказался финальным, не открыл бы строку «⏳ …» ни разу. Окно показа
+        // отсчитывает сам индикатор, движок сообщает только границу.
+        if (elapsedMs() >= PROGRESS_SHOW_AFTER_MS) {
+          await notifyProgress({ stage: 'model', step: iteration });
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!healed && isRecoverableHistoryError(message)) {
@@ -1175,10 +1198,11 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       const call: ThreadToolCall = { id: `call_${steps.length + 1}`, name: name || rawName || 'unknown', args };
 
       // Дедлайн: инструмент не зовём — отвечаем собранным. Проверка стоит до
-      // записи шага, чтобы в треде не осталось вызова без наблюдения.
+      // записи шага, чтобы в треде не осталось вызова без наблюдения. Причина
+      // именно `tools-skipped`: модель ответила, а не успевали инструменты.
       if (pastDeadline()) {
         deadlineHit = true;
-        deadlineCause = 'budget';
+        deadlineCause = 'tools-skipped';
         stopReason = 'step_limit';
         reply = deadlineReply(steps);
         break;
