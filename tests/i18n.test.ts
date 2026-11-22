@@ -74,6 +74,72 @@ describe('locales parity and hygiene', () => {
       }
     }
   });
+
+  it('onboarding wizard, prompts and callback toasts exist in all 4 locales', () => {
+    const required = [
+      'onboarding.startGreeting',
+      'onboarding.introText',
+      'onboarding.introOptionalKey',
+      'onboarding.currencyPrompt',
+      'onboarding.welcomePrompt',
+      'onboarding.btnStart',
+      'onboarding.btnSkip',
+      'onboarding.btnSkipStep',
+      'onboarding.btnExit',
+      'onboarding.btnNext',
+      'onboarding.stepOverview',
+      'onboarding.stepOverviewBody',
+      'onboarding.stepTimezone',
+      'onboarding.stepTimezoneBody',
+      'onboarding.stepCurrency',
+      'onboarding.stepCurrencyBody',
+      'onboarding.stepAccounts',
+      'onboarding.stepAccountsBody',
+      'onboarding.stepPractice',
+      'onboarding.stepPracticeBody',
+      'onboarding.stepNotifications',
+      'onboarding.stepNotificationsBody',
+      'onboarding.stepGemini',
+      'onboarding.stepGeminiBody',
+      'onboarding.modelSharedLimit',
+      'onboarding.modelOwnKey',
+      'onboarding.stepFinal',
+      'onboarding.stepFinalBody',
+      'onboarding.btnOpenApp',
+      'onboarding.btnShowSummary',
+      'onboarding.btnHelp',
+      'onboarding.btnSampleTask',
+      'onboarding.btnSampleNote',
+      'onboarding.btnDemoSeed',
+      'onboarding.btnPresetCashCard',
+      'onboarding.btnPresetFull',
+      'onboarding.accountCard',
+      'onboarding.accountCash',
+      'onboarding.accountSavings',
+      'onboarding.accountCrypto',
+      'onboarding.sampleTaskTitle',
+      'onboarding.sampleNoteText',
+      'onboarding.skippedText',
+      'onboarding.exitedText',
+      'onboarding.toastSkipped',
+      'onboarding.toastExited',
+      'onboarding.toastRestart',
+      'onboarding.toastTimezone',
+      'onboarding.toastCurrency',
+      'onboarding.toastAccountsCreated',
+      'onboarding.toastSampleTask',
+      'onboarding.toastSampleNote',
+      'onboarding.toastDemoSeed',
+      'onboarding.toastDigestTime',
+      'onboarding.currencySaved',
+      'onboarding.actionResult',
+    ];
+    for (const loc of SUPPORTED_LOCALES) {
+      for (const key of required) {
+        expect(catalogs[loc][key], `missing ${loc}.${key}`).toBeTruthy();
+      }
+    }
+  });
 });
 
 describe('i18n helpers', () => {

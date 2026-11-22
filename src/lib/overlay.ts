@@ -81,6 +81,10 @@ export interface OverlayFinance {
 export interface OverlayAccountTheme {
   pattern: string;
   theme: string;
+  /** Short label shown instead of the full account name (optional). */
+  shortName?: string;
+  /** Purpose label under the account name (optional, overlay language). */
+  roleLabel?: string;
 }
 
 export interface OverlayMiniApp {

@@ -46,7 +46,10 @@
     "timeoutError": "サーバーが応答しません（タイムアウト）",
     "networkError": "サーバーに接続できませんでした",
     "initDataPresent": "initData: あり",
-    "initDataMissing": "initData: なし"
+    "initDataMissing": "initData: なし",
+    "rpcWriteUnavailable": "書き込みに失敗しました：Serverless RPC を利用できません（{{error}}）。代替 API 経由の書き込みは無効です。しばらくしてからもう一度お試しください。",
+    "staleCacheBanner": "キャッシュデータを表示中：ボットに接続できません。",
+    "staleFallbackBanner": "代替サーバーのデータを表示中 — アプリを再読み込みしてください。"
   },
   "utils": {
     "today": "今日",
@@ -402,11 +405,12 @@
   "onboarding": {
     "welcomeTitle": "{{name}} へようこそ",
     "welcomeSubtitle": "30秒でアシスタントを初期設定できます",
+    "howToHint": "書く・話す・写真を送るだけで使えます。コマンドは不要です。",
     "nameLabel": "お名前（呼び方）",
     "namePlaceholder": "お名前 (例: ケンジ)",
     "nameError": "お名前を入力してください。",
     "currencyLabel": "基準通貨",
-    "currencyHint": "総資産、ランウェイ、1日の支出目安はこの通貨で計算されます。",
+    "currencyHint": "残高・支出・資金の余裕はこの通貨で計算されます。",
     "timezoneLabel": "タイムゾーン",
     "personaLabel": "AIアシスタントのスタイル",
     "starterAccountsLabel": "初期口座（今すぐ作成）",

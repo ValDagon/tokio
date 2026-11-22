@@ -124,7 +124,9 @@ import {
   createSampleTask,
   ensureUserProfile,
   exitOnboarding,
+  loadUserLocale,
   parseBaseCurrencyChoice,
+  resolveUserLocale,
   restartOnboarding,
   seedDemoWorkspace,
   sendOnboardingIntro,
@@ -133,14 +135,12 @@ import {
   sendWizardStep,
   setBaseCurrency,
   skipOnboarding,
-  stepOverviewKeyboard,
-  stepOverviewText,
   type OnboardingStep,
 } from './onboarding';
 import { getConfig } from '../lib/config';
 import { getUser, updateUser } from '../lib/dal/users';
 import { getAllKeyboardLabels, normalizeLocale, SUPPORTED_LOCALES, t, type LocaleCode } from '../lib/i18n';
-import { getOverlay } from '../lib/overlay';
+import { getAssistantName, getOverlay } from '../lib/overlay';
 import { deferReplyNotice, endReplyTurn } from '../lib/reply_turn';
 import { checkSpendLimit, SPEND_LIMIT_EXCEEDED_MESSAGE } from '../lib/billing';
 import { encryptByok, hasSecureRandom, looksLikeApiKey } from '../lib/crypto';
@@ -532,8 +532,7 @@ export async function sendJsonBackup(userId: number, chatId: number): Promise<bo
 type CommandHandler = (userId: number, chatId: number) => Promise<void>;
 
 async function handleStart(userId: number, chatId: number): Promise<void> {
-  void userId;
-  await sendStartGreeting(chatId, { withIntro: false });
+  await sendStartGreeting(chatId, { withIntro: false, locale: await loadUserLocale(userId) });
 }
 
 async function handleBackup(userId: number, chatId: number): Promise<void> {
@@ -1284,13 +1283,14 @@ export async function routeMessage(message: Message): Promise<void> {
   const lowerText = userText.toLowerCase();
 
   if (isNew || user.onboardingStep === 'new') {
-    await applyMenuButton(chatId);
+    const locale = resolveUserLocale(user);
+    await applyMenuButton(chatId, locale);
     if (lowerText === '/start' || lowerText.startsWith('/start@') || lowerText.startsWith('/start ') || !userText) {
-      await sendStartGreeting(chatId, { withIntro: false });
-      await sendOnboardingPrompt(chatId);
+      await sendStartGreeting(chatId, { withIntro: false, locale });
+      await sendOnboardingPrompt(chatId, locale);
       return;
     }
-    await sendOnboardingPrompt(chatId);
+    await sendOnboardingPrompt(chatId, locale);
     return;
   }
 
@@ -1412,7 +1412,8 @@ async function handleCurrencyCallback(
   }
 
   await setBaseCurrency(ctx.userId, code);
-  await answerCallback(callbackId, `✅ Базовая валюта: ${code}`);
+  const locale = await loadUserLocale(ctx.userId);
+  await answerCallback(callbackId, t(locale, 'onboarding.toastCurrency', { currency: code }));
 
   const user = await getUser(ctx.userId);
   if (user && (user.onboardingStep === 'currency' || user.onboardingStep === 'timezone' || user.onboardingStep === 'overview')) {
@@ -1424,7 +1425,7 @@ async function handleCurrencyCallback(
   await trySafeEdit(
     ctx.chatId,
     ctx.messageId,
-    `✅ Базовая валюта: **${code}**.\n\nПоменять можно позже в дашборде или другой кнопкой в этом сообщении.`,
+    t(locale, 'onboarding.currencySaved', { currency: code }),
     { replyMarkup: { inline_keyboard: [] } },
   );
 }
@@ -1735,34 +1736,31 @@ export async function routeCallback(callback: CallbackQuery): Promise<void> {
 
   if (data === 'onboard:skip') {
     await skipOnboarding(userId);
-    await answerCallback(callbackId, '⏩ Обучение пропущено');
+    const locale = await loadUserLocale(userId);
+    const assistantName = getAssistantName(locale);
+    await answerCallback(callbackId, t(locale, 'onboarding.toastSkipped'));
     await safeEdit(
       chatId,
       messageId,
-      '⏩ **Обучение пропущено. Tokio готов к работе!**\n\n' +
-        '• Наговаривай мысли и траты — я тихо сохраню их в инбокс.\n' +
-        '• Быстрые разделы доступны на клавиатуре внизу (/status, /tasks, /balance).\n' +
-        '• Запустить обучение заново можно в любой момент через раздел /help («Помощь»).',
+      t(locale, 'onboarding.skippedText', { assistantName }),
     );
     return;
   }
 
   if (data === 'onboard:exit') {
     await exitOnboarding(userId);
-    await answerCallback(callbackId, '👍 Мастер настройки закрыт');
-    await safeEdit(
-      chatId,
-      messageId,
-      '👍 **Мастер настройки закрыт. Tokio готов к работе!**\n\n' +
-        'Ты всегда можешь пройти обучение заново через команду /help («Помощь»).',
-    );
+    const locale = await loadUserLocale(userId);
+    const assistantName = getAssistantName(locale);
+    await answerCallback(callbackId, t(locale, 'onboarding.toastExited'));
+    await safeEdit(chatId, messageId, t(locale, 'onboarding.exitedText', { assistantName }));
     return;
   }
 
   if (data === 'onboard:restart' || data === 'onboard:start') {
     await restartOnboarding(userId);
-    await answerCallback(callbackId, '🚀 Начинаем обучение');
-    await safeAnswer(chatId, stepOverviewText(), { replyMarkup: stepOverviewKeyboard() });
+    const locale = await loadUserLocale(userId);
+    await answerCallback(callbackId, t(locale, 'onboarding.toastRestart'));
+    await sendWizardStep(chatId, 'overview', userId, messageId);
     return;
   }
 
@@ -1781,7 +1779,8 @@ export async function routeCallback(callback: CallbackQuery): Promise<void> {
   if (data.startsWith('onboard:tz:')) {
     const tz = data.slice('onboard:tz:'.length);
     await updateUser(userId, { timezone: tz, onboardingStep: 'currency' });
-    await answerCallback(callbackId, `✅ Часовой пояс: ${tz}`);
+    const locale = await loadUserLocale(userId);
+    await answerCallback(callbackId, t(locale, 'onboarding.toastTimezone', { timezone: tz }));
     await sendWizardStep(chatId, 'currency', userId, messageId);
     return;
   }
@@ -1794,23 +1793,27 @@ export async function routeCallback(callback: CallbackQuery): Promise<void> {
   if (data.startsWith('onboard:preset:')) {
     const preset = data.slice('onboard:preset:'.length) as 'cash_card' | 'full';
     const created = await createPresetAccounts(userId, preset);
-    await answerCallback(callbackId, `✅ Созданы счета: ${created.join(', ')}`);
+    const locale = await loadUserLocale(userId);
+    const accounts = created.join(', ');
+    await answerCallback(callbackId, t(locale, 'onboarding.toastAccountsCreated', { accounts }));
     await updateUser(userId, { onboardingStep: 'practice' });
-    await sendWizardStep(chatId, 'practice', userId, messageId, `Созданы счета: ${created.join(', ')}.`);
+    await sendWizardStep(chatId, 'practice', userId, messageId, accounts);
     return;
   }
 
   if (data === 'onboard:action:sample_task') {
-    const res = await createSampleTask(userId);
-    await answerCallback(callbackId, '🎯 Создана тестовая задача');
+    const locale = await loadUserLocale(userId);
+    const res = await createSampleTask(userId, locale);
+    await answerCallback(callbackId, t(locale, 'onboarding.toastSampleTask'));
     await updateUser(userId, { onboardingStep: 'notifications' });
     await sendWizardStep(chatId, 'notifications', userId, messageId, res);
     return;
   }
 
   if (data === 'onboard:action:sample_note') {
-    const res = await createSampleNote(userId);
-    await answerCallback(callbackId, '📝 Создана тестовая заметка');
+    const locale = await loadUserLocale(userId);
+    const res = await createSampleNote(userId, locale);
+    await answerCallback(callbackId, t(locale, 'onboarding.toastSampleNote'));
     await updateUser(userId, { onboardingStep: 'notifications' });
     await sendWizardStep(chatId, 'notifications', userId, messageId, res);
     return;
@@ -1820,7 +1823,7 @@ export async function routeCallback(callback: CallbackQuery): Promise<void> {
     const user = await getUser(userId);
     const locale = normalizeLocale(user?.language, getOverlay().manifest.defaultLocale);
     const res = await seedDemoWorkspace(userId, locale);
-    await answerCallback(callbackId, '✨ Демо-данные добавлены');
+    await answerCallback(callbackId, t(locale, 'onboarding.toastDemoSeed'));
     await updateUser(userId, { onboardingStep: 'notifications' });
     await sendWizardStep(chatId, 'notifications', userId, messageId, res);
     return;
@@ -1843,7 +1846,8 @@ export async function routeCallback(callback: CallbackQuery): Promise<void> {
   if (data.startsWith('onboard:time:')) {
     const time = data.slice('onboard:time:'.length);
     await updateUser(userId, { summaryTime: time, onboardingStep: 'gemini' });
-    await answerCallback(callbackId, `⏰ Время дайджеста: ${time}`);
+    const locale = await loadUserLocale(userId);
+    await answerCallback(callbackId, t(locale, 'onboarding.toastDigestTime', { time }));
     await sendWizardStep(chatId, 'gemini', userId, messageId);
     return;
   }

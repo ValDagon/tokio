@@ -17,10 +17,20 @@
  *    администратор входит всегда, даже если его не вписали в бету;
  *  - адрес Mini App берётся из env `WEBAPP_URL` / `MINIAPP_URL` или оверлея;
  *    без валидного `https://` URL кнопка меню не ставится;
- *  - upstream не умеет ни BYOK-приглашения, ни выбора базовой валюты при первом
- *    входе, поэтому тексты ниже написаны заново: нейтрально и без обещаний,
- *    которых код не выполняет;
+ *  - upstream не умеет ни приглашения подключить свой ключ, ни выбора базовой
+ *    валюты при первом входе, поэтому тексты ниже написаны заново: нейтрально и
+ *    без обещаний, которых код не выполняет;
  *  - ни одного имени пользователя, банка или города: только нейтральные подписи.
+ *
+ * Язык. Все пользовательские тексты живут в `locales/{ru,en,sr,ja}.json`
+ * (`onboarding.*`) и берутся через `t()`; в этом файле нет ни одной русской
+ * строки для пользователя. Локаль берётся из `users.language` (фолбэк —
+ * `manifest.defaultLocale` оверлея), поэтому мастер и приветствие отвечают на
+ * языке интерфейса, а не на языке разработчика.
+ *
+ * Фокус мастера — agent-first: обычный текст, голос и фото вместо заучивания
+ * slash-команд. Свой ключ модели остаётся необязательной опцией на шаге 7 и
+ * упоминается без жаргона и без синтаксиса команды.
  *
  * [public-only] Всё, что ниже блока «Мастер онбординга», есть только в публичной
  * редакции: мастер настройки, его состояние в `users.onboarding_step`, демо-счета и
@@ -30,7 +40,6 @@
 
 import { api } from 'sdk';
 
-import { getConfig } from '../lib/config';
 import { createAccount, createLiability, listAccounts, listLiabilities } from '../lib/dal/finances';
 import { createNote } from '../lib/dal/notes';
 import { createTask } from '../lib/dal/tasks';
@@ -69,6 +78,16 @@ export interface ProfileState {
   user: UserRow;
   /** `true` — строки `users` ещё не было: это первый контакт. */
   isNew: boolean;
+}
+
+/** Локаль пользователя: `users.language`, иначе дефолт оверлея. */
+export function resolveUserLocale(user?: UserRow | null): LocaleCode {
+  return normalizeLocale(user?.language, getOverlay().manifest.defaultLocale);
+}
+
+/** Локаль пользователя по id — для обработчиков, у которых нет строки `users`. */
+export async function loadUserLocale(userId: number): Promise<LocaleCode> {
+  return resolveUserLocale(await getUser(userId));
 }
 
 /**
@@ -166,66 +185,34 @@ export async function setBaseCurrency(userId: number, code: string): Promise<Use
  * Приглашение подключить свой ключ модели.
  *
  * Формулировки намеренно скромные: ключ опционален, хранится зашифрованным, без
- * него всё работает на общем ключе продукта с общим лимитом.
+ * него всё работает на общем ключе продукта с общим лимитом. Ни жаргона, ни
+ * синтаксиса команды: `{{key}}`-подстановок здесь нет, только понятное «можно
+ * позже через /help».
  */
-export function byokInvitationText(): string {
-  return (
-    '🔑 **Свой ключ модели.** Можно подключить личный API-ключ: тогда запросы ' +
-    'идут через твой лимит, а не через общий ключ продукта. Ключ хранится на ' +
-    'сервере только в зашифрованном виде и никогда не показывается в чате. ' +
-    'Своего ключа нет — всё работает на общем ключе, просто с общим лимитом.'
-  );
+export function byokInvitationText(locale: LocaleCode = 'ru'): string {
+  return t(locale, 'onboarding.introOptionalKey');
 }
 
-/** Приветствие `/start` (структура upstream, нейтральные название и тексты). */
+/** Приветствие `/start`: сначала обычная речь, голос и фото, команды — вторичны. */
 export function startWelcomeText(locale: LocaleCode = 'ru'): string {
-  const assistantName = getAssistantName(locale);
-  return (
-    `Привет! Я **«${assistantName}»** — твой личный внешний когнитивный каркас.\n\n` +
-    'Я работаю в режиме быстрого просмотра данных и тихого умного накопителя мыслей.\n\n' +
-    '**Быстрые сводки через команды или клавиатуру внизу:**\n' +
-    '• /status — 📊 Общая сводка (балансы, обязательства, фокус задач)\n' +
-    '• /balance — 💰 Балансы по всем счетам и расходы за месяц\n' +
-    '• /debts — 💳 Кредиты, долги и график выплат\n' +
-    '• /tasks — 🎯 Список открытых задач\n' +
-    '• /meds — 💊 Препараты и витамины на сегодня\n' +
-    '• /inbox — 📥 Накопившиеся мысли и заметки для разбора\n' +
-    '• /digest — ☀️ Утренняя сводка дня с напутствием\n' +
-    '• /backup — 📦 Скачать полный бэкап данных\n' +
-    '• /help — ℹ️ Справка по всем возможностям\n\n' +
-    '**Как со мной общаться:**\n' +
-    '• 🎙 **Голос и текст** — наговаривай или пиши любые мысли, траты и идеи. ' +
-    'Я тихо сохраню их в инбокс.\n' +
-    '• 🧠 **Глубокий разбор** — прямо в диалоге с ассистентом.\n' +
-    `• 🚀 **Кнопка «${assistantName}»** (слева у поля ввода) открывает визуальный дашборд.\n` +
-    '• 💬 Для прямого вопроса агенту в Telegram используй: `/ask <вопрос>`.'
-  );
+  return t(locale, 'onboarding.startGreeting', { assistantName: getAssistantName(locale) });
 }
 
 /** Короткое знакомство: что за бот и как с ним работать. */
 export function onboardingIntroText(locale: LocaleCode = 'ru'): string {
-  const assistantName = getAssistantName(locale);
-  return (
-    `👋 Мы ещё не знакомы: я ${assistantName} — личный ассистент по деньгам, задачам и ресурсу.\n\n` +
-    'Пиши или наговаривай мысли, траты и идеи — я тихо складываю их в инбокс ' +
-    'и помогаю навести в них порядок. Быстрые разделы — на клавиатуре ' +
-    'внизу, полный список команд — /help.\n\n' +
-    byokInvitationText()
-  );
+  return t(locale, 'onboarding.introText', { assistantName: getAssistantName(locale) });
 }
 
 /** Просьба выбрать базовую валюту. */
-export function baseCurrencyPromptText(): string {
-  return (
-    '💱 **Выбери базовую валюту** — в ней я буду считать итоги, балансы и расходы. ' +
-    'Потом её можно поменять: достаточно нажать другую кнопку здесь же или ' +
-    'изменить настройку в дашборде.'
-  );
+export function baseCurrencyPromptText(locale: LocaleCode = 'ru'): string {
+  return t(locale, 'onboarding.currencyPrompt');
 }
 
 export interface OnboardingSendOptions {
   /** Приложить клавиатуру выбора базовой валюты (первый контакт). */
   withCurrencyPrompt?: boolean;
+  /** Язык пользователя; по умолчанию — дефолт оверлея. */
+  locale?: LocaleCode;
 }
 
 /** Отправляет знакомство; при `withCurrencyPrompt` — вместе с выбором валюты. */
@@ -233,10 +220,11 @@ export async function sendOnboardingIntro(
   chatId: number,
   options: OnboardingSendOptions = {},
 ): Promise<void> {
+  const locale = options.locale ?? normalizeLocale(null, getOverlay().manifest.defaultLocale);
   const withCurrency = options.withCurrencyPrompt === true;
   const text = withCurrency
-    ? `${onboardingIntroText()}\n\n${baseCurrencyPromptText()}`
-    : onboardingIntroText();
+    ? `${onboardingIntroText(locale)}\n\n${baseCurrencyPromptText(locale)}`
+    : onboardingIntroText(locale);
   await safeAnswer(chatId, text, {
     replyMarkup: withCurrency ? baseCurrencyKeyboard() : null,
   });
@@ -246,23 +234,23 @@ export async function sendOnboardingIntro(
 // Кнопка меню (Mini App)
 // ---------------------------------------------------------------------------
 
-/** Подпись кнопки меню слева от поля ввода. */
+/** Подпись кнопки меню слева от поля ввода (для дефолтной локали оверлея). */
 export const MENU_BUTTON_TEXT = getAssistantName();
 
 /**
- * Ставит кнопку меню сMini App; без `WEBAPP_URL` — молча ничего не делает.
+ * Ставит кнопку меню с Mini App; без `WEBAPP_URL` — молча ничего не делает.
  *
  * Кнопка — украшение, а не функция: её сбой не должен ломать `/start`, поэтому
  * ошибка платформы гасится здесь же.
  */
-export async function applyMenuButton(chatId: number): Promise<void> {
+export async function applyMenuButton(chatId: number, locale?: LocaleCode): Promise<void> {
   const url = webAppUrl();
   if (!url) return;
 
   try {
     await api.setChatMenuButton({
       chat_id: chatId,
-      menu_button: { type: 'web_app', text: MENU_BUTTON_TEXT, web_app: { url } },
+      menu_button: { type: 'web_app', text: getAssistantName(locale), web_app: { url } },
     });
   } catch {
     // Кнопка не поставилась — работаем дальше с обычной клавиатурой.
@@ -272,17 +260,18 @@ export async function applyMenuButton(chatId: number): Promise<void> {
 /** Приветствие `/start` целиком: кнопка меню, приветствие, знакомство. */
 export async function sendStartGreeting(
   chatId: number,
-  options: { withIntro?: boolean } = {},
+  options: { withIntro?: boolean; locale?: LocaleCode } = {},
 ): Promise<void> {
-  await applyMenuButton(chatId);
+  const locale = options.locale ?? normalizeLocale(null, getOverlay().manifest.defaultLocale);
+  await applyMenuButton(chatId, locale);
   // Единственная команда (вместе с `/menu`), которая показывает сетку разделов.
-  await safeAnswer(chatId, startWelcomeText(), {
-    replyMarkup: getMainKeyboard(),
+  await safeAnswer(chatId, startWelcomeText(locale), {
+    replyMarkup: getMainKeyboard(locale),
     keepReplyKeyboard: true,
   });
 
   if (options.withIntro === true) {
-    await sendOnboardingIntro(chatId, { withCurrencyPrompt: true });
+    await sendOnboardingIntro(chatId, { withCurrencyPrompt: true, locale });
   }
 }
 
@@ -299,11 +288,7 @@ export type { OnboardingStep } from '../lib/types';
 
 export function onboardingPromptText(locale: LocaleCode = 'ru'): string {
   const assistantName = getAssistantName(locale);
-  return (
-    `👋 **Добро пожаловать в ${assistantName}!**\n\n` +
-    'Я твой личный внешний когнитивный каркас: помогу навести порядок в задачах, финансах и мыслях без стресса и когнитивного перегруза.\n\n' +
-    t(locale, 'onboarding.welcomePrompt')
-  );
+  return `👋 **${t(locale, 'onboarding.welcomeTitle')} — ${assistantName}**\n\n${t(locale, 'onboarding.welcomePrompt')}`;
 }
 
 export function onboardingPromptKeyboard(locale: LocaleCode = 'ru'): InlineKeyboardMarkup {
@@ -321,6 +306,17 @@ export async function sendOnboardingPrompt(chatId: number, locale: LocaleCode = 
   });
 }
 
+/** Кнопки навигации мастера: «Далее», «Пропустить шаг», «Закрыть». */
+function stepNavRow(locale: LocaleCode, next: string): Array<Array<{ text: string; callback_data: string }>> {
+  return [
+    [{ text: t(locale, 'onboarding.btnNext'), callback_data: next }],
+    [
+      { text: t(locale, 'onboarding.btnSkipStep'), callback_data: next },
+      { text: t(locale, 'onboarding.btnExit'), callback_data: 'onboard:exit' },
+    ],
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Шаг 1: Обзор возможностей
 // ---------------------------------------------------------------------------
@@ -329,61 +325,46 @@ export function stepOverviewText(locale: LocaleCode = 'ru'): string {
   const assistantName = getAssistantName(locale);
   return (
     `✨ **${t(locale, 'onboarding.stepOverview', { assistantName })}**\n\n` +
-    'Я тихо беру рутину на себя:\n' +
-    '• 📥 **Инбокс мыслей:** пиши или наговаривай голосом — вычищу слова-паразиты и сохраню суть.\n' +
-    '• 🎯 **СДВГ-фокус задач:** 1 главная цель + 3 компактных дела в день (Треугольник 1+3).\n' +
-    '• 💰 **Финансы:** мультивалютные счета, учет расходов и графики кредитов.\n' +
-    '• 🧾 **Фото и чеки:** фотографируй чек — я распознаю сумму и добавлю в расходы.\n' +
-    '• 📱 **Mini App:** удобный визуальный дашборд прямо в Telegram.'
+    t(locale, 'onboarding.stepOverviewBody')
   );
 }
 
-export function stepOverviewKeyboard(): InlineKeyboardMarkup {
-  return {
-    inline_keyboard: [
-      [{ text: '➡️ Далее', callback_data: 'onboard:step:timezone' }],
-      [
-        { text: '⏩ Пропустить шаг', callback_data: 'onboard:step:timezone' },
-        { text: '❌ Выйти', callback_data: 'onboard:exit' },
-      ],
-    ],
-  };
+export function stepOverviewKeyboard(locale: LocaleCode = 'ru'): InlineKeyboardMarkup {
+  return { inline_keyboard: stepNavRow(locale, 'onboard:step:timezone') };
 }
 
 // ---------------------------------------------------------------------------
 // Шаг 2: Язык и часовой пояс
 // ---------------------------------------------------------------------------
 
-export function stepTimezoneText(currentTimezone?: string): string {
-  const current = currentTimezone ? `\n\nТекущий пояс: **${currentTimezone}**` : '';
+export function stepTimezoneText(currentTimezone?: string, locale: LocaleCode = 'ru'): string {
+  const current = currentTimezone
+    ? `\n\n${t(locale, 'onboarding.currentTimezone', { timezone: currentTimezone })}`
+    : '';
   return (
-    '🌍 **Шаг 2 из 7: Часовой пояс**\n\n' +
-    'Таймзона нужна, чтобы вовремя присылать утренний дайджест и не беспокоить напоминаниями ночью.' +
+    `🌍 **${t(locale, 'onboarding.stepTimezone')}**\n\n` +
+    t(locale, 'onboarding.stepTimezoneBody') +
     current +
-    '\n\nВыбери свой часовой пояс:'
+    `\n\n${t(locale, 'onboarding.stepTimezoneQuestion')}`
   );
 }
 
-export function stepTimezoneKeyboard(): InlineKeyboardMarkup {
+export function stepTimezoneKeyboard(locale: LocaleCode = 'ru'): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [
-        { text: 'UTC+1 (Берлин)', callback_data: 'onboard:tz:Europe/Berlin' },
-        { text: 'UTC+2 (Киев)', callback_data: 'onboard:tz:Europe/Kyiv' },
+        { text: 'UTC+1 (Berlin)', callback_data: 'onboard:tz:Europe/Berlin' },
+        { text: 'UTC+2 (Kyiv)', callback_data: 'onboard:tz:Europe/Kyiv' },
       ],
       [
-        { text: 'UTC+3 (Москва)', callback_data: 'onboard:tz:Europe/Moscow' },
-        { text: 'UTC+4 (Дубай)', callback_data: 'onboard:tz:Asia/Dubai' },
+        { text: 'UTC+3 (Moscow)', callback_data: 'onboard:tz:Europe/Moscow' },
+        { text: 'UTC+4 (Dubai)', callback_data: 'onboard:tz:Asia/Dubai' },
       ],
       [
-        { text: 'UTC+5 (Ташкент)', callback_data: 'onboard:tz:Asia/Tashkent' },
-        { text: 'UTC+6 (Алматы)', callback_data: 'onboard:tz:Asia/Almaty' },
+        { text: 'UTC+5 (Tashkent)', callback_data: 'onboard:tz:Asia/Tashkent' },
+        { text: 'UTC+6 (Almaty)', callback_data: 'onboard:tz:Asia/Almaty' },
       ],
-      [{ text: '➡️ Далее', callback_data: 'onboard:step:currency' }],
-      [
-        { text: '⏩ Пропустить шаг', callback_data: 'onboard:step:currency' },
-        { text: '❌ Выйти', callback_data: 'onboard:exit' },
-      ],
+      ...stepNavRow(locale, 'onboard:step:currency'),
     ],
   };
 }
@@ -394,16 +375,18 @@ export function stepTimezoneKeyboard(): InlineKeyboardMarkup {
 
 export function stepCurrencyText(currentCurrency?: string, locale: LocaleCode = 'ru'): string {
   const assistantName = getAssistantName(locale);
-  const current = currentCurrency ? `\n\nТекущая валюта: **${currentCurrency}**` : '';
+  const current = currentCurrency
+    ? `\n\n${t(locale, 'onboarding.currentCurrency', { currency: currentCurrency })}`
+    : '';
   return (
     `💱 **${t(locale, 'onboarding.stepCurrency')}**\n\n` +
-    `В этой валюте ${assistantName} считает общие балансы, расходы за месяц и финансовый резерв (Runway).` +
+    t(locale, 'onboarding.stepCurrencyBody', { assistantName }) +
     current +
-    '\n\nВыбери основную валюту:'
+    `\n\n${t(locale, 'onboarding.stepCurrencyQuestion')}`
   );
 }
 
-export function stepCurrencyKeyboard(): InlineKeyboardMarkup {
+export function stepCurrencyKeyboard(locale: LocaleCode = 'ru'): InlineKeyboardMarkup {
   const rows: Array<Array<{ text: string; callback_data: string }>> = [];
   for (let index = 0; index < BASE_CURRENCIES.length; index += 3) {
     rows.push(
@@ -413,11 +396,7 @@ export function stepCurrencyKeyboard(): InlineKeyboardMarkup {
       })),
     );
   }
-  rows.push([{ text: '➡️ Далее', callback_data: 'onboard:step:accounts' }]);
-  rows.push([
-    { text: '⏩ Пропустить шаг', callback_data: 'onboard:step:accounts' },
-    { text: '❌ Выйти', callback_data: 'onboard:exit' },
-  ]);
+  rows.push(...stepNavRow(locale, 'onboard:step:accounts'));
   return { inline_keyboard: rows };
 }
 
@@ -425,28 +404,24 @@ export function stepCurrencyKeyboard(): InlineKeyboardMarkup {
 // Шаг 4: Стартовые счета
 // ---------------------------------------------------------------------------
 
-export function stepAccountsText(accountsCreated?: string[]): string {
+export function stepAccountsText(accountsCreated?: string[], locale: LocaleCode = 'ru'): string {
   const feedback =
     accountsCreated && accountsCreated.length > 0
-      ? `\n\n✅ **Созданы счета:** ${accountsCreated.join(', ')}.`
+      ? `\n\n${t(locale, 'onboarding.accountsCreated', { accounts: accountsCreated.join(', ') })}`
       : '';
   return (
-    '💳 **Шаг 4 из 7: Стартовые счета**\n\n' +
-    'Чтобы вести учёт денег, создай базовые счета в один клик. Позже в Mini App можно настроить любые другие:' +
+    `💳 **${t(locale, 'onboarding.stepAccounts')}**\n\n` +
+    t(locale, 'onboarding.stepAccountsBody') +
     feedback
   );
 }
 
-export function stepAccountsKeyboard(): InlineKeyboardMarkup {
+export function stepAccountsKeyboard(locale: LocaleCode = 'ru'): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [{ text: '💳 Наличные + Карта', callback_data: 'onboard:preset:cash_card' }],
-      [{ text: '🏦 Карта + Банк + Крипта', callback_data: 'onboard:preset:full' }],
-      [{ text: '➡️ Далее', callback_data: 'onboard:step:practice' }],
-      [
-        { text: '⏩ Пропустить шаг', callback_data: 'onboard:step:practice' },
-        { text: '❌ Выйти', callback_data: 'onboard:exit' },
-      ],
+      [{ text: t(locale, 'onboarding.btnPresetCashCard'), callback_data: 'onboard:preset:cash_card' }],
+      [{ text: t(locale, 'onboarding.btnPresetFull'), callback_data: 'onboard:preset:full' }],
+      ...stepNavRow(locale, 'onboard:step:practice'),
     ],
   };
 }
@@ -455,15 +430,13 @@ export function stepAccountsKeyboard(): InlineKeyboardMarkup {
 // Шаг 5: Живая практика
 // ---------------------------------------------------------------------------
 
-export function stepPracticeText(actionResult?: string): string {
-  const feedback = actionResult ? `\n\n✅ ${actionResult}` : '';
+export function stepPracticeText(actionResult?: string, locale: LocaleCode = 'ru'): string {
+  const feedback = actionResult
+    ? `\n\n${t(locale, 'onboarding.actionResult', { result: actionResult })}`
+    : '';
   return (
-    '✍️ **Шаг 5 из 7: Живая практика**\n\n' +
-    'Попробуй отправить мне любое сообщение прямо сейчас:\n' +
-    '• Мысль или идею: `идея для проекта` (или голосовое)\n' +
-    '• Трату: `обед 15` или `кофе 3.5`\n' +
-    '• Задачу: `купить молоко завтра`\n\n' +
-    'Либо создай тестовую задачу или заметку кнопкой ниже:' +
+    `✍️ **${t(locale, 'onboarding.stepPractice')}**\n\n` +
+    t(locale, 'onboarding.stepPracticeBody') +
     feedback
   );
 }
@@ -471,14 +444,10 @@ export function stepPracticeText(actionResult?: string): string {
 export function stepPracticeKeyboard(locale: LocaleCode = 'ru'): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [{ text: '🎯 Создать тестовую задачу', callback_data: 'onboard:action:sample_task' }],
-      [{ text: '📝 Создать тестовую заметку', callback_data: 'onboard:action:sample_note' }],
+      [{ text: t(locale, 'onboarding.btnSampleTask'), callback_data: 'onboard:action:sample_task' }],
+      [{ text: t(locale, 'onboarding.btnSampleNote'), callback_data: 'onboard:action:sample_note' }],
       [{ text: t(locale, 'onboarding.btnDemoSeed'), callback_data: 'onboard:action:seed_demo' }],
-      [{ text: '➡️ Далее', callback_data: 'onboard:step:notifications' }],
-      [
-        { text: '⏩ Пропустить шаг', callback_data: 'onboard:step:notifications' },
-        { text: '❌ Выйти', callback_data: 'onboard:exit' },
-      ],
+      ...stepNavRow(locale, 'onboard:step:notifications'),
     ],
   };
 }
@@ -487,18 +456,28 @@ export function stepPracticeKeyboard(locale: LocaleCode = 'ru'): InlineKeyboardM
 // Шаг 6: Уведомления и утренний дайджест
 // ---------------------------------------------------------------------------
 
-export function stepNotificationsText(currentTime?: string, locale: LocaleCode = 'ru'): string {
+export function stepNotificationsText(
+  currentTime?: string,
+  locale: LocaleCode = 'ru',
+  actionResult?: string,
+): string {
   const assistantName = getAssistantName(locale);
-  const current = currentTime ? `\n\nТекущее время дайджеста: **${currentTime}**` : '';
+  const current = currentTime
+    ? `\n\n${t(locale, 'onboarding.currentDigestTime', { time: currentTime })}`
+    : '';
+  const feedback = actionResult
+    ? `\n\n${t(locale, 'onboarding.actionResult', { result: actionResult })}`
+    : '';
   return (
     `⏰ **${t(locale, 'onboarding.stepNotifications')}**\n\n` +
-    `Каждое утро ${assistantName} может присылать короткую утреннюю сводку: задачи дня, балансы счетов и напоминания.` +
+    t(locale, 'onboarding.stepNotificationsBody', { assistantName }) +
     current +
-    '\n\nВ какое время присылать утренний дайджест?'
+    `\n\n${t(locale, 'onboarding.stepNotificationsQuestion')}` +
+    feedback
   );
 }
 
-export function stepNotificationsKeyboard(): InlineKeyboardMarkup {
+export function stepNotificationsKeyboard(locale: LocaleCode = 'ru'): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [
@@ -509,37 +488,32 @@ export function stepNotificationsKeyboard(): InlineKeyboardMarkup {
         { text: '☕ 09:00', callback_data: 'onboard:time:09:00' },
         { text: '🕒 10:00', callback_data: 'onboard:time:10:00' },
       ],
-      [{ text: '➡️ Далее', callback_data: 'onboard:step:gemini' }],
-      [
-        { text: '⏩ Пропустить шаг', callback_data: 'onboard:step:gemini' },
-        { text: '❌ Выйти', callback_data: 'onboard:exit' },
-      ],
+      ...stepNavRow(locale, 'onboard:step:gemini'),
     ],
   };
 }
 
 // ---------------------------------------------------------------------------
-// Шаг 7: Gemini-ключ и лимиты
+// Шаг 7: как отвечает ассистент (и необязательный свой ключ)
 // ---------------------------------------------------------------------------
 
-export function stepGeminiText(): string {
-  return (
-    '🔑 **Шаг 7 из 7: ИИ-модель и Gemini-ключ**\n\n' +
-    '• По умолчанию бот работает на **общем ключе владельца** с приветственным лимитом **$2.00** на пользователя.\n' +
-    '• Этого хватает на тысячи сообщений, голосовых транскрипций и чеков.\n' +
-    '• При желании ты можешь подключить личный бесплатный ключ Google Gemini API (BYOK): он снимет любые лимиты.\n\n' +
-    'Команда для подключения своего ключа: `/byok <ваш_ключ>` (или в Mini App).'
-  );
+export function stepGeminiText(locale: LocaleCode = 'ru'): string {
+  const features = getOverlay().manifest.features;
+  const lines = [t(locale, 'onboarding.stepGeminiBody')];
+  if (features.spendLimitEnabled) {
+    lines.push(t(locale, 'onboarding.modelSharedLimit', { limitUsd: features.spendLimitUsd }));
+  }
+  if (features.byokCommand) {
+    lines.push(t(locale, 'onboarding.modelOwnKey'));
+  }
+  return `🤖 **${t(locale, 'onboarding.stepGemini')}**\n\n${lines.join('\n')}`;
 }
 
-export function stepGeminiKeyboard(): InlineKeyboardMarkup {
+export function stepGeminiKeyboard(locale: LocaleCode = 'ru'): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [{ text: '🎉 Завершить настройку', callback_data: 'onboard:step:final' }],
-      [
-        { text: '⏩ Пропустить шаг', callback_data: 'onboard:step:final' },
-        { text: '❌ Выйти', callback_data: 'onboard:exit' },
-      ],
+      [{ text: t(locale, 'onboarding.btnFinish'), callback_data: 'onboard:step:final' }],
+      ...stepNavRow(locale, 'onboard:step:final'),
     ],
   };
 }
@@ -552,23 +526,19 @@ export function stepFinalText(locale: LocaleCode = 'ru'): string {
   const assistantName = getAssistantName(locale);
   return (
     `🚀 **${t(locale, 'onboarding.stepFinal', { assistantName })}**\n\n` +
-    `${assistantName} готов к работе. Что делать дальше:\n` +
-    '• 🎙 Наговаривай голосовые или пиши мысли — я сохраню их в инбокс.\n' +
-    '• 📊 Используй команды и клавиатуру внизу (/status, /tasks, /balance).\n' +
-    '• 📱 Открой Mini App по кнопке ниже для визуального дашборда.\n\n' +
-    'Если понадобится помощь или захочешь пройти обучение заново — напиши /help.'
+    t(locale, 'onboarding.stepFinalBody', { assistantName })
   );
 }
 
-export function stepFinalKeyboard(): InlineKeyboardMarkup {
+export function stepFinalKeyboard(locale: LocaleCode = 'ru'): InlineKeyboardMarkup {
   const url = webAppUrl();
   const rows: any[] = [];
   if (url) {
-    rows.push([{ text: '📱 Открыть Mini App', web_app: { url } }]);
+    rows.push([{ text: t(locale, 'onboarding.btnOpenApp'), web_app: { url } }]);
   }
   rows.push([
-    { text: '📊 Показать сводку', callback_data: 'onboard:finish_status' },
-    { text: 'ℹ️ Помощь', callback_data: 'onboard:finish_help' },
+    { text: t(locale, 'onboarding.btnShowSummary'), callback_data: 'onboard:finish_status' },
+    { text: t(locale, 'onboarding.btnHelp'), callback_data: 'onboard:finish_help' },
   ]);
   return { inline_keyboard: rows };
 }
@@ -582,26 +552,39 @@ export function getWizardStepContent(
   user: UserRow,
   actionResult?: string,
 ): { text: string; keyboard: InlineKeyboardMarkup } {
+  const locale = resolveUserLocale(user);
   switch (step) {
     case 'overview':
-      return { text: stepOverviewText(), keyboard: stepOverviewKeyboard() };
+      return { text: stepOverviewText(locale), keyboard: stepOverviewKeyboard(locale) };
     case 'timezone':
-      return { text: stepTimezoneText(user.timezone), keyboard: stepTimezoneKeyboard() };
+      return {
+        text: stepTimezoneText(user.timezone, locale),
+        keyboard: stepTimezoneKeyboard(locale),
+      };
     case 'currency':
-      return { text: stepCurrencyText(user.baseCurrency), keyboard: stepCurrencyKeyboard() };
+      return {
+        text: stepCurrencyText(user.baseCurrency, locale),
+        keyboard: stepCurrencyKeyboard(locale),
+      };
     case 'accounts':
-      return { text: stepAccountsText(), keyboard: stepAccountsKeyboard() };
+      return { text: stepAccountsText(undefined, locale), keyboard: stepAccountsKeyboard(locale) };
     case 'practice':
-      return { text: stepPracticeText(actionResult), keyboard: stepPracticeKeyboard() };
+      return {
+        text: stepPracticeText(actionResult, locale),
+        keyboard: stepPracticeKeyboard(locale),
+      };
     case 'notifications':
-      return { text: stepNotificationsText(user.summaryTime), keyboard: stepNotificationsKeyboard() };
+      return {
+        text: stepNotificationsText(user.summaryTime, locale, actionResult),
+        keyboard: stepNotificationsKeyboard(locale),
+      };
     case 'gemini':
-      return { text: stepGeminiText(), keyboard: stepGeminiKeyboard() };
+      return { text: stepGeminiText(locale), keyboard: stepGeminiKeyboard(locale) };
     case 'final':
     case 'completed':
-      return { text: stepFinalText(), keyboard: stepFinalKeyboard() };
+      return { text: stepFinalText(locale), keyboard: stepFinalKeyboard(locale) };
     default:
-      return { text: stepOverviewText(), keyboard: stepOverviewKeyboard() };
+      return { text: stepOverviewText(locale), keyboard: stepOverviewKeyboard(locale) };
   }
 }
 
@@ -636,38 +619,48 @@ export async function createPresetAccounts(
   preset: 'cash_card' | 'full',
 ): Promise<string[]> {
   const user = (await getUser(userId)) ?? (await ensureUser(userId));
+  const locale = resolveUserLocale(user);
   const baseCurrency = user.baseCurrency || 'EUR';
+  const card = t(locale, 'onboarding.accountCard');
+  const cash = t(locale, 'onboarding.accountCash');
 
   if (preset === 'cash_card') {
-    await createAccount(userId, { name: 'Карта', currency: baseCurrency, envelope: 'spendable' });
-    await createAccount(userId, { name: 'Наличные', currency: baseCurrency, envelope: 'spendable' });
-    return ['Карта', 'Наличные'];
+    await createAccount(userId, { name: card, currency: baseCurrency, envelope: 'spendable' });
+    await createAccount(userId, { name: cash, currency: baseCurrency, envelope: 'spendable' });
+    return [card, cash];
   }
 
-  await createAccount(userId, { name: 'Карта', currency: baseCurrency, envelope: 'spendable' });
-  await createAccount(userId, { name: 'Накопительный', currency: baseCurrency, envelope: 'reserved' });
-  await createAccount(userId, { name: 'Крипта', currency: 'USD', envelope: 'spendable' });
-  return ['Карта', 'Накопительный', 'Крипта'];
+  const savings = t(locale, 'onboarding.accountSavings');
+  const crypto = t(locale, 'onboarding.accountCrypto');
+  await createAccount(userId, { name: card, currency: baseCurrency, envelope: 'spendable' });
+  await createAccount(userId, { name: savings, currency: baseCurrency, envelope: 'reserved' });
+  await createAccount(userId, { name: crypto, currency: 'USD', envelope: 'spendable' });
+  return [card, savings, crypto];
 }
 
-export async function createSampleTask(userId: number, locale: LocaleCode = 'ru'): Promise<string> {
-  const assistantName = getAssistantName(locale);
+export async function createSampleTask(userId: number, locale?: LocaleCode): Promise<string> {
+  const loc = locale ?? (await loadUserLocale(userId));
+  const assistantName = getAssistantName(loc);
+  const title = t(loc, 'onboarding.sampleTaskTitle', { assistantName });
   await createTask(userId, {
-    title: `Попробовать ${assistantName} в действии 🚀`,
-    notes: 'Первая задача, созданная в мастере онбординга',
+    title,
+    notes: t(loc, 'onboarding.sampleTaskNotes'),
     status: 'todo',
   });
-  return `Создана тестовая задача: «Попробовать ${assistantName} в действии 🚀».`;
+  return t(loc, 'onboarding.sampleTaskResult', { title });
 }
 
-export async function createSampleNote(userId: number, locale: LocaleCode = 'ru'): Promise<string> {
-  const assistantName = getAssistantName(locale);
-  await createNote(userId, `💡 Моя первая мысль в ${assistantName}: всё гениальное просто!`, {
+export async function createSampleNote(userId: number, locale?: LocaleCode): Promise<string> {
+  const loc = locale ?? (await loadUserLocale(userId));
+  const assistantName = getAssistantName(loc);
+  const text = t(loc, 'onboarding.sampleNoteText', { assistantName });
+  const title = t(loc, 'onboarding.sampleNoteTitle');
+  await createNote(userId, text, {
     column: 'raw',
     sourceType: 'text',
-    metadata: { title: 'Первая мысль', tags: ['онбординг'] },
+    metadata: { title, tags: [t(loc, 'onboarding.sampleNoteTag')] },
   });
-  return `Сохранена тестовая заметка в инбокс: «Моя первая мысль в ${assistantName}».`;
+  return t(loc, 'onboarding.sampleNoteResult', { title });
 }
 
 /**

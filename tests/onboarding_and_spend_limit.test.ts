@@ -84,13 +84,13 @@ describe('1. Регистрация нового пользователя', () =
 
     const texts = sentTexts();
     expect(texts).toHaveLength(2);
-    expect(texts[0]).toContain('Как со мной общаться');
-    expect(texts[1]).toContain('Пройти обучение (2 минуты) или сразу приступить к работе?');
+    expect(texts[0]).toContain('твой личный ассистент');
+    expect(texts[1]).toContain('Пройти короткое знакомство (2 минуты)');
 
     const calls = callsOf('sendMessage');
     expect(calls[1]?.params.reply_markup).toEqual({
       inline_keyboard: [
-        [{ text: '🚀 Пройти обучение', callback_data: 'onboard:step:overview' }],
+        [{ text: '🚀 Пройти знакомство', callback_data: 'onboard:step:overview' }],
         [{ text: '⏩ Пропустить', callback_data: 'onboard:skip' }],
       ],
     });
@@ -109,12 +109,12 @@ describe('1. Регистрация нового пользователя', () =
     expect(user?.onboardingCompletedAt).not.toBeNull();
 
     const edits = callsOf('editMessageText');
-    expect(edits[0]?.params.text).toContain('Обучение пропущено. Tokio готов к работе!');
+    expect(edits[0]?.params.text).toContain('Знакомство пропущено. Tokio готов к работе!');
 
     // Последующие сообщения работают сразу без перехвата мастером
     callsOf('sendMessage').length = 0;
     await routeMessage(msg('простая мысль', { from: { id: 7002 } }));
-    expect(sentTexts()[0]).not.toContain('Пройти обучение');
+    expect(sentTexts()[0]).not.toContain('Пройти знакомство');
   });
 });
 
@@ -162,14 +162,14 @@ describe('2. Пошаговое прохождение всех шагов ма�
     await routeCallback(cb('onboard:time:08:00', ID));
     expect((await getUser(ID))?.summaryTime).toBe('08:00');
     expect((await getUser(ID))?.onboardingStep).toBe('gemini');
-    expect(callsOf('editMessageText').pop()?.params.text).toContain('Шаг 7 из 7: ИИ-модель и Gemini-ключ');
+    expect(callsOf('editMessageText').pop()?.params.text).toContain('Шаг 7 из 7: Как я отвечаю');
 
     // Шаг 7 -> Финал
     await routeCallback(cb('onboard:step:final', ID));
     const finalUser = await getUser(ID);
     expect(finalUser?.onboardingStep).toBe('completed');
     expect(finalUser?.onboardingCompletedAt).not.toBeNull();
-    expect(callsOf('editMessageText').pop()?.params.text).toContain('Настройка завершена! Добро пожаловать в Tokio!');
+    expect(callsOf('editMessageText').pop()?.params.text).toContain('Знакомство завершено! Добро пожаловать в Tokio!');
   });
 
   it('кнопка выхода закрывает мастер и сохраняет completed', async () => {
@@ -210,7 +210,7 @@ describe('3. Прерывание и перезапуск из /help', () => {
     const calls = callsOf('sendMessage');
     expect(calls[0]?.params.reply_markup).toEqual({
       inline_keyboard: [
-        [{ text: '🚀 Пройти обучение заново', callback_data: 'onboard:restart' }],
+        [{ text: '🚀 Пройти знакомство заново', callback_data: 'onboard:restart' }],
       ],
     });
 
@@ -221,7 +221,7 @@ describe('3. Прерывание и перезапуск из /help', () => {
       expect(sentTexts()[0]).toContain('@support_demo');
       expect(callsOf('sendMessage')[0]?.params.reply_markup).toEqual({
         inline_keyboard: [
-          [{ text: '🚀 Пройти обучение заново', callback_data: 'onboard:restart' }],
+          [{ text: '🚀 Пройти знакомство заново', callback_data: 'onboard:restart' }],
           [{ text: '💬 Написать разработчику (@support_demo)', url: 'https://t.me/support_demo' }],
         ],
       });
@@ -238,7 +238,7 @@ describe('3. Прерывание и перезапуск из /help', () => {
     expect(user?.onboardingStep).toBe('overview');
 
     const sends = callsOf('sendMessage');
-    expect(sends[sends.length - 1]?.params.text).toContain('Шаг 1 из 7: Возможности Tokio');
+    expect(callsOf('editMessageText').pop()?.params.text).toContain('Шаг 1 из 7: Возможности Tokio');
   });
 });
 

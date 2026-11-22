@@ -46,7 +46,10 @@
     "timeoutError": "Сервер не отвечает (таймаут)",
     "networkError": "Не удалось связаться с сервером",
     "initDataPresent": "initData: есть",
-    "initDataMissing": "initData: НЕТ"
+    "initDataMissing": "initData: НЕТ",
+    "rpcWriteUnavailable": "Запись не выполнена: Serverless RPC недоступен ({{error}}). Запись через обходной API запрещена — повторите попытку позже.",
+    "staleCacheBanner": "Показаны сохранённые данные: связи с ботом нет.",
+    "staleFallbackBanner": "Показаны данные резервного сервера — обновите приложение."
   },
   "utils": {
     "today": "Сегодня",
@@ -402,11 +405,12 @@
   "onboarding": {
     "welcomeTitle": "Добро пожаловать в {{name}}",
     "welcomeSubtitle": "Персональная настройка ассистента за 30 секунд",
+    "howToHint": "Пиши, наговаривай или присылай фото — команды не нужны.",
     "nameLabel": "Как к тебе обращаться?",
     "namePlaceholder": "Ваше имя (например: Алекс)",
     "nameError": "Пожалуйста, укажите имя, как к вам обращаться.",
     "currencyLabel": "Основная валюта баланса",
-    "currencyHint": "В этой валюте будет считаться капитал, Runway и дневной лимит расходов.",
+    "currencyHint": "В этой валюте считаются балансы, расходы и финансовый резерв.",
     "timezoneLabel": "Часовой пояс",
     "personaLabel": "Стиль общения ИИ-ассистента",
     "starterAccountsLabel": "Стартовые счета (создать сразу)",

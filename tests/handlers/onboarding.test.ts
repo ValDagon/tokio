@@ -47,14 +47,15 @@ import {
   setBaseCurrency,
   skipOnboarding,
   startWelcomeText,
+  stepGeminiText,
 } from '../../src/handlers/onboarding';
-import { getMainKeyboard } from '../../src/handlers/keyboards';
 import {
   isPublicOpenAccessEnabled,
   resetOverlayOverride,
   setOverlayOverride,
   type OverlayOverride,
 } from '../../src/lib/overlay';
+import { getMainKeyboard } from '../../src/handlers/keyboards';
 import { listAccounts } from '../../src/lib/dal/finances';
 import { listNotes } from '../../src/lib/dal/notes';
 import { listTasks } from '../../src/lib/dal/tasks';
@@ -308,23 +309,30 @@ describe('базовая валюта', () => {
 // ---------------------------------------------------------------------------
 
 describe('тексты онбординга', () => {
-  it('приветствие называет бота Tokio и не упоминает модель', () => {
+  it('приветствие сразу говорит про обычный язык, голос и фото, а не про команды', () => {
     const text = startWelcomeText();
     expect(text).toContain('Tokio');
-    expect(text).toContain('/ask <вопрос>');
+    expect(text).toMatch(/Голосом/);
+    expect(text).toMatch(/Фото/);
+    expect(text).not.toContain('/ask <');
+    expect(text).not.toContain('/status —');
     expect(text).not.toMatch(/gemini/i);
   });
 
-  it('знакомство содержит BYOK-приглашение и не упоминает модель', () => {
+  it('знакомство объясняет живое общение и не тянет свой ключ в базовый поток', () => {
     const text = onboardingIntroText();
-    expect(text).toContain(byokInvitationText());
+    expect(text).toContain('Мы ещё не знакомы');
+    expect(text).not.toContain(byokInvitationText());
+    expect(text).not.toMatch(/BYOK/);
     expect(text).not.toMatch(/gemini/i);
   });
 
-  it('BYOK: ключ опционален и хранится зашифрованным', () => {
+  it('упоминание своего ключа — понятная опция без жаргона и синтаксиса команды', () => {
     const text = byokInvitationText();
     expect(text).toMatch(/зашифрован/);
-    expect(text).toMatch(/общ/i);
+    expect(text).toMatch(/по желанию/i);
+    expect(text).not.toMatch(/BYOK/);
+    expect(text).not.toMatch(/<[^>]*ключ[^>]*>/i);
   });
 
   it('ни в одном тексте нет персональных или захардкоженных маркеров инстанса', () => {
@@ -387,7 +395,8 @@ describe('sendStartGreeting', () => {
     await sendStartGreeting(USER);
     const sends = callsOf('sendMessage');
     expect(sends).toHaveLength(1);
-    expect(sends[0]?.params.text).toContain('Как со мной общаться');
+    expect(sends[0]?.params.text).toContain('Привет');
+    expect(sends[0]?.params.text).toContain('Голосом');
     expect(sends[0]?.params.reply_markup).toEqual(getMainKeyboard());
   });
 
@@ -419,7 +428,7 @@ describe('Мастер первичной настройки (Onboarding Wizard)
       await sendOnboardingPrompt(USER);
       const [call] = callsOf('sendMessage');
       expect(call?.params.chat_id).toBe(USER);
-      expect(call?.params.text).toContain('Пройти обучение (2 минуты) или сразу приступить к работе?');
+      expect(call?.params.text).toContain('Пройти короткое знакомство (2 минуты)');
       expect(call?.params.reply_markup).toEqual(onboardingPromptKeyboard());
     });
 
@@ -433,7 +442,7 @@ describe('Мастер первичной настройки (Onboarding Wizard)
 
       const edits = callsOf('editMessageText');
       expect(edits).toHaveLength(1);
-      expect(edits[0]?.params.text).toContain('Обучение пропущено');
+      expect(edits[0]?.params.text).toContain('Знакомство пропущено');
     });
 
     it('onboard:exit переводит пользователя в completed', async () => {
@@ -461,7 +470,7 @@ describe('Мастер первичной настройки (Onboarding Wizard)
       const edits = callsOf('editMessageText');
       expect(edits).toHaveLength(1);
       expect(edits[0]?.params.text).toContain('Шаг 1 из 7: Возможности Tokio');
-      expect(edits[0]?.params.text).toContain('СДВГ-фокус');
+      expect(edits[0]?.params.text).toContain('Фокус 1+3');
     });
 
     it('onboard:tz:Europe/Berlin сохраняет часовой пояс и переходит к шагу валюты', async () => {
@@ -539,7 +548,7 @@ describe('Мастер первичной настройки (Onboarding Wizard)
     it('onboard:action:sample_note создаёт заметку в инбокс', async () => {
       await ensureUserProfile(OTHER);
       const msg = await createSampleNote(OTHER);
-      expect(msg).toContain('первая мысль');
+      expect(msg).toMatch(/первая мысль/i);
 
       const notes = await listNotes(OTHER);
       expect(notes).toHaveLength(1);
@@ -558,8 +567,10 @@ describe('Мастер первичной настройки (Onboarding Wizard)
 
       const edits = callsOf('editMessageText');
       expect(edits).toHaveLength(1);
-      expect(edits[0]?.params.text).toContain('Шаг 7 из 7: ИИ-модель и Gemini-ключ');
-      expect(edits[0]?.params.text).toContain('$2.00');
+      expect(edits[0]?.params.text).toContain('Шаг 7 из 7: Как я отвечаю');
+      expect(edits[0]?.params.text).toContain('$2');
+      expect(edits[0]?.params.text).not.toMatch(/BYOK/);
+      expect(edits[0]?.params.text).not.toContain('/byok <');
     });
 
     it('onboard:step:final завершает онбординг и показывает финальный экран', async () => {
@@ -574,7 +585,102 @@ describe('Мастер первичной настройки (Onboarding Wizard)
 
       const edits = callsOf('editMessageText');
       expect(edits).toHaveLength(1);
-      expect(edits[0]?.params.text).toContain('Настройка завершена! Добро пожаловать');
+      expect(edits[0]?.params.text).toContain('Знакомство завершено! Добро пожаловать');
+    });
+  });
+
+  describe('Локализация мастера и agent-first фокус', () => {
+    const CYRILLIC = /[\u0400-\u04FF]/;
+    const STEPS = [
+      'overview',
+      'timezone',
+      'currency',
+      'accounts',
+      'practice',
+      'notifications',
+      'gemini',
+      'final',
+    ] as const;
+
+    afterEach(() => {
+      resetOverlayOverride();
+    });
+
+    it('мастер на en/sr/ja полностью без кириллицы — и текст, и кнопки', async () => {
+      for (const loc of ['en', 'sr', 'ja'] as const) {
+        await ensureUser(OTHER, 'Tester');
+        await updateUser(OTHER, { language: loc });
+        const user = await getUser(OTHER);
+        expect(user).not.toBeNull();
+
+        for (const step of STEPS) {
+          const { text, keyboard } = getWizardStepContent(step, user!);
+          expect(text, `${loc}.${step} text`).not.toMatch(CYRILLIC);
+          const labels = keyboard.inline_keyboard.flat().map((b) => b.text).join(' ');
+          expect(labels, `${loc}.${step} buttons`).not.toMatch(CYRILLIC);
+        }
+      }
+    });
+
+    it('приветствие и знакомство в 4 локалях тоже без кириллицы вне ru', () => {
+      for (const loc of ['en', 'sr', 'ja'] as const) {
+        expect(startWelcomeText(loc), `${loc} welcome`).not.toMatch(CYRILLIC);
+        expect(onboardingIntroText(loc), `${loc} intro`).not.toMatch(CYRILLIC);
+        expect(byokInvitationText(loc), `${loc} key`).not.toMatch(CYRILLIC);
+      }
+    });
+
+    it('стартовый экран учит обычному языку, а не заучиванию slash-команд', () => {
+      for (const loc of ['ru', 'en', 'sr', 'ja'] as const) {
+        const text = startWelcomeText(loc);
+        expect(text).toMatch(/\/help/);
+        expect(text).not.toContain('/status');
+        expect(text).not.toContain('/balance');
+        expect(text).not.toContain('/tasks');
+        expect(text).not.toContain('/ask');
+      }
+    });
+
+    it('шаг 7 не содержит BYOK-жаргона и синтаксиса команды', () => {
+      for (const loc of ['ru', 'en', 'sr', 'ja'] as const) {
+        const text = stepGeminiText(loc);
+        expect(text).not.toMatch(/BYOK/);
+        expect(text).not.toContain('/byok <');
+      }
+    });
+
+    it('свой ключ упоминается только при включённом byokCommand', () => {
+      expect(stepGeminiText('ru')).toMatch(/свой ключ/i);
+
+      setOverlayOverride({ manifest: { features: { byokCommand: false } } } as unknown as OverlayOverride);
+      const text = stepGeminiText('ru');
+      expect(text).not.toMatch(/свой ключ/i);
+      expect(text).not.toContain('/help');
+    });
+
+    it('приветственный лимит показывается только при включённом spendLimitEnabled', () => {
+      expect(stepGeminiText('ru')).toContain('$2');
+
+      setOverlayOverride({ manifest: { features: { spendLimitEnabled: false } } } as unknown as OverlayOverride);
+      expect(stepGeminiText('ru')).not.toContain('$2');
+    });
+
+    it('язык из users.language управляет мастером', async () => {
+      await ensureUser(OTHER, 'Tester');
+      await updateUser(OTHER, { language: 'ja' });
+      const user = await getUser(OTHER);
+      const { text } = getWizardStepContent('overview', user!);
+      expect(text).toContain('ステップ 1 / 7');
+    });
+
+    it('стартовые счета создаются на языке пользователя', async () => {
+      await ensureUser(OTHER, 'Tester');
+      await updateUser(OTHER, { language: 'en' });
+
+      const created = await createPresetAccounts(OTHER, 'full');
+      expect(created).toEqual(['Card', 'Savings', 'Crypto']);
+      const accounts = await listAccounts(OTHER);
+      expect(accounts.map((a) => a.name).sort()).toEqual(['Card', 'Crypto', 'Savings'].sort());
     });
   });
 
@@ -596,8 +702,8 @@ describe('Мастер первичной настройки (Onboarding Wizard)
       const user = await getUser(USER);
       expect(user?.onboardingStep).toBe('overview');
 
-      const sends = callsOf('sendMessage');
-      expect(sends[sends.length - 1]?.params.text).toContain('Шаг 1 из 7: Возможности Tokio');
+      const edits = callsOf('editMessageText');
+      expect(edits[edits.length - 1]?.params.text).toContain('Шаг 1 из 7: Возможности Tokio');
     });
   });
 });

@@ -46,7 +46,10 @@
     "timeoutError": "Server not responding (timeout)",
     "networkError": "Failed to reach the server",
     "initDataPresent": "initData: present",
-    "initDataMissing": "initData: missing"
+    "initDataMissing": "initData: missing",
+    "rpcWriteUnavailable": "Write failed: Serverless RPC is unavailable ({{error}}). Direct fallback API writes are disabled — please try again later.",
+    "staleCacheBanner": "Showing cached data: no connection to the bot.",
+    "staleFallbackBanner": "Showing fallback server data — please refresh the app."
   },
   "utils": {
     "today": "Today",
@@ -402,11 +405,12 @@
   "onboarding": {
     "welcomeTitle": "Welcome to {{name}}",
     "welcomeSubtitle": "Personalize your assistant in 30 seconds",
+    "howToHint": "Write, speak, or send a photo — no commands needed.",
     "nameLabel": "What should I call you?",
     "namePlaceholder": "Your name (e.g. Alex)",
     "nameError": "Please enter your name.",
     "currencyLabel": "Base balance currency",
-    "currencyHint": "Net worth, runway, and daily spending limit will be calculated in this currency.",
+    "currencyHint": "Balances, spending, and your financial reserve are calculated in this currency.",
     "timezoneLabel": "Timezone",
     "personaLabel": "AI assistant style",
     "starterAccountsLabel": "Starter accounts (create now)",
