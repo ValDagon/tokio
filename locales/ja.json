@@ -69,6 +69,26 @@
     "btnRestartOnboarding": "🚀 ツアーをもう一度",
     "btnSupport": "💬 サポート ({{supportContact}})"
   },
+  "commands": {
+    "menu": "セクションとキーボード",
+    "status": "今日のサマリー：予算・口座・集中",
+    "balance": "口座残高と内訳",
+    "debts": "ローン・借金・返済予定",
+    "tasks": "タスクとマイクロフォーカス",
+    "meds": "薬のスケジュール",
+    "digest": "朝のデイリーダイジェスト",
+    "inbox": "ためた考えとメモ",
+    "triage": "インボックスを整理",
+    "diagnostics": "エラーログ：何が壊れたか",
+    "skills": "手順：表示・有効化・却下",
+    "backlog": "アイデアとバグのバックログ",
+    "lang": "表示言語を変更",
+    "byok": "Gemini API キーを接続",
+    "backup": "データのバックアップを取得",
+    "consolidate": "考えをメモに整理",
+    "new": "会話を最初からやり直す",
+    "help": "コマンドのヘルプ"
+  },
   "billing": {
     "spendLimitExceeded": "⏳ 無料利用枠（${{limitUsd}}）の上限に達しました。\n\n{{assistantName}} の AI 機能を上限なしで使い続けるには、/byok からご自身の無料 Google Gemini API キーを接続してください。",
     "byokConnected": "🔑 ご自身の API キーが暗号化されて接続されています。",

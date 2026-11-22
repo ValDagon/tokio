@@ -25,6 +25,7 @@ import {
   routeCallback,
   routeMessage,
   setTextIngestHandler,
+  syncCommandMenu,
 } from './router.js';
 import { beginReplyTurn, noteReply } from '../lib/reply_turn.js';
 
@@ -223,6 +224,10 @@ async function handleUpdateBody(
   }
 
   await routeMessage(message as Message);
+  // Меню команд: публикуется ровно один раз на версию списка (`kv`-гард, без
+  // таймеров). Стоит после ответа на апдейт, поэтому сбой Bot API или хранилища
+  // не может ни задержать, ни сломать ответ хода — контракт как у индикатора.
+  await syncCommandMenu();
   await deliverRemindersQuietly((message as Message).from?.id);
   await reviewSkillsQuietly((message as Message).from?.id);
 }
