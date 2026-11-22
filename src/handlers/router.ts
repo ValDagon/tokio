@@ -1202,7 +1202,7 @@ const TELEGRAM_COMMAND_NAME = /^[a-z0-9_]{1,32}$/;
 const MENU_HIDDEN_COMMANDS: ReadonlySet<string> = new Set(['start']);
 
 /** Ключ `kv`: какая версия списка команд уже отправлена в Telegram. */
-export const COMMAND_MENU_KV_KEY = 'bot_commands:version:v1';
+export const COMMAND_MENU_KV_KEY = 'bot_commands:version:v2';
 
 export interface BotMenuCommand {
   command: string;
@@ -1270,11 +1270,14 @@ export function commandMenuVersion(menu: Record<LocaleCode, BotMenuCommand[]>): 
  * Гард — `kv` (`COMMAND_MENU_KV_KEY`), без таймеров и без фонового процесса:
  * версия считается из готового payload'а (имена + описания всех локалей), так
  * что правка любой строки в `locales/*.json` сама поднимает версию. Ключ
- * пишется только после того, как прошли все четыре вызова: частичный сбой
- * оставляет гард открытым, и следующее касание бота повторяет публикацию.
+ * пишется только после того, как прошли все вызовы: частичный сбой оставляет
+ * гард открытым, и следующее касание бота повторяет публикацию.
  *
- * `scope` не передаётся — меню ставится для всего бота (default scope), как и
- * раньше в BotFather.
+ * Публикуются пять наборов: четыре локали (`language_code`) и **default scope**
+ * без `language_code` — его видит любой пользователь, чей язык Telegram вне
+ * `ru/en/sr/ja`; он собирается из локали по умолчанию оверлея. Без него такие
+ * пользователи остались бы на замороженном списке из BotFather, который код
+ * больше никогда не обновит.
  *
  * Ничего не бросает: меню — украшение, ход пользователя не должен ломаться
  * из-за Bot API или хранилища (тот же контракт, что у индикатора,
@@ -1289,6 +1292,8 @@ export async function syncCommandMenu(): Promise<void> {
     for (const locale of SUPPORTED_LOCALES) {
       await api.setMyCommands({ commands: menu[locale], language_code: locale });
     }
+    const fallback = normalizeLocale(getOverlay().manifest.defaultLocale, 'ru');
+    await api.setMyCommands({ commands: menu[fallback] });
     await kvSet(COMMAND_MENU_KV_KEY, version);
   } catch {
     // меню — украшение: сбой Bot API или хранилища не должен ломать ход

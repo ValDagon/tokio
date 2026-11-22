@@ -30,7 +30,7 @@ import {
   resetRouterSeams,
   syncCommandMenu,
 } from '../../src/handlers/router';
-import handleUpdate, { type Message } from '../../src/handlers/message';
+import handleUpdate, { UNHANDLED_UPDATE_TEXT, type Message } from '../../src/handlers/message';
 
 const USER = 880501;
 const CHAT = 880501;
@@ -158,13 +158,22 @@ describe('меню команд: список', () => {
 });
 
 describe('меню команд: гард версии', () => {
-  it('первый проход публикует все четыре локали и запоминает версию', async () => {
+  it('первый проход публикует четыре локали и default scope, затем запоминает версию', async () => {
     await syncCommandMenu();
 
     const calls = callsOf('setMyCommands');
-    expect(calls.map((call) => call.params.language_code)).toEqual([...SUPPORTED_LOCALES]);
+    // Четыре локали + default scope (его видят языки вне ru/en/sr/ja).
+    expect(calls).toHaveLength(SUPPORTED_LOCALES.length + 1);
+    expect(calls.slice(0, SUPPORTED_LOCALES.length).map((call) => call.params.language_code)).toEqual([
+      ...SUPPORTED_LOCALES,
+    ]);
     expect(calls[0]!.params.commands).toEqual(botMenuCommands('ru'));
-    expect(calls[0]!.params).not.toHaveProperty('scope');
+
+    const defaultScope = calls[SUPPORTED_LOCALES.length]!;
+    expect(defaultScope.params).not.toHaveProperty('language_code');
+    expect(defaultScope.params).not.toHaveProperty('scope');
+    // Дефолтный набор — локаль оверлея (в ядре это `ru`, см. `example/overlay`).
+    expect(defaultScope.params.commands).toEqual(botMenuCommands('ru'));
 
     const version = commandMenuVersion(commandMenuByLocale());
     expect(await kvGet(COMMAND_MENU_KV_KEY)).toBe(version);
@@ -172,7 +181,7 @@ describe('меню команд: гард версии', () => {
 
   it('гард сработал — второго вызова setMyCommands нет', async () => {
     await syncCommandMenu();
-    expect(callsOf('setMyCommands')).toHaveLength(SUPPORTED_LOCALES.length);
+    expect(callsOf('setMyCommands')).toHaveLength(SUPPORTED_LOCALES.length + 1);
 
     resetApi();
     await syncCommandMenu();
@@ -184,7 +193,7 @@ describe('меню команд: гард версии', () => {
 
     await syncCommandMenu();
 
-    expect(callsOf('setMyCommands')).toHaveLength(SUPPORTED_LOCALES.length);
+    expect(callsOf('setMyCommands')).toHaveLength(SUPPORTED_LOCALES.length + 1);
     expect(await kvGet(COMMAND_MENU_KV_KEY)).toBe(commandMenuVersion(commandMenuByLocale()));
   });
 });
@@ -201,7 +210,7 @@ describe('меню команд: сбой Bot API', () => {
     // API ожил — публикация повторяется, потому что версия не записана.
     delete (api as Record<string, unknown>).setMyCommands;
     await syncCommandMenu();
-    expect(callsOf('setMyCommands')).toHaveLength(SUPPORTED_LOCALES.length);
+    expect(callsOf('setMyCommands')).toHaveLength(SUPPORTED_LOCALES.length + 1);
     expect(await kvGet(COMMAND_MENU_KV_KEY)).toBe(commandMenuVersion(commandMenuByLocale()));
   });
 
@@ -215,6 +224,9 @@ describe('меню команд: сбой Bot API', () => {
     const texts = sentTexts();
     expect(texts.length).toBeGreaterThan(0);
     expect(texts.some((text) => text.includes('твой личный ассистент'))).toBe(true);
+    // Бросок не должен доходить до аварийной сети апдейта (MU-4): иначе
+    // пользователь получил бы «сообщение не удалось обработать целиком».
+    expect(texts.some((text) => text.includes(UNHANDLED_UPDATE_TEXT))).toBe(false);
     expect(await kvGet(COMMAND_MENU_KV_KEY)).toBeNull();
   });
 });
