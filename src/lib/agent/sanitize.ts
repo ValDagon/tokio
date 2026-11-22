@@ -227,6 +227,13 @@ export const DEFAULT_MAX_MESSAGES = 80;
 export const DEFAULT_MAX_OBSERVATION_CHARS = 4000;
 
 /**
+ * Во сколько раз окно может превысить бюджет, если иначе из него выпадает
+ * последняя реплика пользователя. Вопрос в запросе важнее бюджета, но не любой
+ * ценой: слишком большое окно — это латентность, с которой борется дедлайн хода.
+ */
+export const ANCHOR_BUDGET_FACTOR = 4;
+
+/**
  * Грубая оценка токенов без токенизатора: кириллица и латиница в среднем
  * укладываются в ~4 символа на токен, плюс накладные расходы на сообщение.
  * Точность здесь не нужна — нужен предсказуемый и дешёвый потолок.
@@ -303,8 +310,14 @@ export function trimThread(messages: readonly AgentMessage[], options: TrimOptio
   if (start >= budgeted.length) {
     // Бюджет вытеснил вопрос: длинный ход набрал наблюдений больше, чем влезает.
     // Начинаем с последней реплики пользователя — без вопроса история бесполезна,
-    // а превышение мягкого бюджета дешевле потерянного хода.
-    start = anchor >= 0 ? anchor : windowStart;
+    // а наблюдение первым сообщением провайдер отвергает. Но окно всё равно
+    // ограничено: иначе «спасение» вопроса превращается в огромный запрос.
+    const anchored = anchor >= 0 ? anchor : windowStart;
+    let anchoredTokens = 0;
+    for (let index = anchored; index < budgeted.length; index += 1) {
+      anchoredTokens += messageTokens(budgeted[index]!);
+    }
+    start = anchoredTokens <= maxTokens * ANCHOR_BUDGET_FACTOR ? anchored : windowStart;
   }
   return budgeted.slice(start);
 }
