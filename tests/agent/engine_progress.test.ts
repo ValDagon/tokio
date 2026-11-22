@@ -204,13 +204,46 @@ describe('runAgent: мягкий дедлайн хода', () => {
     expect(result.thread.at(-1)?.content).toBe(result.reply);
   });
 
-  it('не начинает вызов модели, который сам выведет ход за бюджет', async () => {
+  it('не начинает вызов модели, который не оставит времени на ответ', async () => {
     let clock = 0;
     let calls = 0;
     const chat: AgentChatFn = async () => {
       calls += 1;
-      // Каждый вызов модели — 8 с: третий (8 + 8 + 8 = 24 с) уже не влезает.
-      clock += 8_000;
+      // Первый вызов — 5 с: следующий (5 + 12 + 4) уже не влезает в бюджет,
+      // поэтому инструмент выполняется, а ответ отдаётся детерминированно.
+      clock += 5_000;
+      return { content: '', toolCalls: [{ id: `c${calls}`, name: 'echo', args: { text: String(calls) } }] };
+    };
+    const order: string[] = [];
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'разбери инбокс',
+      mode: 'action',
+      tools: [echoTool(order)],
+      store: null,
+      chatFn: chat,
+      profile: PROFILE,
+      now: NOW,
+      clock: () => clock,
+    });
+
+    // Живой сбой 22.11.2026 14:19: второй вызов модели повис и платформа убила
+    // ход. После медленного первого вызова второго больше нет.
+    expect(calls).toBe(1);
+    expect(order).toEqual(['tool:1']);
+    expect(result.stopReason).toBe('step_limit');
+    expect(result.reply).toContain('эхо: 1');
+    expect(result.reply).toContain('следующим сообщением');
+  });
+
+  it('быстрый первый вызов оставляет второй — обычный ход не срезан', async () => {
+    let clock = 0;
+    let calls = 0;
+    const chat: AgentChatFn = async () => {
+      calls += 1;
+      // По 3 с на вызов: второй (3 + 12 + 4 = 19 с) ещё влезает в бюджет.
+      clock += 3_000;
       return { content: '', toolCalls: [{ id: `c${calls}`, name: 'echo', args: { text: String(calls) } }] };
     };
     const order: string[] = [];
@@ -228,7 +261,40 @@ describe('runAgent: мягкий дедлайн хода', () => {
     });
 
     expect(calls).toBe(2);
+    expect(order).toEqual(['tool:1', 'tool:2']);
     expect(result.stopReason).toBe('step_limit');
-    expect(result.reply.trim().length).toBeGreaterThan(0);
+  });
+
+  it('резерв бюджета не даёт инструментам съесть время отправки', async () => {
+    let clock = 0;
+    let calls = 0;
+    const chat: AgentChatFn = async () => {
+      calls += 1;
+      // Вызов вернулся на 17-й секунде: до бюджета осталось 3 с — меньше
+      // резерва, поэтому инструмент не выполняется, ответ уходит сразу.
+      clock += 17_000;
+      return { content: '', toolCalls: [{ id: 'c1', name: 'echo', args: { text: 'привет' } }] };
+    };
+    const order: string[] = [];
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'разбери инбокс',
+      mode: 'action',
+      tools: [echoTool(order)],
+      store: null,
+      chatFn: chat,
+      profile: PROFILE,
+      now: NOW,
+      clock: () => clock,
+    });
+
+    expect(calls).toBe(1);
+    expect(order).toEqual([]);
+    expect(result.stopReason).toBe('step_limit');
+    const observations = result.thread
+      .map((message) => toolResultOf(message))
+      .filter((observation) => observation !== null);
+    expect(observations).toEqual([{ id: 'c1', name: 'echo', ok: false }]);
   });
 });
