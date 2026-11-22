@@ -33,7 +33,7 @@ import { exportUserData, stringifyBackup } from '../lib/backup';
 import { runNightlyConsolidation } from '../lib/consolidation';
 import { clearThread } from '../lib/dal/agentState';
 import { deleteTransaction, getLiability, rollbackLiabilityPayment } from '../lib/dal/finances';
-import { kvGet, liabilityReviewKey, type LiabilityReviewDecision } from '../lib/dal/misc';
+import { kvGet, kvSet, liabilityReviewKey, type LiabilityReviewDecision } from '../lib/dal/misc';
 import { getMedication, skipMedication, takeMedication } from '../lib/dal/medications';
 import { deleteNote, getNote, listNotes } from '../lib/dal/notes';
 import {
@@ -1186,6 +1186,114 @@ const SLASH_COMMANDS: Record<string, NamedCommand> = {
   skills: { handler: (userId: number, chatId: number) => handleSkills(userId, chatId, '/skills') },
   скиллы: { handler: (userId: number, chatId: number) => handleSkills(userId, chatId, '/skills') },
 };
+
+// ---------------------------------------------------------------------------
+// Меню команд Telegram (`setMyCommands`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Имя команды в меню: только латиница, цифры и `_` (требование Bot API).
+ * Кириллические алиасы роутера (`/баланс`) в меню не попадают — Telegram их
+ * не принимает, а знание о них у пользователя остаётся через `/help`.
+ */
+const TELEGRAM_COMMAND_NAME = /^[a-z0-9_]{1,32}$/;
+
+/** `/start` в меню не нужен: Telegram показывает его отдельной строкой сам. */
+const MENU_HIDDEN_COMMANDS: ReadonlySet<string> = new Set(['start']);
+
+/** Ключ `kv`: какая версия списка команд уже отправлена в Telegram. */
+export const COMMAND_MENU_KV_KEY = 'bot_commands:version:v1';
+
+export interface BotMenuCommand {
+  command: string;
+  description: string;
+}
+
+/**
+ * Первичные имена команд из `SLASH_COMMANDS`, пригодные для меню Telegram.
+ *
+ * Один источник правды: список собирается из той же таблицы, что и маршрутизация,
+ * поэтому «команда есть в меню, но не работает» (или наоборот) не появится.
+ * Порядок — порядок объявления; первое латинское имя каждого обработчика
+ * становится именем команды, его алиасы (`status`/`summary`, `backup`/`export`,
+ * `lang`/`language`, `tasks`/`todo`, …) в меню не попадают вовсе.
+ */
+export function primaryCommandNames(): string[] {
+  const seen = new Set<CommandHandler>();
+  const names: string[] = [];
+  for (const [name, entry] of Object.entries(SLASH_COMMANDS)) {
+    if (MENU_HIDDEN_COMMANDS.has(name)) continue;
+    if (!TELEGRAM_COMMAND_NAME.test(name)) continue;
+    if (seen.has(entry.handler)) continue;
+    seen.add(entry.handler);
+    names.push(name);
+  }
+  return names;
+}
+
+/** Список меню для одной локали: имена из роутера, описания из `locales/*.json`. */
+export function botMenuCommands(locale: LocaleCode): BotMenuCommand[] {
+  return primaryCommandNames().map((name) => ({
+    command: name,
+    description: t(locale, `commands.${name}`),
+  }));
+}
+
+/** Меню всех четырёх локалей в фиксированном порядке (`SUPPORTED_LOCALES`). */
+export function commandMenuByLocale(): Record<LocaleCode, BotMenuCommand[]> {
+  const menu = {} as Record<LocaleCode, BotMenuCommand[]>;
+  for (const locale of SUPPORTED_LOCALES) menu[locale] = botMenuCommands(locale);
+  return menu;
+}
+
+/**
+ * FNV-1a (32 бита) — короткая версия списка, по которой работает гард.
+ * Криптостойкость здесь не нужна: это только «список изменился или нет».
+ */
+function fnv1a(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+/** Версия меню: любая правка имён, описаний или набора локалей её меняет. */
+export function commandMenuVersion(menu: Record<LocaleCode, BotMenuCommand[]>): string {
+  return fnv1a(JSON.stringify(menu));
+}
+
+/**
+ * Публикует меню команд: `setMyCommands` один раз на версию списка.
+ *
+ * Гард — `kv` (`COMMAND_MENU_KV_KEY`), без таймеров и без фонового процесса:
+ * версия считается из готового payload'а (имена + описания всех локалей), так
+ * что правка любой строки в `locales/*.json` сама поднимает версию. Ключ
+ * пишется только после того, как прошли все четыре вызова: частичный сбой
+ * оставляет гард открытым, и следующее касание бота повторяет публикацию.
+ *
+ * `scope` не передаётся — меню ставится для всего бота (default scope), как и
+ * раньше в BotFather.
+ *
+ * Ничего не бросает: меню — украшение, ход пользователя не должен ломаться
+ * из-за Bot API или хранилища (тот же контракт, что у индикатора,
+ * `handlers/progress.ts`).
+ */
+export async function syncCommandMenu(): Promise<void> {
+  try {
+    const menu = commandMenuByLocale();
+    const version = commandMenuVersion(menu);
+    if ((await kvGet(COMMAND_MENU_KV_KEY)) === version) return;
+
+    for (const locale of SUPPORTED_LOCALES) {
+      await api.setMyCommands({ commands: menu[locale], language_code: locale });
+    }
+    await kvSet(COMMAND_MENU_KV_KEY, version);
+  } catch {
+    // меню — украшение: сбой Bot API или хранилища не должен ломать ход
+  }
+}
 
 /** Подписи reply-клавиатуры и русские слова-команды. */
 function bareWordCommands(): Record<string, CommandHandler> {

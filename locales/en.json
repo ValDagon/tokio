@@ -69,6 +69,26 @@
     "btnRestartOnboarding": "🚀 Take the tour again",
     "btnSupport": "💬 Support ({{supportContact}})"
   },
+  "commands": {
+    "menu": "Sections and keyboard",
+    "status": "Day summary: budget, accounts, focus",
+    "balance": "Account balances and contours",
+    "debts": "Loans, debts and payment schedule",
+    "tasks": "Tasks and micro-focus",
+    "meds": "Medication schedule",
+    "digest": "Morning summary of the day",
+    "inbox": "Collected thoughts and notes",
+    "triage": "Sort the inbox",
+    "diagnostics": "Failure log: what broke",
+    "skills": "Procedures: show, enable, reject",
+    "backlog": "Backlog of ideas and bugs",
+    "lang": "Change interface language",
+    "byok": "Connect your Gemini API key",
+    "backup": "Download a data backup",
+    "consolidate": "Turn thoughts into notes",
+    "new": "Start the dialogue from scratch",
+    "help": "Command reference"
+  },
   "billing": {
     "spendLimitExceeded": "⏳ Free usage limit (${{limitUsd}}) reached.\n\nTo keep using {{assistantName}} AI features without limits, connect your own free Google Gemini API key via /byok.",
     "byokConnected": "🔑 Your personal API key is connected and encrypted.",

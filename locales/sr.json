@@ -69,6 +69,26 @@
     "btnRestartOnboarding": "🚀 Ponovi upoznavanje",
     "btnSupport": "💬 Podrška ({{supportContact}})"
   },
+  "commands": {
+    "menu": "Odeljci i tastatura",
+    "status": "Dnevni pregled: budžet, računi, fokus",
+    "balance": "Stanja računa i konture",
+    "debts": "Krediti, dugovi i plan plaćanja",
+    "tasks": "Zadaci i mikro-fokus",
+    "meds": "Raspored lekova",
+    "digest": "Jutarnji pregled dana",
+    "inbox": "Prikupljene misli i beleške",
+    "triage": "Razvrstaj prijem",
+    "diagnostics": "Dnevnik grešaka: šta je puklo",
+    "skills": "Procedure: prikaži, uključi, odbij",
+    "backlog": "Zaostale ideje i greške",
+    "lang": "Promeni jezik interfejsa",
+    "byok": "Poveži svoj Gemini API ključ",
+    "backup": "Preuzmi rezervnu kopiju podataka",
+    "consolidate": "Pretvori misli u beleške",
+    "new": "Počni razgovor iz početka",
+    "help": "Pomoć za komande"
+  },
   "billing": {
     "spendLimitExceeded": "⏳ Besplatni limit potrošnje (${{limitUsd}}) je dostignut.\n\nDa nastaviš da koristiš AI mogućnosti asistenta {{assistantName}} bez ograničenja, poveži svoj besplatni Google Gemini API ključ komandom /byok.",
     "byokConnected": "🔑 Tvoj lični API ključ je povezan i šifrovan.",
