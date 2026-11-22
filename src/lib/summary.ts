@@ -500,7 +500,11 @@ export async function diagnosticsReply(
     const ageMinutes = Number.isFinite(successMs)
       ? Math.floor((now.getTime() - successMs) / 60_000)
       : null;
-    if (ageMinutes === null || ageMinutes >= CLOCK_STALL_AFTER_MINUTES) {
+    if (ageMinutes === null) {
+      lines.push(
+        'Внешние часы: успешных тиков ещё не было — проверь personal-clock.yml в GitHub Actions. Напоминания пока добираются при касании бота.',
+      );
+    } else if (ageMinutes >= CLOCK_STALL_AFTER_MINUTES) {
       lines.push(
         'Внешние часы: больше суток без успешного тика — проверь personal-clock.yml в GitHub Actions. Напоминания пока добираются при касании бота.',
       );

@@ -166,11 +166,22 @@ export function isAgentTrigger(text: string): boolean {
  * отсутствие в нём чего-либо, кроме светской фразы.
  */
 const SOCIAL_PHRASE =
-  '(?:привет|здравствуй(?:те)?|добр(?:ое|ый|ой)\\s+(?:утро|день|вечер)|хай|hi|hello|hey|(?:спасибо|благодарю)(?:\\s+(?:большое|огромное))?|thanks|thank\\s+you|пока|до\\s+(?:встречи|связи|завтра)|спокойной\\s+ночи|как\\s+(?:дела|ты|жизнь|настроение|сам|сама)|что\\s+нового|доброе\\s+утро)';
+  '(?:привет|здравствуй(?:те)?|добр(?:ое|ый|ой)\\s+(?:утро|день|вечер)|хай|hi|hello|hey|(?:спасибо|благодарю)(?:\\s+(?:большое|огромное))?|thanks|thank\\s+you|пока|до\\s+(?:встречи|связи|завтра)|спокойной\\s+ночи|как\\s+(?:дела|ты|жизнь|настроение|сам|сама)|что\\s+нового)';
+// Разделители включают `)`: «привет)» — самый частый неформальный вариант той
+// самой фразы, с которой начался инцидент. Эмодзи снимаются отдельно, потому что
+// их диапазоны не перечислить в классе символов без Unicode-свойств.
 const SOCIAL_MESSAGE_RE = new RegExp(
-  `^${SOCIAL_PHRASE}(?:[\\s!.,?…]+${SOCIAL_PHRASE})*[\\s!.,?…]*$`,
+  `^${SOCIAL_PHRASE}(?:[\\s!.,?…)]+${SOCIAL_PHRASE})*[\\s!.,?…)]*$`,
   'i',
 );
+
+/** Убирает эмодзи и модификаторы: «Привет 👋» — та же светская реплика. */
+function stripEmoji(value: string): string {
+  return value
+    .replace(/\p{Extended_Pictographic}/gu, '')
+    .replace(/[\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}]/gu, '')
+    .trim();
+}
 
 /**
  * Доступ к записи для хода агента.
@@ -181,7 +192,7 @@ const SOCIAL_MESSAGE_RE = new RegExp(
  */
 export function agentAccessFor(agentQuery: string, replyContext?: string): 'full' | 'read-only' {
   if (replyContext) return 'full';
-  return SOCIAL_MESSAGE_RE.test(agentQuery.trim()) ? 'read-only' : 'full';
+  return SOCIAL_MESSAGE_RE.test(stripEmoji(agentQuery)) ? 'read-only' : 'full';
 }
 
 /** Глаголы денежного перемещения: «переведи всё», «сконвертируй», «переложи». */

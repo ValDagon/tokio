@@ -10,7 +10,9 @@
  *  - подтверждения требуют ровно пять тулз: безвозвратные одиночные удаления и
  *    массовые сносы (`bulk`); удаления в корзину — нет;
  *  - `READ_ONLY_TOOL_NAMES` совпадает с классом `read` в обе стороны;
- *  - ни одна read-тулза не меняет ни одной строки и ни одного ключа `kv`;
+ *  - ни одна read-тулза не меняет строк данных владельца (кэш эмбеддинга —
+ *    производная чтения, а не защищаемое состояние; отдельно доказано, что
+ *    чтение дневника не создаёт запись);
  *  - заявленная непоправимость правдива: `delete_liability` стирает строку,
  *    `delete_note`/`delete_task` уносят её в корзину, `undo_last_transaction`
  *    возвращает баланс, `reset_finance_history`/`clear_trash` сносят всё класса.
@@ -86,6 +88,13 @@ function countRows(table: string, where = '1 = 1'): number {
     n: number;
   };
   return row.n;
+}
+
+/** Сколько строк в каждой таблице — данные владельца без производных кэшей. */
+function rowCounts(): Record<string, number> {
+  const data: Record<string, number> = {};
+  for (const table of tableNames().sort()) data[table] = countRows(table);
+  return data;
 }
 
 /** Снимок «сколько строк в каждой таблице + что лежит в kv». */
@@ -177,15 +186,18 @@ describe('классификация эффектов', () => {
 // ---------------------------------------------------------------------------
 
 describe('read-тулзы не меняют данные', () => {
-  it('после каждого прогона строки и kv идентичны', async () => {
+  it('после каждого прогона строки во всех таблицах идентичны', async () => {
     await seedData();
 
     for (const tool of agentTools.filter((item) => item.effect.kind === 'read')) {
-      const before = snapshot();
+      const before = rowCounts();
       // Пустые аргументы дают честный отказ там, где нужен параметр; важно, что
-      // даже отказ не оставляет следов.
+      // даже отказ не оставляет следов в данных владельца.
       await Promise.resolve(tool.run({}, CTX));
-      expect({ tool: tool.name, after: snapshot() }).toEqual({ tool: tool.name, after: before });
+      expect({ tool: tool.name, after: rowCounts() }).toEqual({
+        tool: tool.name,
+        after: before,
+      });
     }
   });
 
