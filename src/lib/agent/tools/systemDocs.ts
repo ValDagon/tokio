@@ -37,6 +37,7 @@ async function consultSystemDocs(args: ToolArgs, ctx: ToolContext): Promise<Tool
 export const systemDocsTools: Tool[] = [
   {
     name: 'consult_system_docs',
+    effect: { kind: 'read' },
     description:
       'Ищет ответ в системной документации пользователя (главы-инструкции: профиль, финансы, здоровье, проекты, персонализация).',
     schema: {

@@ -122,6 +122,7 @@ const ACTION = (name: string, args: Record<string, unknown> = {}): string =>
 
 const brokenTool: Tool = {
   name: 'broken',
+  effect: { kind: 'read' },
   description: 'Всегда падает с исключением',
   run: () => {
     throw new Error('boom');
@@ -131,12 +132,13 @@ const brokenTool: Tool = {
 const destructiveTool: Tool = {
   name: 'wipe',
   description: 'Удаляет всё, требует подтверждения',
-  destructive: true,
+  effect: { kind: 'destroy' },
   run: () => 'удалено',
 };
 
 const refusalTool: Tool = {
   name: 'add_expense',
+  effect: { kind: 'read' },
   description: 'Отказывает по средствам',
   run: () => {
     const error = new Error('на счёте не хватает денег');
@@ -172,6 +174,7 @@ describe('журнал: терминальные причины и отказы 
       tools: [
         {
           name: 'echo',
+          effect: { kind: 'read' },
           description: 'эхо',
           run: (args) => `эхо: ${String(args.text ?? '')}`,
         },

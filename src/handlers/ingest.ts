@@ -156,9 +156,47 @@ export function isAgentTrigger(text: string): boolean {
   );
 }
 
+/**
+ * Светская реплика целиком и ничего больше: приветствие, благодарность,
+ * «как дела». Якорный whitelist (не blacklist): если кроме светской фразы в
+ * сообщении есть хоть слово просьбы, шаблон не совпадёт и ход остаётся полным.
+ *
+ * Инцидент 22.11.2026: «Привет» ушёл в агента с полным набором инструментов, и
+ * модель унесла заметку в корзину. Право на запись снимает не имя сообщения, а
+ * отсутствие в нём чего-либо, кроме светской фразы.
+ */
+const SOCIAL_PHRASE =
+  '(?:привет|здравствуй(?:те)?|добр(?:ое|ый|ой)\\s+(?:утро|день|вечер)|хай|hi|hello|hey|(?:спасибо|благодарю)(?:\\s+(?:большое|огромное))?|thanks|thank\\s+you|пока|до\\s+(?:встречи|связи|завтра)|спокойной\\s+ночи|как\\s+(?:дела|ты|жизнь|настроение|сам|сама)|что\\s+нового)';
+// Разделители включают `)`: «привет)» — самый частый неформальный вариант той
+// самой фразы, с которой начался инцидент. Эмодзи снимаются отдельно, потому что
+// их диапазоны не перечислить в классе символов без Unicode-свойств.
+const SOCIAL_MESSAGE_RE = new RegExp(
+  `^${SOCIAL_PHRASE}(?:[\\s!.,?…)]+${SOCIAL_PHRASE})*[\\s!.,?…)]*$`,
+  'i',
+);
+
+/** Убирает эмодзи и модификаторы: «Привет 👋» — та же светская реплика. */
+function stripEmoji(value: string): string {
+  return value
+    .replace(/\p{Extended_Pictographic}/gu, '')
+    .replace(/[\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}]/gu, '')
+    .trim();
+}
+
+/**
+ * Доступ к записи для хода агента.
+ *
+ * `replyContext` всегда даёт полный доступ: ответ на сообщение бота — это
+ * продолжение контекста, в том числе «да» на подтверждение, и снимать у него
+ * запись значит ломать петлю подтверждения.
+ */
+export function agentAccessFor(agentQuery: string, replyContext?: string): 'full' | 'read-only' {
+  if (replyContext) return 'full';
+  return SOCIAL_MESSAGE_RE.test(stripEmoji(agentQuery)) ? 'read-only' : 'full';
+}
+
 /** Глаголы денежного перемещения: «переведи всё», «сконвертируй», «переложи». */
-const FINANCE_MOVE_VERBS =
-  /(?:перевед|переведи|переве|перелож|перекин|перемест|сконверт|конвертир|обменя|пересчита|перепривяж)/iu;
+const FINANCE_MOVE_VERBS = /(?:перевед|переведи|переве|перелож|перекин|перемест|сконверт|конвертир|обменя|пересчита|перепривяж)/iu;
 
 /** Слова и коды валют: без них фраза про «перевод» — не денежная операция. */
 const CURRENCY_HINTS =
@@ -261,6 +299,10 @@ async function tryAgentAutonomousStep(
     isAgentTrigger(userText) || (Boolean(replyContext) && !parseFinancialIntent(userText));
   const agentQuery = userText.replace(/^\/(?:ask|agent|агент)\s*/i, '').trim();
   const fullQuery = formatAgentQueryWithReply(agentQuery, replyContext);
+  // «Привет», «спасибо», «как дела» — ход без права записи: данные владельца не
+  // меняются, даже если модель выберет write-инструмент. Точка одна на текст,
+  // голос и подпись фото, потому что все три идут через эту функцию.
+  const toolAccess = agentAccessFor(agentQuery, replyContext);
 
   // Живая индикация: «печатает…» сразу, строка прогресса — только на медленном
   // ходе. Вся индикация внутри себя глушит сбои Bot API (handlers/progress.ts).
@@ -269,7 +311,7 @@ async function tryAgentAutonomousStep(
 
   let agentRes: AgentRunResult;
   try {
-    agentRes = await runAgent({ userId, text: fullQuery, onProgress: progress.onProgress });
+    agentRes = await runAgent({ userId, text: fullQuery, onProgress: progress.onProgress, toolAccess });
   } catch (error) {
     // Ход упал, но сообщение ещё не потеряно: smartIngest после броска идёт в
     // детерминированные фолбэки и может ответить по существу. Заменять строку

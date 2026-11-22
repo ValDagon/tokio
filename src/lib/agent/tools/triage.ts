@@ -221,6 +221,7 @@ function toData(task: TaskRow): Record<string, unknown> {
 export const triageTools: Tool[] = [
   {
     name: 'triage_tasks',
+    effect: { kind: 'read' },
     description:
       'Разбирает задачи: режим focus даёт микро-фокус дня (только сегодня и просроченные, не более 4, с двухминутным шагом для застрявших), режим sphere — изоляцию одной сферы.',
     schema: {

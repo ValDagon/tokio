@@ -541,6 +541,7 @@ const KG_SCHEMA_PROPERTIES = {
 export const notesTools: Tool[] = [
   {
     name: 'add_note',
+    effect: { kind: 'create' },
     description:
       'Сохраняет мысль, инсайт или заметку на канбан-доске. Колонка по умолчанию — «Сырое» (raw).',
     schema: {
@@ -560,6 +561,7 @@ export const notesTools: Tool[] = [
   },
   {
     name: 'search_notes',
+    effect: { kind: 'read' },
     description:
       'Ищет в заметках и долговременной памяти по смыслу (векторный поиск) и по ключевым словам.',
     schema: {
@@ -573,6 +575,7 @@ export const notesTools: Tool[] = [
   },
   {
     name: 'edit_note',
+    effect: { kind: 'mutate' },
     description: 'Редактирует текст существующей заметки на канбан-доске.',
     schema: {
       type: 'object',
@@ -587,6 +590,7 @@ export const notesTools: Tool[] = [
   },
   {
     name: 'move_note',
+    effect: { kind: 'mutate' },
     description: 'Перемещает заметку между колонками канбан-доски.',
     schema: {
       type: 'object',
@@ -603,6 +607,7 @@ export const notesTools: Tool[] = [
   },
   {
     name: 'delete_note',
+    effect: { kind: 'destroy', recovery: 'trash' },
     description:
       'Удаляет заметку в корзину (хранится 30 дней с возможностью восстановления).',
     schema: {
@@ -616,6 +621,7 @@ export const notesTools: Tool[] = [
   },
   {
     name: 'get_inbox_digest',
+    effect: { kind: 'read' },
     description:
       'Дайджест последних необработанных заметок из «Сырого» (raw) для утреннего разбора.',
     schema: {

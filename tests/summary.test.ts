@@ -593,20 +593,27 @@ describe('diagnosticsReply', () => {
     expect(text).toContain('тиков ещё не было');
   });
 
-  it('диагностика: 44 минуты — работают, 45 и 46 — молчат', async () => {
+  it('диагностика: разрыв в 6 часов — норма, в 25 часов — тревога', async () => {
     await seedJournalLine();
 
+    // GitHub отдаёт лишь часть запусков расписания: 4–9 часов тишины штатны,
+    // поэтому прежний порог в 45 минут объявлял тревогу на каждом обычном ходе.
     for (const [minutes, warns] of [
-      [44, false],
-      [45, true],
-      [46, true],
+      [6 * 60, false],
+      [24 * 60 - 1, false],
+      [24 * 60, true],
+      [25 * 60, true],
     ] as const) {
       const at = new Date(CLOCK_NOW.getTime() - minutes * 60_000).toISOString();
       await writeClockHeartbeat({ lastExternalAttemptAt: at, lastExternalSuccessAt: at });
 
       const text = await diagnosticsReply(USER, { now: CLOCK_NOW });
 
-      expect(text.includes('Внешние часы молчат')).toBe(warns);
+      // Такт проговаривается всегда — иначе редкий тик читается как поломка.
+      expect(text).toContain('best-effort');
+      expect(text.includes('больше суток без успешного тика')).toBe(warns);
+      // Ложной причины больше нет: 45 минут ничего не доказывают про расписание.
+      expect(text).not.toContain('расписание GitHub Actions остановилось');
     }
   });
 

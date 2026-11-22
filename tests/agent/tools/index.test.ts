@@ -16,6 +16,8 @@ import {
   listToolNames,
   registerTool,
   replaceTool,
+  requiresConfirmation,
+  type Tool,
 } from '../../../src/lib/agent/registry';
 
 describe('agent/tools/index: сборка реестра', () => {
@@ -63,5 +65,46 @@ describe('agent/tools/index: сборка реестра', () => {
     registerAllTools();
     const dup = agentTools[0]!;
     expect(() => registerTool(dup)).toThrow(/already registered/);
+  });
+
+  // Класс эффекта — единственный источник истины для гейта подтверждения.
+  // Раньше `defineTool` возвращал тулзу без флага `destructive`, поэтому
+  // `needsConfirmation` через реестр не срабатывал ни для одной тулзы: тесты
+  // подавали инструмент в `options.tools` и дефекта не видели.
+  it('реестр сохраняет класс эффекта каждой тулзы', () => {
+    registerAllTools();
+
+    expect(getTool('reset_finance_history')?.effect).toEqual({ kind: 'destroy', bulk: true });
+    expect(getTool('clear_trash')?.effect).toEqual({ kind: 'destroy', bulk: true });
+    expect(getTool('delete_liability')?.effect).toEqual({ kind: 'destroy' });
+    expect(getTool('delete_note')?.effect).toEqual({ kind: 'destroy', recovery: 'trash' });
+    expect(getTool('add_task')?.effect).toEqual({ kind: 'create' });
+    expect(getTool('list_tasks')?.effect).toEqual({ kind: 'read' });
+
+    for (const tool of agentTools) {
+      expect({ tool: tool.name, effect: getTool(tool.name)?.effect }).toEqual({
+        tool: tool.name,
+        effect: tool.effect,
+      });
+    }
+  });
+
+  it('гейт подтверждения выводится из класса через реестр', () => {
+    registerAllTools();
+
+    expect(requiresConfirmation(getTool('delete_liability')!.effect)).toBe(true);
+    expect(requiresConfirmation(getTool('reset_finance_history')!.effect)).toBe(true);
+    expect(requiresConfirmation(getTool('clear_trash')!.effect)).toBe(true);
+    expect(requiresConfirmation(getTool('delete_note')!.effect)).toBe(false);
+    expect(requiresConfirmation(getTool('delete_task')!.effect)).toBe(false);
+  });
+
+  it('тулза без классификации не регистрируется', () => {
+    const bare = {
+      name: 'bare_tool',
+      description: 'Тулза без класса эффекта — реестр обязан отказаться',
+      run: () => 'нет',
+    };
+    expect(() => registerTool(bare as unknown as Tool)).toThrow(/effect classification/);
   });
 });

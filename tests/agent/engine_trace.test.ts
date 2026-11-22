@@ -31,6 +31,7 @@ const PROFILE = { userName: 'Иван', timezone: 'Europe/Belgrade', baseCurrenc
 /** Минимальный инструмент: крошке важно, что вызов был, а не что он делает. */
 const echoTool: Tool = {
   name: 'echo_tool',
+  effect: { kind: 'read' },
   description: 'Возвращает значение',
   schema: { type: 'object', properties: { value: { type: 'string' } } },
   run: (args) => `эхо: ${String(args.value ?? '')}`,

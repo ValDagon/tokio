@@ -204,5 +204,15 @@
     "items_few": "{{count}} items",
     "items_many": "{{count}} items",
     "items_other": "{{count}} items"
+  },
+  "agent": {
+    "confirm_prompt": "⚠️ Confirm the action: {{name}}{{detail}}\n\nNothing has been changed yet. Reply “yes” and I will do it.",
+    "deadline_base": "⏱ I could not finish everything in one turn and stopped so I could answer.",
+    "deadline_done_header": "Done before stopping:",
+    "deadline_more": "…and {{count}} more, not listed above.",
+    "deadline_trash_hint": "What was deleted stays in the trash for 30 days — it can be restored (view_trash).",
+    "deadline_irreversible_hint": "Irreversible actions cannot be undone — please check the result.",
+    "deadline_gathered_header": "What I managed to gather:",
+    "deadline_tail": "The rest — in the next message."
   }
 }

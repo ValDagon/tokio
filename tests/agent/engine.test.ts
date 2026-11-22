@@ -19,9 +19,10 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { resetDb, sqliteDDL } from '../mocks/sdk';
+import { getSqlite, resetDb, sqliteDDL } from '../mocks/sdk';
 import { TABLES } from '../../src/db/tables';
 import { createTableStatements } from '../../src/db/ddl';
+import { createLiability } from '../../src/lib/dal/finances';
 import { createMedication, takeMedication } from '../../src/lib/dal/medications';
 import { createTask } from '../../src/lib/dal/tasks';
 import { ensureUser, updateUser } from '../../src/lib/dal/users';
@@ -133,6 +134,7 @@ function makeTools(): {
 
   const echo: Tool = {
     name: 'echo',
+    effect: { kind: 'read' },
     description: 'Возвращает переданный текст как есть',
     schema: { type: 'object', properties: { text: { type: 'string' } } },
     run: (args, ctx) => {
@@ -143,6 +145,7 @@ function makeTools(): {
 
   const broken: Tool = {
     name: 'broken',
+    effect: { kind: 'read' },
     description: 'Всегда падает с исключением',
     run: () => {
       throw new Error('boom');
@@ -151,6 +154,7 @@ function makeTools(): {
 
   const silent: Tool = {
     name: 'silent',
+    effect: { kind: 'read' },
     description: 'Возвращает пустой исход',
     run: () => ({ ok: true, content: '   ' }),
   };
@@ -930,6 +934,7 @@ describe('runAgent: нативный function calling', () => {
     const tools: Tool[] = [
       {
         name: 'list_tasks',
+        effect: { kind: 'read' },
         description: 'Список задач',
         run: async () => {
           events.push('start:list_tasks');
@@ -941,6 +946,7 @@ describe('runAgent: нативный function calling', () => {
       },
       {
         name: 'get_fin_balances',
+        effect: { kind: 'read' },
         description: 'Балансы счетов',
         run: async () => {
           events.push('start:get_fin_balances');
@@ -1012,6 +1018,7 @@ describe('runAgent: нативный function calling', () => {
     const tools: Tool[] = [
       {
         name: 'list_tasks',
+        effect: { kind: 'read' },
         description: 'Список задач',
         run: async () => {
           events.push('list_tasks');
@@ -1020,6 +1027,7 @@ describe('runAgent: нативный function calling', () => {
       },
       {
         name: 'add_task',
+        effect: { kind: 'read' },
         description: 'Добавить задачу',
         run: async (args) => {
           events.push(`add_task:${String(args.title ?? '')}`);
@@ -1028,6 +1036,7 @@ describe('runAgent: нативный function calling', () => {
       },
       {
         name: 'search_notes',
+        effect: { kind: 'read' },
         description: 'Поиск заметок',
         run: async () => {
           events.push('search_notes');
@@ -1036,8 +1045,8 @@ describe('runAgent: нативный function calling', () => {
       },
       {
         name: 'delete_task',
+        effect: { kind: 'destroy' },
         description: 'Удалить задачу',
-        destructive: true,
         run: async () => {
           events.push('delete_task');
           return 'Удалено';
@@ -1045,6 +1054,7 @@ describe('runAgent: нативный function calling', () => {
       },
       {
         name: 'get_fin_balances',
+        effect: { kind: 'read' },
         description: 'Балансы',
         run: async () => {
           events.push('get_fin_balances');
@@ -1102,8 +1112,8 @@ describe('runAgent: подтверждение деструктивных дей
     return {
       tool: {
         name: 'delete_task',
+        effect: { kind: 'destroy' },
         description: 'Удаляет задачу без возможности восстановления',
-        destructive: true,
         schema: { type: 'object', properties: { task_id: { type: 'integer' } } },
         run: () => {
           count += 1;
@@ -1282,10 +1292,10 @@ describe('runAgent: предел шагов и баланс бюджета', () 
 
   it('батч параллельных read-only тулз тратит ровно 1 ход LLM, а не N шагов', async () => {
     const tools: Tool[] = [
-      { name: 'list_tasks', description: 'Задачи', run: () => 'Задачи: 3' },
-      { name: 'get_fin_balances', description: 'Балансы', run: () => 'Баланс: 100 EUR' },
-      { name: 'get_liabilities', description: 'Долги', run: () => 'Не хватает 93 EUR' },
-      { name: 'get_runway_forecast', description: 'Runway', run: () => '12 дней' },
+      { name: 'list_tasks', effect: { kind: 'read' }, description: 'Задачи', run: () => 'Задачи: 3' },
+      { name: 'get_fin_balances', effect: { kind: 'read' }, description: 'Балансы', run: () => 'Баланс: 100 EUR' },
+      { name: 'get_liabilities', effect: { kind: 'read' }, description: 'Долги', run: () => 'Не хватает 93 EUR' },
+      { name: 'get_runway_forecast', effect: { kind: 'read' }, description: 'Runway', run: () => '12 дней' },
     ];
     const chat = nativeChat([
       {
@@ -1328,8 +1338,8 @@ describe('runAgent: предел шагов и баланс бюджета', () 
 
   it('при исчерпании maxSteps выполняет финальный ход синтеза без тулз и отдаёт цельный ответ', async () => {
     const tools: Tool[] = [
-      { name: 'get_fin_balances', description: 'Балансы', run: () => 'Наличные: 0 EUR, CryptoX: 0 USD' },
-      { name: 'get_liabilities', description: 'Долги', run: () => 'GeForce NOW 19.99 USD 20-го числа' },
+      { name: 'get_fin_balances', effect: { kind: 'read' }, description: 'Балансы', run: () => 'Наличные: 0 EUR, CryptoX: 0 USD' },
+      { name: 'get_liabilities', effect: { kind: 'read' }, description: 'Долги', run: () => 'GeForce NOW 19.99 USD 20-го числа' },
     ];
     const chat = nativeChat([
       { content: '', toolCalls: [{ id: 'c1', name: 'get_fin_balances', args: {} }] },
@@ -1365,6 +1375,7 @@ describe('runAgent: предел шагов и баланс бюджета', () 
     const tools: Tool[] = [
       {
         name: 'list_tasks',
+        effect: { kind: 'read' },
         description: 'Задачи',
         run: () => {
           executed += 1;
@@ -1715,5 +1726,125 @@ describe('loadAgentProfile и runAgent: Executive Overload Shield из SQLite', 
     const manualPrompt = chatManualCalm.requests[0]?.systemPrompt ?? '';
     expect(manualPrompt).toContain(SHIELD_HEADER);
     expect(manualPrompt).toContain('ручной спокойный режим (low-stimulation)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Подтверждение через реальный реестр (PLAN-AGENT-WRITE-GUARD T3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Тесты выше подают инструмент в `options.tools`, то есть минуют реестр. Именно
+ * поэтому дефект `defineTool` (флаг терялся при регистрации) дожил до прода:
+ * гейт подтверждения был мёртв для всех 56 тулз. Здесь прогон идёт без
+ * `options.tools` — движок сам берёт `listTools()`, как в бою.
+ */
+describe('runAgent: подтверждение через реальный реестр', () => {
+  function countRows(table: string): number {
+    const row = getSqlite().prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number };
+    return row.n;
+  }
+
+  async function seedLiability(): Promise<void> {
+    await createLiability(USER_A, {
+      name: 'ТЕСТ-ГЕЙТ',
+      currency: 'EUR',
+      amountCents: 100_00,
+    });
+  }
+
+  beforeEach(async () => {
+    resetDb();
+    sqliteDDL(createTableStatements(TABLES));
+    await ensureUser(USER_A);
+  });
+
+  it('delete_liability без confirm не выполняется и просит подтверждение', async () => {
+    await seedLiability();
+    expect(countRows('liabilities')).toBe(1);
+
+    const chat = scriptedChat([
+      'Action: delete_liability\nAction Input: {"liability_name": "ТЕСТ-ГЕЙТ"}',
+    ]);
+    const result = await runAgent({
+      userId: USER_A,
+      text: 'удали обязательство ТЕСТ-ГЕЙТ',
+      mode: 'action',
+      store: null,
+      chatFn: chat.fn,
+      profile: PROFILE,
+      now: NOW,
+    });
+
+    expect(result.stopReason).toBe('confirm');
+    expect(result.reply).toContain('Подтвердите действие: delete_liability');
+    expect(countRows('liabilities')).toBe(1);
+  });
+
+  it('с confirm: true действие выполняется', async () => {
+    await seedLiability();
+
+    const chat = scriptedChat([
+      'Action: delete_liability\nAction Input: {"liability_name": "ТЕСТ-ГЕЙТ", "confirm": true}',
+      'Final Answer: Удалил.',
+    ]);
+    const result = await runAgent({
+      userId: USER_A,
+      text: 'да, удали обязательство ТЕСТ-ГЕЙТ',
+      mode: 'action',
+      store: null,
+      chatFn: chat.fn,
+      profile: PROFILE,
+      now: NOW,
+    });
+
+    expect(result.stopReason).toBe('final');
+    expect(result.steps[0]).toMatchObject({ ok: true });
+    expect(countRows('liabilities')).toBe(0);
+  });
+
+  it('все пять тулз с подтверждением уходят модели с полем confirm в схеме', async () => {
+    const requests: AgentChatRequest[] = [];
+    const chatFn: AgentChatFn = async (request) => {
+      requests.push(request);
+      return 'Final Answer: ок';
+    };
+
+    await runAgent({
+      userId: USER_A,
+      text: 'что у меня есть',
+      store: null,
+      chatFn,
+      profile: PROFILE,
+      now: NOW,
+    });
+
+    const specs = requests[0]?.tools ?? [];
+    const byName = new Map(specs.map((spec) => [spec.name, spec]));
+    const gated = [
+      'clear_trash',
+      'delete_account',
+      'delete_liability',
+      'delete_medication',
+      'reset_finance_history',
+    ];
+    for (const name of gated) {
+      const spec = byName.get(name);
+      expect({ name, present: spec !== undefined }).toEqual({ name, present: true });
+      const properties = (spec?.parameters as { properties?: Record<string, unknown> }).properties;
+      expect({ name, confirm: Boolean(properties?.confirm) }).toEqual({ name, confirm: true });
+    }
+
+    // Бизнес-правило тулзы не подменяется общим описанием гейта.
+    const balance = byName.get('set_account_balance');
+    const balanceProps = (balance?.parameters as { properties?: Record<string, unknown> }).properties;
+    const confirm = balanceProps?.confirm as { description?: string } | undefined;
+    expect(confirm?.description).toContain('баланс');
+    expect(Boolean(balanceProps?.confirm)).toBe(true);
+
+    // Удаления в корзину подтверждения не требуют — поля в схеме нет.
+    const trashNote = byName.get('delete_note');
+    const noteProps = (trashNote?.parameters as { properties?: Record<string, unknown> }).properties;
+    expect(noteProps?.confirm).toBeUndefined();
   });
 });

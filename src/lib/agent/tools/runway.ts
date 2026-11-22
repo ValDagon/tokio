@@ -140,6 +140,7 @@ async function getRunwayForecast(args: ToolArgs, ctx: ToolContext): Promise<Tool
 export const runwayTools: Tool[] = [
   {
     name: 'get_runway_forecast',
+    effect: { kind: 'read' },
     description:
       'Прогноз runway: сколько дней денег хватит при текущем расходе, сколько можно безопасно тратить в день и какие платежи впереди.',
     schema: {

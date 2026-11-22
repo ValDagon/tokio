@@ -204,5 +204,15 @@
     "items_few": "{{count}}件",
     "items_many": "{{count}}件",
     "items_other": "{{count}}件"
+  },
+  "agent": {
+    "confirm_prompt": "⚠️ 操作を確認してください: {{name}}{{detail}}\n\nまだ何も変更していません。「はい」と返信すれば実行します。",
+    "deadline_base": "⏱ 1回のやり取りですべてを終えられず、返信するために停止しました。",
+    "deadline_done_header": "停止までに実行したこと:",
+    "deadline_more": "…ほか {{count}} 件は非表示。",
+    "deadline_trash_hint": "削除したものは30日間ゴミ箱にあり、復元できます (view_trash)。",
+    "deadline_irreversible_hint": "元に戻せない操作は取り消せません — 結果を確認してください。",
+    "deadline_gathered_header": "集められた内容:",
+    "deadline_tail": "残りは次のメッセージで。"
   }
 }

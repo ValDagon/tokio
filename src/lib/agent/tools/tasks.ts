@@ -870,6 +870,7 @@ async function autoDetectTasks(args: ToolArgs, ctx: ToolContext): Promise<ToolOu
 export const tasksTools: Tool[] = [
   {
     name: 'set_reminder',
+    effect: { kind: 'create' },
     description:
       'Ставит точное напоминание в Telegram: задача с датой и (опционально) повтором. Время — ISO-8601 или смещение в минутах.',
     schema: {
@@ -901,6 +902,7 @@ export const tasksTools: Tool[] = [
   },
   {
     name: 'add_task',
+    effect: { kind: 'create' },
     description:
       'Добавляет задачу в список дел: категория, шаги, заметки, напоминание, срок и повтор.',
     schema: {
@@ -934,6 +936,7 @@ export const tasksTools: Tool[] = [
   },
   {
     name: 'add_tasks_batch',
+    effect: { kind: 'create', bulk: true },
     description:
       'Добавляет сразу несколько задач за один раз (импорт списка дел или напоминаний со скриншота).',
     schema: {
@@ -966,6 +969,7 @@ export const tasksTools: Tool[] = [
   },
   {
     name: 'complete_task',
+    effect: { kind: 'mutate' },
     description:
       'Отмечает задачу выполненной по названию или фрагменту. При повторе создаёт следующую итерацию.',
     schema: {
@@ -979,6 +983,7 @@ export const tasksTools: Tool[] = [
   },
   {
     name: 'list_tasks',
+    effect: { kind: 'read' },
     description:
       'Показывает актуальные незавершённые задачи с категорией, повтором, ближайшим напоминанием и числом шагов.',
     schema: {
@@ -992,6 +997,7 @@ export const tasksTools: Tool[] = [
   },
   {
     name: 'update_task',
+    effect: { kind: 'mutate' },
     description:
       'Обновляет или переносит задачу: название, напоминание/срок, категорию, заметку, повтор.',
     schema: {
@@ -1018,6 +1024,7 @@ export const tasksTools: Tool[] = [
   },
   {
     name: 'delete_task',
+    effect: { kind: 'destroy', recovery: 'trash' },
     description: 'Удаляет задачу в корзину (хранится 30 дней, можно восстановить).',
     schema: {
       type: 'object',
@@ -1030,6 +1037,7 @@ export const tasksTools: Tool[] = [
   },
   {
     name: 'auto_detect_tasks',
+    effect: { kind: 'mutate' },
     description:
       'Анализирует рассказ о совершённом действии и закрывает соответствующую открытую задачу (с повторами).',
     schema: {

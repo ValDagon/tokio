@@ -50,6 +50,7 @@ function nativeChat(replies: readonly AgentChatResult[]): AgentChatFn {
 function echoTool(order: string[]): Tool {
   return {
     name: 'echo',
+    effect: { kind: 'read' },
     description: 'Возвращает переданный текст как есть',
     schema: { type: 'object', properties: { text: { type: 'string' } } },
     run: (args) => {
@@ -317,6 +318,7 @@ describe('runAgent: мягкий дедлайн хода', () => {
     const order: string[] = [];
     const slowEcho: Tool = {
       name: 'echo',
+      effect: { kind: 'read' },
       description: 'Возвращает переданный текст как есть',
       schema: { type: 'object', properties: { text: { type: 'string' } } },
       run: (args) => {
@@ -404,5 +406,158 @@ describe('runAgent: мягкий дедлайн хода', () => {
       .map((message) => toolResultOf(message))
       .filter((observation) => observation !== null);
     expect(observations).toEqual([{ id: 'c1', name: 'echo', ok: false }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Дедлайн говорит правду о выполненных изменениях (PLAN-AGENT-WRITE-GUARD T5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Инцидент 22.11.2026: пользователь увидел «Успел собрать вот это» и рядом —
+ * строку о том, что заметка унесена в корзину. Выполненный write не имеет права
+ * выдаваться за собранную информацию, а необратимость обязана быть названа.
+ */
+describe('runAgent: дедлайн и выполненные изменения', () => {
+  /**
+   * Прогон, где модель вызывает инструменты и упирается в бюджет.
+   *
+   * Время двигает сам инструмент: часы прогона живут в тесте, поэтому дедлайн
+   * наступает на следующей проверке бюджета — после того как изменения уже
+   * выполнены (ровно сценарий инцидента).
+   */
+  async function runWithDeadline(options: {
+    tools: readonly Tool[];
+    delayMs?: number;
+    profile?: Partial<typeof PROFILE>;
+    text?: string;
+    args?: Record<string, unknown>;
+  }) {
+    let clock = 0;
+    let calls = 0;
+    const delay = options.delayMs ?? 20_000;
+    const advancing = options.tools.map((tool) => ({
+      ...tool,
+      run: async () => {
+        clock += delay;
+        const outcome = await tool.run({}, { userId: USER, timezone: 'Europe/Belgrade', baseCurrency: 'EUR', now: NOW });
+        return outcome;
+      },
+    }));
+
+    const chat: AgentChatFn = async () => {
+      calls += 1;
+      clock += 2_000;
+      if (calls === 1) {
+        return {
+          content: '',
+          toolCalls: advancing.map((tool, index) => ({
+            id: `c${index}`,
+            name: tool.name,
+            args: options.args ?? {},
+          })),
+        };
+      }
+      return { content: 'готово', toolCalls: [] };
+    };
+
+    const result = await runAgent({
+      userId: USER,
+      text: options.text ?? 'сделай дело',
+      mode: 'action',
+      tools: advancing,
+      store: null,
+      chatFn: chat,
+      profile: { ...PROFILE, ...options.profile },
+      now: NOW,
+      clock: () => clock,
+    });
+    return { result, calls };
+  }
+
+  function writeTool(name: string, effect: Tool['effect'], reply: string): Tool {
+    return {
+      name,
+      effect,
+      description: `Тестовый инструмент ${name}`,
+      schema: { type: 'object', properties: {} },
+      run: () => reply,
+    };
+  }
+
+  it('выполненный расход перечисляется как выполненное, а не как «собрано»', async () => {
+    const { result } = await runWithDeadline({
+      tools: [writeTool('add_expense', { kind: 'create' }, 'Записал расход 10 EUR.')],
+    });
+
+    expect(result.stopReason).toBe('step_limit');
+    expect(result.reply).toContain('Выполнено до остановки');
+    expect(result.reply).toContain('Записал расход 10 EUR.');
+    expect(result.reply).not.toContain('Успел собрать вот это');
+  });
+
+  it('удаление в корзину называет откат', async () => {
+    const { result } = await runWithDeadline({
+      tools: [
+        writeTool(
+          'delete_note',
+          { kind: 'destroy', recovery: 'trash' },
+          'Заметка перемещена в корзину.',
+        ),
+      ],
+    });
+
+    expect(result.reply).toContain('Заметка перемещена в корзину.');
+    expect(result.reply).toContain('корзине 30 дней');
+  });
+
+  it('безвозвратное удаление честно говорит, что отката нет', async () => {
+    const { result } = await runWithDeadline({
+      tools: [writeTool('delete_liability', { kind: 'destroy' }, 'Обязательство удалено.')],
+      // Безвозвратное удаление выполняется только после явного «да» — иначе
+      // ход уходит в подтверждение и до дедлайна не доходит.
+      args: { confirm: true },
+    });
+
+    expect(result.reply).toContain('Необратимые действия откатить нельзя');
+  });
+
+  it('при четырёх изменениях показывает три строки и счётчик остальных', async () => {
+    const { result } = await runWithDeadline({
+      tools: ['add_note', 'add_task', 'set_reminder', 'append_reflection'].map((name) =>
+        writeTool(name, { kind: 'create' }, `готово ${name}`),
+      ),
+      delayMs: 5_000,
+      text: 'сделай всё',
+    });
+
+    expect(result.steps.filter((step) => step.ok)).toHaveLength(4);
+    expect(result.reply).toContain('и ещё изменений: 1');
+    expect(result.reply.length).toBeLessThan(700);
+  });
+
+  it('без выполненных изменений текст прежний — «собрал»', async () => {
+    const readTool: Tool = {
+      name: 'list_tasks',
+      effect: { kind: 'read' },
+      description: 'Список задач',
+      schema: { type: 'object', properties: {} },
+      run: () => 'Задачи: 3',
+    };
+
+    const { result } = await runWithDeadline({ tools: [readTool] });
+
+    expect(result.reply).toContain('Успел собрать вот это');
+    expect(result.reply).not.toContain('Выполнено до остановки');
+  });
+
+  it('локаль профиля переводит и подтверждение, и дедлайн', async () => {
+    const { result } = await runWithDeadline({
+      tools: [writeTool('add_note', { kind: 'create' }, 'Заметка сохранена.')],
+      profile: { locale: 'en' },
+    });
+
+    expect(result.reply).toContain('Done before stopping');
+    expect(result.reply).not.toContain('Не успел');
   });
 });

@@ -210,6 +210,7 @@ async function clearTrash(_args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
 export const trashTools: Tool[] = [
   {
     name: 'view_trash',
+    effect: { kind: 'read' },
     description:
       'Показывает содержимое корзины (удалённые задачи и заметки) и сколько дней осталось до автоочистки.',
     schema: { type: 'object', properties: {}, required: [] },
@@ -217,6 +218,7 @@ export const trashTools: Tool[] = [
   },
   {
     name: 'restore_from_trash',
+    effect: { kind: 'mutate' },
     description: 'Восстанавливает удалённую задачу или заметку из корзины по названию, фразе или id.',
     schema: {
       type: 'object',
@@ -230,7 +232,7 @@ export const trashTools: Tool[] = [
   },
   {
     name: 'clear_trash',
-    destructive: true,
+    effect: { kind: 'destroy', bulk: true },
     description: 'Полностью и безвозвратно очищает корзину пользователя.',
     schema: { type: 'object', properties: {}, required: [] },
     run: clearTrash,

@@ -204,5 +204,15 @@
     "items_few": "{{count}} stavke",
     "items_many": "{{count}} stavki",
     "items_other": "{{count}} stavki"
+  },
+  "agent": {
+    "confirm_prompt": "⚠️ Potvrdi radnju: {{name}}{{detail}}\n\nNišta još nije izmenjeno. Odgovori „da” i izvršiću.",
+    "deadline_base": "⏱ Nisam stigao sve u jednom potezu i zaustavio sam se da bih odgovorio.",
+    "deadline_done_header": "Urađeno pre zaustavljanja:",
+    "deadline_more": "…i još {{count}}, nije prikazano.",
+    "deadline_trash_hint": "Obrisano stoji u korpi 30 dana — može se vratiti (view_trash).",
+    "deadline_irreversible_hint": "Nepovratne radnje se ne mogu poništiti — proveri rezultat.",
+    "deadline_gathered_header": "Šta sam uspeo da prikupim:",
+    "deadline_tail": "Ostalo — u sledećoj poruci."
   }
 }

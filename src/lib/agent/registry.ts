@@ -50,6 +50,27 @@ export interface ToolOutcome {
 }
 
 /**
+ * Классификация эффекта тулзы по **защищаемому состоянию владельца**, а не по
+ * SQL-оператору: удаление строки, возвращающее денежный инвариант к исходному
+ * состоянию, — это `mutate` (корректировка), а не `destroy`.
+ */
+export type ToolEffectKind = 'read' | 'create' | 'mutate' | 'destroy';
+
+/** Эффект тулзы: единственный источник истины для гейта подтверждения. */
+export interface ToolEffect {
+  kind: ToolEffectKind;
+  /**
+   * Штатный способ отката, если он есть:
+   * 'trash' — корзина с TTL 30 дней + restore_from_trash;
+   * 'undo'  — откат штатным инструментом (undo_last_transaction / delete_transaction).
+   * Отсутствие поля у destroy = безвозвратно.
+   */
+  recovery?: 'trash' | 'undo';
+  /** Одна команда затрагивает все записи класса (reset_finance_history, clear_trash, add_tasks_batch). */
+  bulk?: boolean;
+}
+
+/**
  * Инструмент агента.
  *
  * `run` может вернуть строку (короткая форма «всё хорошо») или полный исход;
@@ -61,10 +82,11 @@ export interface Tool {
   /** JSON-схема аргументов: попадает в системный промпт. */
   schema?: Record<string, unknown>;
   /**
-   * Деструктивное действие (удаление, очистка, сброс). Движок не выполняет его
-   * без явного `confirm: true` в аргументах: сначала спрашивает пользователя.
+   * Классификация эффекта. Обязательна: без неё тулза не регистрируется
+   * (`defineTool` бросает), потому что от неё зависят гейт подтверждения и
+   * ширина тулсета в прогоне.
    */
-  destructive?: boolean;
+  effect: ToolEffect;
   run(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome | string> | ToolOutcome | string;
 }
 
@@ -84,6 +106,60 @@ const registry = new Map<string, Tool>();
 // ---------------------------------------------------------------------------
 // Нормализация и валидация
 // ---------------------------------------------------------------------------
+
+/**
+ * Политика подтверждения — по эффекту, не по имени тулзы.
+ *
+ * Подтверждения требуют только необратимые и массовые удаления: `destroy` без
+ * штатного отката (безвозвратно) и `destroy` с `bulk` (одна команда сносит все
+ * записи класса). Всё остальное — `read`, `create`, `mutate`, включая bulk
+ * create вроде `add_tasks_batch`, — выполняется без вопросов.
+ */
+export function requiresConfirmation(effect: ToolEffect): boolean {
+  if (effect.kind === 'destroy') return effect.bulk === true || effect.recovery === undefined;
+  return false; // read / create / mutate — никогда, включая bulk create (add_tasks_batch)
+}
+
+const TOOL_EFFECT_KINDS: ReadonlySet<string> = new Set<string>([
+  'read',
+  'create',
+  'mutate',
+  'destroy',
+]);
+
+const TOOL_EFFECT_RECOVERIES: ReadonlySet<string> = new Set<string>(['trash', 'undo']);
+
+/**
+ * Проверяет и нормализует классификацию эффекта.
+ *
+ * Бросает, если эффекта нет или он невалиден: обязательное поле в типе ловит
+ * забывчивость на компиляции, а этот страж — на регистрации (импорт движка
+ * регистрирует тулзы, поэтому boot-тест падает сразу).
+ */
+function normalizeEffect(toolName: string, effect: ToolEffect | undefined): ToolEffect {
+  if (!effect || typeof effect !== 'object' || Array.isArray(effect)) {
+    throw new Error(`agent.registry: tool "${toolName}" has no valid effect classification`);
+  }
+  if (!TOOL_EFFECT_KINDS.has(String(effect.kind))) {
+    throw new Error(`agent.registry: tool "${toolName}" has no valid effect classification`);
+  }
+  const recovery = effect.recovery;
+  if (recovery !== undefined && !TOOL_EFFECT_RECOVERIES.has(String(recovery))) {
+    throw new Error(
+      `agent.registry: tool "${toolName}" has invalid effect recovery "${String(recovery)}"`,
+    );
+  }
+  const bulk = effect.bulk;
+  if (bulk !== undefined && typeof bulk !== 'boolean') {
+    throw new Error(`agent.registry: tool "${toolName}" has non-boolean effect bulk`);
+  }
+
+  return {
+    kind: effect.kind,
+    ...(recovery === undefined ? {} : { recovery }),
+    ...(bulk === undefined ? {} : { bulk }),
+  };
+}
 
 /** `" Add Task "` → `"add_task"`; всё, что не проходит шаблон, — пустая строка. */
 export function normalizeToolName(name: unknown): string {
@@ -111,6 +187,9 @@ export function defineTool(tool: Tool): Tool {
     name,
     description,
     ...(schema ? { schema } : {}),
+    // Класс возвращается в составе тулзы: раньше флаг молча терялся здесь, и
+    // все гейты движка оказывались мёртвым кодом в проде.
+    effect: normalizeEffect(name, tool.effect),
     run: tool.run,
   };
 }
