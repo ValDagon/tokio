@@ -59,6 +59,11 @@ paths = [
   '''^tests/config\.test\.ts$''',
   '''^package-lock\.json$''',
   '''^miniapp/package-lock\.json$''',
+  # The public instance (app9100920403) tracks its own overlay in the repo, and its
+  # deployment URL is public by design: it backs the Mini App button of @LifeOS_Public_bot.
+  # Only these two files are exempt; every other overlay file is still scanned.
+  '''^public-overlay/manifest\.json$''',
+  '''^public-overlay/README\.md$''',
 ]
 regexes = [
   '''(?i)AIza[0-9A-Za-z_-]*(?:Dummy|Test|Fake|Example)[0-9A-Za-z_-]*''',
