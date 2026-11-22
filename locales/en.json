@@ -132,7 +132,7 @@
     "btnSampleTask": "🎯 Create a sample task",
     "btnSampleNote": "📝 Create a sample note",
     "btnDemoSeed": "✨ Fill with demo data",
-    "demoSeedApplied": "✅ Demo data added: accounts, tasks, notes, and a liability are ready to explore.",
+    "demoSeedApplied": "✅ Demo data added: accounts, tasks, notes, and a recurring obligation are ready to explore.",
     "sampleTaskCreated": "✅ Sample task created and added to focus.",
     "sampleNoteCreated": "✅ Sample note saved to the inbox.",
     "sampleTaskTitle": "Try {{assistantName}} in action 🚀",
