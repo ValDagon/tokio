@@ -12,6 +12,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      OVERLAY_DIR: ${{ github.workspace }}/public-overlay
     steps:
       - uses: actions/checkout@v4
 

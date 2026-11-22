@@ -1,0 +1,195 @@
+{
+  "schemaVersion": 1,
+  "id": "tokio-public",
+  "defaultLocale": "ru",
+  "brand": {
+    "assistantName": "Tokio",
+    "localizedNames": {
+      "ru": "Tokio",
+      "en": "Tokio",
+      "sr": "Tokio",
+      "ja": "Tokio"
+    },
+    "backupPrefix": "tokio-backup",
+    "supportContact": "",
+    "miniAppUrl": "https://app9100920403.tgcloud.ai/",
+    "accessDeniedMessage": {
+      "ru": "⛔ Доступ закрыт (приватный инстанс).",
+      "en": "⛔ Access denied (private instance).",
+      "sr": "⛔ Pristup odbijen (privatna instanca).",
+      "ja": "⛔ アクセスが拒否されました（プライベートインスタンス）。"
+    }
+  },
+  "defaults": {
+    "timezone": "UTC",
+    "baseCurrency": "EUR",
+    "summaryTime": "07:00",
+    "supportedCurrencies": [
+      "EUR",
+      "USD",
+      "GBP",
+      "RUB",
+      "RSD",
+      "JPY",
+      "UAH",
+      "KZT",
+      "TRY",
+      "GEL"
+    ],
+    "inboxCurrencies": [
+      "EUR",
+      "USD",
+      "RUB",
+      "RSD",
+      "JPY"
+    ]
+  },
+  "features": {
+    "spendLimitEnabled": true,
+    "spendLimitUsd": 2,
+    "onboardingWizard": true,
+    "byokCommand": true,
+    "feedbackEnabled": true,
+    "overloadShield": true,
+    "microFocusTriage": true,
+    "calmModeUi": true,
+    "publicOpenAccess": true
+  },
+  "finance": {
+    "accountAliases": [
+      {
+        "account": "Наличные",
+        "patterns": [
+          "cash",
+          "кэш",
+          "налич",
+          "gotovina",
+          "現金"
+        ]
+      },
+      {
+        "account": "Карта",
+        "patterns": [
+          "card",
+          "карт",
+          "kartic",
+          "カード"
+        ]
+      },
+      {
+        "account": "Накопительный",
+        "patterns": [
+          "savings",
+          "накопит",
+          "štednj",
+          "貯蓄"
+        ]
+      },
+      {
+        "account": "Крипта",
+        "patterns": [
+          "crypto",
+          "крипт",
+          "kripto",
+          "暗号資産"
+        ]
+      }
+    ],
+    "defaultAccountByCurrency": {
+      "EUR": "Наличные",
+      "USD": "Карта",
+      "RUB": "Карта",
+      "RSD": "Карта",
+      "JPY": "Карта"
+    },
+    "genericCardAccountByCurrency": {
+      "EUR": "Карта",
+      "USD": "Карта",
+      "RUB": "Карта",
+      "RSD": "Карта",
+      "JPY": "Карта"
+    },
+    "reserveAmount": 0
+  },
+  "miniapp": {
+    "tabs": [
+      "today",
+      "tasks",
+      "finances",
+      "notes",
+      "system"
+    ],
+    "accountThemes": [
+      {
+        "pattern": "карт|card|kartic|カード",
+        "theme": "primary"
+      },
+      {
+        "pattern": "накоп|saving|šted|貯蓄",
+        "theme": "secondary"
+      },
+      {
+        "pattern": "крипт|crypto|kripto|暗号",
+        "theme": "accent"
+      },
+      {
+        "pattern": "налич|cash|gotov|現金",
+        "theme": "neutral"
+      }
+    ]
+  },
+  "prompts": {
+    "locales": {
+      "ru": {
+        "identity": "prompts/ru/identity.md",
+        "mission": "prompts/ru/mission.md",
+        "principles": "prompts/ru/principles.md",
+        "classifier": "prompts/ru/classifier.md"
+      },
+      "en": {
+        "identity": "prompts/en/identity.md",
+        "mission": "prompts/en/mission.md",
+        "principles": "prompts/en/principles.md",
+        "classifier": "prompts/en/classifier.md"
+      },
+      "sr": {
+        "identity": "prompts/sr/identity.md",
+        "mission": "prompts/sr/mission.md",
+        "principles": "prompts/sr/principles.md",
+        "classifier": "prompts/sr/classifier.md"
+      },
+      "ja": {
+        "identity": "prompts/ja/identity.md",
+        "mission": "prompts/ja/mission.md",
+        "principles": "prompts/ja/principles.md",
+        "classifier": "prompts/ja/classifier.md"
+      }
+    },
+    "personaStyles": {
+      "mentor": {
+        "ru": "Мудрый, поддерживающий наставник и жизненный коуч.",
+        "en": "A wise, supportive mentor and life coach.",
+        "sr": "Mudar, podržavajući mentor i životni kouč.",
+        "ja": "思慮深く、温かく支えてくれるメンター兼ライフコーチです。"
+      },
+      "strategist": {
+        "ru": "Стратегический партнёр, который держит фокус на приоритетах, развилках и системном видении.",
+        "en": "A strategic partner focused on priorities, trade-offs, and systemic thinking.",
+        "sr": "Strateški partner koji drži fokus na prioritetima, opcijama i sistemskom sagledavanju.",
+        "ja": "優先順位、選択肢、全体像に焦点を当てる戦略的パートナーです。"
+      },
+      "calm_partner": {
+        "ru": "Максимально деликатный, спокойный и заземляющий собеседник без давления и суеты.",
+        "en": "A gentle, calm, grounding partner who reduces noise and pressure.",
+        "sr": "Veoma pažljiv, smiren i prizemljujući sagovornik bez pritiska i žurbe.",
+        "ja": "プレッシャーを与えず、穏やかに気持ちを落ち着かせてくれる丁寧な話し相手です。"
+      },
+      "concise": {
+        "ru": "Предельно лаконичный, чёткий и структурированный прагматик.",
+        "en": "An ultra-concise, clear, structured pragmatist.",
+        "sr": "Izuzetno sažet, jasan i strukturiran pragmatik.",
+        "ja": "極めて簡潔で明快、構造的に考える現実派です。"
+      }
+    }
+  }
+}
