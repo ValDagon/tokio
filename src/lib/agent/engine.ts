@@ -1269,6 +1269,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         skills: appliedSkills,
         stopReason,
         steps,
+        ...(deadlineHit ? { deadline: true } : {}),
       });
     }
 
