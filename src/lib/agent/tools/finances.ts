@@ -46,7 +46,19 @@ import {
   withTransaction,
   EXCHANGE_TOPUP_SUFFIX,
 } from '../../dal/finances';
-import { getRates, hasRate, convert, BASE_CURRENCY } from '../../dal/fx';
+import {
+  getLatestRate,
+  getRate,
+  getRates,
+  hasRate,
+  convert,
+  rateOf,
+  roundUpToNextNinetyNine,
+  normalizeCurrency,
+  normalizeDate,
+  setRates,
+  BASE_CURRENCY,
+} from '../../dal/fx';
 import { calculateRunway } from '../../runway';
 import type {
   AccountEnvelope,
@@ -64,6 +76,92 @@ import { formatCents, formatMoney, monthKey, parseAmountToCents } from '../../ut
 
 function fail(content: string): ToolOutcome {
   return { ok: false, content };
+}
+
+/** Максимальный возраст курса, который ещё считается живым (дни). */
+const MAX_FX_AGE_DAYS = 7;
+
+interface LiveRateTable {
+  rates: Record<string, number>;
+  /** Дата, к которой относится курс (`YYYY-MM-DD`). */
+  date: string;
+  /** Курс не за сегодняшний день — дата названа пользователю явно. */
+  stale: boolean;
+}
+
+/** Сколько дней между двумя датами `YYYY-MM-DD`. */
+function daysBetween(fromIso: string, toIso: string): number {
+  const from = Date.parse(`${fromIso}T00:00:00Z`);
+  const to = Date.parse(`${toIso}T00:00:00Z`);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
+  return Math.abs(Math.round((to - from) / 86_400_000));
+}
+
+/**
+ * Курс на дату конвертации: сегодняшняя строка `fx_rates`, иначе самый свежий.
+ * Курс старше `MAX_FX_AGE_DAYS` считается неживым — конвертация не выполняется,
+ * чтобы не считать деньги по протухшему курсу. `null` — курсов нет вовсе.
+ */
+async function loadLiveRateTable(ctx: ToolContext): Promise<LiveRateTable | ToolOutcome> {
+  const today = normalizeDate(ctx.now);
+  const todayRow = await getRate(today);
+  if (todayRow) return { rates: todayRow.rates, date: todayRow.date, stale: false };
+
+  const latest = await getLatestRate();
+  if (!latest) {
+    return fail(
+      'Курсов валют ещё нет — конвертацию не считаю. Заведи курс за сегодня и повтори.',
+    );
+  }
+  const age = daysBetween(latest.date, today);
+  if (age > MAX_FX_AGE_DAYS) {
+    return fail(
+      `Курс для конвертации устарел: последний за ${latest.date}, это ${age} дн. назад. ` +
+        'Нужен курс на сегодня — обнови его и повтори обмен.',
+    );
+  }
+  return { rates: latest.rates, date: latest.date, stale: true };
+}
+
+function isRateFailure(value: LiveRateTable | ToolOutcome): value is ToolOutcome {
+  return 'ok' in value && 'content' in value;
+}
+
+/** Строка для описания операции: по какому курсу считали и с каким округлением. */
+function exchangeRateNote(fromCurrency: string, toCurrency: string, table: LiveRateTable): string {
+  let ratio: number | null = null;
+  try {
+    ratio = rateOf(toCurrency, table.rates) / rateOf(fromCurrency, table.rates);
+  } catch {
+    ratio = null;
+  }
+  const rateText =
+    ratio === null
+      ? 'курс из таблицы'
+      : (ratio >= 0.001 ? ratio.toFixed(4) : ratio.toFixed(8))
+          .replace(/0+$/, '')
+          .replace(/\.$/, '');
+  return `Обмен по курсу на ${table.date} (1 ${fromCurrency} = ${rateText} ${toCurrency}), округление вверх до ,99`;
+}
+
+/**
+ * Вопрос-подтверждение, когда операция забирает с счёта-источника весь остаток
+ * (или больше — тогда нехватку добирает расчётный счёт).
+ */
+function drainConfirmation(account: AccountRow, amountCents: number): ToolOutcome {
+  const atZero = account.currentBalanceCents <= 0;
+  const what = atZero
+    ? `На счёте «${account.name}» (${account.currency}) сейчас ${formatMoney(
+        account.currentBalanceCents,
+        account.currency,
+      )}: сумма пойдёт с расчётного субсчёта и опустошит его.`
+    : `Операция опустошит счёт «${account.name}» (${account.currency}) до нуля: сейчас на нём ` +
+      `${formatMoney(account.currentBalanceCents, account.currency)}, списывается ` +
+      `${formatMoney(amountCents, account.currency)}.`;
+  return fail(
+    `${what} Спроси у пользователя одной короткой строкой, действительно ли переводить ВСЁ; ` +
+      'после явного «да» повтори вызов с confirm: true.',
+  );
 }
 
 function errorText(error: unknown): string {
@@ -405,11 +503,29 @@ async function addTransfer(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
   try {
     const fromResolution = accountOrFail(await resolveAccount(ctx, fromName, currency));
     if (isOutcome(fromResolution)) return fromResolution;
+    const from = fromResolution.account;
+
+    // Подтверждение — до резолва получателя: отказ не должен создавать счёт.
+    if (amountCents >= from.currentBalanceCents && args.confirm !== true) {
+      return drainConfirmation(from, amountCents);
+    }
+
     const toResolution = accountOrFail(await resolveAccount(ctx, toName, currency));
     if (isOutcome(toResolution)) return toResolution;
-
-    const from = fromResolution.account;
     const to = toResolution.account;
+
+    if (from.currency !== to.currency) {
+      return fail(
+        `Перевод возможен только в одной валюте: «${from.name}» (${from.currency}) и ` +
+          `«${to.name}» (${to.currency}). Для обмена валют используй add_exchange.`,
+      );
+    }
+    if (currency && normalizeCurrency(currency) !== from.currency) {
+      return fail(
+        `Валюта перевода не совпадает с валютой счёта «${from.name}» (${from.currency}). ` +
+          'Молча пересчитывать в другую валюту нельзя.',
+      );
+    }
 
     const tx = await createTransaction(ctx.userId, {
       kind: 'transfer',
@@ -447,15 +563,25 @@ async function addTransfer(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
  * Обмен валюты: две строки `kind='exchange'` с общим `transfer_group_id`
  * (исходящая с минусом, входящая с плюсом). Источник списывается через
  * `debitWithSettlement`, поэтому обмен добирает нехватку со связанного счёта как расход.
+ *
+ * `to_amount` необязателен: без него сумма зачисления считается по живому курсу
+ * `fx_rates` на дату операции и округляется вверх до `x,99` (решение владельца
+ * 22.11.2026). Курс старше недели не используется.
  */
 async function addExchange(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
   const fromAmountCents = centsArg(args.from_amount);
-  const toAmountCents = centsArg(args.to_amount);
-  if (fromAmountCents === null || toAmountCents === null) {
-    return fail('Не понял суммы обмена — передайте from_amount и to_amount числами.');
+  if (fromAmountCents === null) {
+    return fail(
+      `Не понял сумму списания «${String(args.from_amount)}» — передайте число, например 100.`,
+    );
   }
-  if (fromAmountCents <= 0 || toAmountCents <= 0) {
-    return fail('Суммы обмена должны быть больше нуля.');
+  if (fromAmountCents <= 0) return fail('Сумма обмена должна быть больше нуля.');
+
+  const explicitToCents = optionalCents(args.to_amount);
+  if (explicitToCents === null) {
+    return fail(
+      `Не понял сумму зачисления «${String(args.to_amount)}» — передайте число или не указывайте её совсем, тогда посчитаю по курсу.`,
+    );
   }
 
   const fromName = requiredString(args, 'from_account');
@@ -464,18 +590,69 @@ async function addExchange(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
   const toCurrency = requiredString(args, 'to_currency')?.toUpperCase();
   if (!fromName || !toName || !fromCurrency || !toCurrency) {
     return fail(
-      'Для обмена нужны from_account, from_amount, from_currency и to_account, to_amount, to_currency.',
+      'Для обмена нужны from_account, from_amount, from_currency и to_account, to_currency. ' +
+        'to_amount можно не указывать — посчитаю по курсу.',
     );
   }
 
   try {
     const fromResolution = accountOrFail(await resolveAccount(ctx, fromName, fromCurrency));
     if (isOutcome(fromResolution)) return fromResolution;
+    const from = fromResolution.account;
+
+    // Подтверждение — до резолва получателя и до расчёта курса: отказ не должен
+    // создавать счёт получателя и не должен трогать валютные курсы.
+    if (fromAmountCents >= from.currentBalanceCents && args.confirm !== true) {
+      return drainConfirmation(from, fromAmountCents);
+    }
+
     const toResolution = accountOrFail(await resolveAccount(ctx, toName, toCurrency));
     if (isOutcome(toResolution)) return toResolution;
-
-    const from = fromResolution.account;
     const to = toResolution.account;
+
+    // Валюта счёта обязана совпасть с запрошенной: иначе `createExchange`
+    // молча сконвертирует ещё раз, и округлённая сумма развернётся обратно.
+    if (normalizeCurrency(fromCurrency) !== from.currency || normalizeCurrency(toCurrency) !== to.currency) {
+      return fail(
+        `Валюта счёта не совпадает с запрошенной: «${from.name}» (${from.currency}), ` +
+          `«${to.name}» (${to.currency}). Укажи валюты этих счетов или другие счета — ` +
+          'молча пересчитывать в другую валюту нельзя.',
+      );
+    }
+
+    let toAmountCents = explicitToCents;
+    let rateTable: LiveRateTable | null = null;
+    const sameCurrency = normalizeCurrency(fromCurrency) === normalizeCurrency(toCurrency);
+    if (toAmountCents === undefined) {
+      if (sameCurrency) {
+        // Обмен внутри одной валюты — не конвертация: курс не нужен и
+        // округление вверх не применяется (решение владельца 22.11.2026).
+        toAmountCents = fromAmountCents;
+      } else {
+        const loaded = await loadLiveRateTable(ctx);
+        if (isRateFailure(loaded)) return loaded;
+        rateTable = loaded;
+        try {
+          toAmountCents = roundUpToNextNinetyNine(
+            convert(fromAmountCents, fromCurrency, toCurrency, rateTable.rates),
+          );
+        } catch (error) {
+          return fail(
+            `Нет курса для конвертации ${fromCurrency} → ${toCurrency}: ${errorText(error)}. ` +
+              'Заведи курс за сегодня через set_fx_rate или укажи to_amount явно.',
+          );
+        }
+      }
+    }
+
+    if (toAmountCents <= 0) return fail('Суммы обмена должны быть больше нуля.');
+
+    const userDescription = stringArg(args, 'description');
+    const description = rateTable
+      ? [userDescription, exchangeRateNote(fromCurrency, toCurrency, rateTable)]
+          .filter(Boolean)
+          .join(' · ')
+      : userDescription;
 
     const result = await createExchange(ctx.userId, {
       fromAccountId: from.id,
@@ -484,14 +661,18 @@ async function addExchange(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
       toAccountId: to.id,
       toCents: toAmountCents,
       toCurrency,
+      ...(rateTable ? { rates: rateTable.rates } : {}),
+      ...(description ? { description } : {}),
       occurredAt: ctx.now,
     });
+
+    const rateLine = rateTable ? ` ${exchangeRateNote(fromCurrency, toCurrency, rateTable)}.` : '';
 
     return {
       ok: true,
       content:
         `Обменял ${formatCents(fromAmountCents)} ${fromCurrency} → ` +
-        `${formatCents(toAmountCents)} ${toCurrency}. ` +
+        `${formatCents(toAmountCents)} ${toCurrency}.${rateLine} ` +
         `Балансы счетов «${from.name}» и «${to.name}» обновлены.`,
       data: {
         transaction_id: result.out.id,
@@ -504,6 +685,7 @@ async function addExchange(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
         to_account_name: to.name,
         to_cents: toAmountCents,
         to_currency: toCurrency,
+        ...(rateTable ? { rate_date: rateTable.date, rate_stale: rateTable.stale } : {}),
       },
     };
   } catch (error) {
@@ -715,6 +897,81 @@ async function getBalances(_args: ToolArgs, ctx: ToolContext): Promise<ToolOutco
 }
 
 // ---------------------------------------------------------------------------
+// get_fx_rates
+// ---------------------------------------------------------------------------
+
+/** Живые курсы валют: дата, база и сколько единиц валюты за 1 базовую. */
+async function getFxRates(_args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
+  try {
+    const latest = await getLatestRate();
+    if (!latest) {
+      return fail(
+        'Курсов валют ещё нет. Обмен считать не по чему — заведи курс за сегодня и повтори.',
+      );
+    }
+    const entries = Object.entries(latest.rates).sort(([a], [b]) => a.localeCompare(b));
+    const lines = [`Курсы на ${latest.date} (база ${latest.base}), 1 ${latest.base} =`];
+    for (const [code, rate] of entries) {
+      lines.push(`• ${rate} ${code}`);
+    }
+    const age = daysBetween(latest.date, normalizeDate(ctx.now));
+    if (age > MAX_FX_AGE_DAYS) {
+      lines.push(`⚠️ Курс устарел: это ${age} дн. назад, для обмена нужен курс на сегодня.`);
+    }
+    return {
+      ok: true,
+      content: lines.join('\n'),
+      data: { date: latest.date, base: latest.base, rates: { ...latest.rates }, age_days: age },
+    };
+  } catch (error) {
+    return fail(`Не удалось прочитать курсы: ${errorText(error)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// set_fx_rate
+// ---------------------------------------------------------------------------
+
+/**
+ * Задать живой курс валюты на сегодня: сколько единиц валюты за 1 EUR.
+ *
+ * Единственный способ поддерживать `fx_rates` в рантайме (фонового поставщика
+ * курсов нет), поэтому конвертация опирается на курс, который владелец назвал
+ * сам. Существующая строка за сегодня дополняется, а не перезаписывается.
+ */
+async function setFxRate(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
+  const code = stringArg(args, 'code')?.toUpperCase();
+  if (!code) return fail('Укажи код валюты, например USD.');
+
+  const perEur = Number(String(args.per_eur ?? '').replace(',', '.'));
+  if (!Number.isFinite(perEur) || perEur <= 0) {
+    return fail(
+      'Курс должен быть положительным числом: сколько единиц валюты за 1 EUR, например 0.92.',
+    );
+  }
+
+  try {
+    const today = normalizeDate(ctx.now);
+    const existing = await getRate(today);
+    const normalized = normalizeCurrency(code);
+    const rates = { ...(existing?.rates ?? {}), [normalized]: perEur };
+    const saved = await setRates(today, rates);
+    return {
+      ok: true,
+      content: `Курс на ${saved.date} сохранён: 1 ${BASE_CURRENCY} = ${perEur} ${normalized}.`,
+      data: {
+        date: saved.date,
+        base: saved.base,
+        code: normalized,
+        per_eur: perEur,
+      },
+    };
+  } catch (error) {
+    return fail(`Не удалось сохранить курс: ${errorText(error)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // set_account_balance
 // ---------------------------------------------------------------------------
 
@@ -734,6 +991,13 @@ async function setAccountBalanceTool(args: ToolArgs, ctx: ToolContext): Promise<
   try {
     const existing = await findAccountByName(ctx.userId, name, currency);
     if (existing) {
+      if (
+        existing.currentBalanceCents > 0 &&
+        newBalanceCents === 0 &&
+        args.confirm !== true
+      ) {
+        return drainConfirmation(existing, existing.currentBalanceCents);
+      }
       const updated = await setAccountBalance(ctx.userId, existing.id, newBalanceCents);
       return {
         ok: true,
@@ -1006,6 +1270,9 @@ async function adjustAccountBalance(args: ToolArgs, ctx: ToolContext): Promise<T
     }
 
     const newBalanceCents = account.currentBalanceCents + deltaCents;
+    if (newBalanceCents === 0 && account.currentBalanceCents > 0 && args.confirm !== true) {
+      return drainConfirmation(account, Math.abs(deltaCents));
+    }
     const updated = await setAccountBalance(ctx.userId, account.id, newBalanceCents);
 
     return {
@@ -1942,6 +2209,11 @@ export const financeTools: Tool[] = [
         to_account: { type: 'string', description: 'Счёт, куда переводим.' },
         currency: { type: 'string', description: 'Валюта перевода.' },
         description: { type: 'string', description: 'Комментарий к переводу.' },
+        confirm: {
+          type: 'boolean',
+          description:
+            'Подтверждение, если перевод опустошает счёт-источник. Спрашивай у пользователя; true — только после явного «да».',
+        },
       },
       required: ['amount', 'from_account', 'to_account'],
     },
@@ -1950,7 +2222,8 @@ export const financeTools: Tool[] = [
   {
     name: 'add_exchange',
     description:
-      'Обменять валюту между счетами: списать сумму в одной валюте и зачислить в другой.',
+      'Обменять валюту между счетами: списать сумму в одной валюте и зачислить в другой. ' +
+      'Если to_amount не указан, сумма зачисления считается по живому курсу и округляется вверх до ,99.',
     schema: {
       type: 'object',
       properties: {
@@ -1958,17 +2231,19 @@ export const financeTools: Tool[] = [
         from_amount: { type: 'string', description: 'Сколько списать.' },
         from_currency: { type: 'string', description: 'Валюта списания.' },
         to_account: { type: 'string', description: 'Счёт-получатель.' },
-        to_amount: { type: 'string', description: 'Сколько зачислить.' },
+        to_amount: {
+          type: 'string',
+          description:
+            'Сколько зачислить. Не указывай, если нужен расчёт по курсу: сумма посчитается сама и округлится вверх до ,99.',
+        },
         to_currency: { type: 'string', description: 'Валюта зачисления.' },
+        confirm: {
+          type: 'boolean',
+          description:
+            'Подтверждение, если обмен опустошает счёт-источник. Спрашивай у пользователя; true — только после явного «да».',
+        },
       },
-      required: [
-        'from_account',
-        'from_amount',
-        'from_currency',
-        'to_account',
-        'to_amount',
-        'to_currency',
-      ],
+      required: ['from_account', 'from_amount', 'from_currency', 'to_account', 'to_currency'],
     },
     run: addExchange,
   },
@@ -2015,6 +2290,30 @@ export const financeTools: Tool[] = [
     run: getBalances,
   },
   {
+    name: 'get_fx_rates',
+    description:
+      'Показать живые курсы валют (дата, база, сколько единиц валюты за 1 базовую). Нужны для конвертации, чтобы не выдумывать курс.',
+    schema: { type: 'object', properties: {} },
+    run: getFxRates,
+  },
+  {
+    name: 'set_fx_rate',
+    description:
+      'Сохранить живой курс валюты на сегодня: сколько единиц валюты за 1 EUR. Нужен, когда для обмена нет курса на дату операции.',
+    schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Код валюты, например USD.' },
+        per_eur: {
+          type: 'string',
+          description: 'Сколько единиц валюты за 1 EUR, например 0.92 (база — EUR).',
+        },
+      },
+      required: ['code', 'per_eur'],
+    },
+    run: setFxRate,
+  },
+  {
     name: 'set_account_balance',
     description: 'Установить точный баланс счёта (если счёта нет — создать его).',
     schema: {
@@ -2023,6 +2322,11 @@ export const financeTools: Tool[] = [
         account_name: { type: 'string', description: 'Название счёта.' },
         currency: { type: 'string', description: 'Валюта счёта.' },
         new_balance: { type: 'string', description: 'Новый баланс, например "350,00".' },
+        confirm: {
+          type: 'boolean',
+          description:
+            'Подтверждение, если новый баланс — ноль при ненулевом текущем. Спрашивай у пользователя; true — только после явного «да».',
+        },
       },
       required: ['account_name', 'new_balance'],
     },
@@ -2077,6 +2381,11 @@ export const financeTools: Tool[] = [
         account_name: { type: 'string', description: 'Название счёта.' },
         currency: { type: 'string', description: 'Валюта счёта.' },
         delta: { type: 'string', description: 'Изменение баланса, например "-25,00".' },
+        confirm: {
+          type: 'boolean',
+          description:
+            'Подтверждение, если корректировка приводит баланс к нулю. Спрашивай у пользователя; true — только после явного «да».',
+        },
       },
       required: ['account_name', 'delta'],
     },

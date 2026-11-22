@@ -248,6 +248,26 @@ export function convert(
 }
 
 /**
+ * Округление конвертации вверх до ближайшей суммы вида `x,99`.
+ *
+ * Решение владельца (22.11.2026): при обмене валюты сумма зачисления округляется
+ * только вверх, чтобы обмен никогда не терял деньги на округлении:
+ * 30,23 → 30,99; 0,50 → 0,99. Сумма, уже кратная `,99` или целому числу, не
+ * меняется — иначе точный перевод получал бы лишние 99 копеек.
+ *
+ * Округление применяется ТОЛЬКО к конвертации; расходы, доходы и переводы
+ * в одной валюте остаются точными.
+ */
+export function roundUpToNextNinetyNine(cents: Cents): Cents {
+  if (!Number.isFinite(cents)) throw new Error('fx.roundUpToNextNinetyNine: finite amount required');
+  const value = Math.round(cents);
+  if (value <= 0) return 0;
+  const rest = value % 100;
+  if (rest === 99 || rest === 0) return value;
+  return Math.floor(value / 100) * 100 + 99;
+}
+
+/**
  * Множитель для `transactions.fx_rate`: сколько базовой валюты в 1 единице.
  * В upstream `fx_rate = amount_eur / amount`, то есть 1 / rate.
  */

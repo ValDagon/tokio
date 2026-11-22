@@ -5,7 +5,7 @@ import '../../src/lib/agent/engine';
 import { listTools } from '../../src/lib/agent/registry';
 
 describe('agent boot path', () => {
-  it('registers all 54 tools on module import', () => {
-    expect(listTools().length).toBe(54);
+  it('registers all 56 tools on module import', () => {
+    expect(listTools().length).toBe(56);
   });
 });

@@ -74,10 +74,10 @@ describe('каталог по фокусу', () => {
     }
   });
 
-  it('без фокуса отдаёт все 54 инструментов', () => {
+  it('без фокуса отдаёт все 56 инструментов', () => {
     const prompt = catalog(null);
 
-    expect(summaries).toHaveLength(54);
+    expect(summaries).toHaveLength(56);
     for (const tool of agentTools) {
       expect(prompt).toContain(`- ${tool.name}:`);
     }
