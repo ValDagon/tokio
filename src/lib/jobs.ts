@@ -98,7 +98,16 @@ export interface ReminderClockOutcome {
   };
 }
 
-export const CLOCK_STALL_AFTER_MINUTES = 45;
+/**
+ * Порог тревоги «внешние часы молчат», в минутах.
+ *
+ * GitHub Actions отдаёт лишь часть запусков расписания: при шаге 15 минут наблюдаемый
+ * такт — 2–6 запусков в сутки, а разрывы 4–9 часов штатны (замер 22.11.2026,
+ * `.scratch/incident-2211/infra-clock-facts.md`). Порог в 45 минут объявлял
+ * тревогу на каждом обычном ходе и врал о причине. Сутки — примерно 2.5 худшего
+ * наблюдённого разрыва: тревога означает реальную остановку, а не троттлинг.
+ */
+export const CLOCK_STALL_AFTER_MINUTES = 24 * 60;
 
 export function clockHeartbeatKey(userId: number): string {
   return `clock:v1:${userId}`;

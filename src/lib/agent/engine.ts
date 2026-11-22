@@ -47,7 +47,7 @@ import { listTasks } from '../dal/tasks.js';
 import { getUser } from '../dal/users.js';
 import { listActiveSkills, recordFailure, recordSkillRun, type FailureReason } from '../evolution.js';
 import { chat, type ChatMessage } from '../gemini.js';
-import { normalizeLocale } from '../i18n.js';
+import { normalizeLocale, t, type LocaleCode } from '../i18n.js';
 import { getOverlay } from '../overlay.js';
 import { dateKey, truncate } from '../utils.js';
 import { CUSTOM_INSTRUCTIONS_SLUG } from './constants.js';
@@ -58,6 +58,7 @@ import {
 } from '../dal/agentState.js';
 import {
   buildSystemPrompt,
+  READ_ONLY_DIRECTIVE,
   computeWorkloadMetrics,
   detectMode,
   evaluateExecutiveOverload,
@@ -251,6 +252,12 @@ export interface RunAgentOptions {
    */
   turnBudgetMs?: number;
   /**
+   * Доступ к записи в этом ходе. `'read-only'` оставляет только тулзы класса
+   * `read`: светская реплика («привет», «спасибо») не имеет права менять данные
+   * владельца, даже если модель выбрала write-инструмент. По умолчанию `'full'`.
+   */
+  toolAccess?: 'full' | 'read-only';
+  /**
    * Живая индикация стадий («печатает…» и строка прогресса). Хук необязателен,
    * а его ошибки проглатываются: падение индикатора не должно рвать ход.
    */
@@ -346,12 +353,22 @@ export function confirmationObservation(name: string): string {
   return `Требуется подтверждение пользователя: ${name}. Действие не выполнено.`;
 }
 
-/** Вопрос пользователю, когда деструктивный вызов пришёл без подтверждения. */
-export function confirmationPrompt(name: string, args: Record<string, unknown>): string {
+/**
+ * Вопрос пользователю, когда деструктивный вызов пришёл без подтверждения.
+ *
+ * Строки — из локалей (`agent.confirm_prompt`): пользователь с `locale=en` не
+ * должен получать русский вопрос. Аргументы печатаются как есть, кроме самого
+ * `confirm`, — по ним видно, что именно будет удалено.
+ */
+export function confirmationPrompt(
+  name: string,
+  args: Record<string, unknown>,
+  locale?: LocaleCode | null,
+): string {
   const payload = { ...args };
   delete payload.confirm;
   const detail = Object.keys(payload).length > 0 ? ` ${JSON.stringify(payload)}` : '';
-  return `⚠️ Подтвердите действие: ${name}${detail}\n\nПока ничего не изменено. Ответьте «да» — и я выполню.`;
+  return t(locale, 'agent.confirm_prompt', { name, detail });
 }
 
 // ---------------------------------------------------------------------------
@@ -606,18 +623,66 @@ function stepLimitReply(steps: readonly AgentStep[]): string {
 }
 
 /**
- * Ответ, когда ход уперся в мягкий дедлайн: честно про собранное.
+ * Ответ, когда ход уперся в мягкий дедлайн: честно про сделанное и собранное.
  *
  * Детерминированный и короткий — его надо успеть отправить до того, как
  * платформа убьёт изолят. Поэтому причиной остановки остаётся `step_limit`,
  * а не `llm_error`: модели на этом пути уже не было.
+ *
+ * Выполненные изменения данных перечисляются отдельно и никогда не выдаются за
+ * «собранное»: инцидент 22.11.2026 показал пользователю удаление заметки в
+ * строке «Успел собрать вот это», без перечня и без намёка на откат. Данные для
+ * честного перечня уже лежат в `steps`, сети и модели здесь нет.
  */
-function deadlineReply(steps: readonly AgentStep[]): string {
-  const lastObservation = [...steps].reverse().find((step) => step.observation)?.observation;
-  const gathered = lastObservation ? truncate(lastObservation.trim(), 400).trim() : '';
-  const base = '⏱ Не успел всё за один ход и остановился, чтобы успеть ответить.';
-  const detail = gathered ? `\n\nУспел собрать вот это:\n${gathered}` : '';
-  return `${base}${detail}\n\nОстальное — следующим сообщением.`;
+function deadlineReply(
+  steps: readonly AgentStep[],
+  tools: readonly Tool[],
+  locale?: LocaleCode | null,
+): string {
+  const base = t(locale, 'agent.deadline_base');
+  const tail = t(locale, 'agent.deadline_tail');
+
+  const effectsByName = new Map(tools.map((tool) => [tool.name, tool.effect]));
+  const executed = steps.filter((step) => step.action !== null && step.ok === true);
+  const writes = executed.filter((step) => {
+    const effect = step.action ? effectsByName.get(step.action.name) : undefined;
+    return effect !== undefined && effect.kind !== 'read';
+  });
+
+  const parts: string[] = [base];
+
+  if (writes.length > 0) {
+    const shown = writes
+      .slice(0, 3)
+      .map((step) => `• ${truncate((step.observation ?? step.action?.name ?? '').trim(), 120)}`);
+    parts.push(`${t(locale, 'agent.deadline_done_header')}\n${shown.join('\n')}`);
+    if (writes.length > shown.length) {
+      parts.push(t(locale, 'agent.deadline_more', { count: writes.length - shown.length }));
+    }
+
+    const effects = writes
+      .map((step) => (step.action ? effectsByName.get(step.action.name) : undefined))
+      .filter((effect): effect is NonNullable<typeof effect> => effect !== undefined);
+    if (effects.some((effect) => effect.kind === 'destroy' && effect.recovery === 'trash')) {
+      parts.push(t(locale, 'agent.deadline_trash_hint'));
+    }
+    if (
+      effects.some(
+        (effect) => effect.kind === 'destroy' && effect.recovery === undefined && effect.bulk !== true,
+      )
+    ) {
+      parts.push(t(locale, 'agent.deadline_irreversible_hint'));
+    }
+  } else {
+    const lastObservation = [...steps].reverse().find((step) => step.observation)?.observation;
+    const gathered = lastObservation ? truncate(lastObservation.trim(), 400).trim() : '';
+    if (gathered) {
+      parts.push(`${t(locale, 'agent.deadline_gathered_header')}\n${gathered}`);
+    }
+  }
+
+  parts.push(tail);
+  return parts.join('\n\n');
 }
 
 /** Детерминированная каноническая сериализация JSON (устойчива к порядку ключей). */
@@ -767,7 +832,14 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     const appliedSkills = [...(profile.activeSkills ?? [])];
     const resolvedMode: AgentMode =
       options.mode && options.mode !== 'auto' ? options.mode : detectMode(text);
-    const tools = options.tools ?? listTools();
+    const readOnly = options.toolAccess === 'read-only';
+    const declaredTools = options.tools ?? listTools();
+    // Read-only ход: право на запись отнимается физически — write-тулз нет ни в
+    // спеках модели, ни в диспетчере вызовов, поэтому «незапрошенный» write
+    // невозможен даже при ошибке модели.
+    const tools = readOnly
+      ? declaredTools.filter((tool) => tool.effect.kind === 'read')
+      : declaredTools;
     const toolSpecs: ProviderToolSpec[] = tools.map((tool) => {
       // Без схемы инструмент остаётся вызываемым: пустой объект валиден.
       const parameters = tool.schema ?? { type: 'object', properties: {} };
@@ -949,11 +1021,11 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         deadlineHit = true;
         deadlineCause = 'budget';
         stopReason = 'step_limit';
-        reply = deadlineReply(steps);
+        reply = deadlineReply(steps, tools, profile.locale);
         break;
       }
       const prepared = sanitizeThread(working);
-      const systemPrompt = buildSystemPrompt({
+      const baseSystemPrompt = buildSystemPrompt({
         locale: profile.locale,
         profile: {
           ...profile,
@@ -966,6 +1038,11 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         now,
         executiveOverload,
       });
+      // Read-only ход проговаривает ограничение модели: тулсета для записи нет,
+      // и модель обязана сказать об этом честно, а не имитировать действие.
+      const systemPrompt = readOnly
+        ? `${baseSystemPrompt}\n\n${READ_ONLY_DIRECTIVE}`
+        : baseSystemPrompt;
 
       await notifyProgress({ stage: 'model', step: iteration });
       await traceTurn({ stage: 'model-start', modelStarted: true });
@@ -1159,13 +1236,13 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
 
         if (deadlineHit) {
           stopReason = 'step_limit';
-          reply = deadlineReply(steps);
+          reply = deadlineReply(steps, tools, profile.locale);
           break;
         }
 
         if (pendingConfirmation) {
           stopReason = 'confirm';
-          reply = confirmationPrompt(pendingConfirmation.name, pendingConfirmation.args);
+          reply = confirmationPrompt(pendingConfirmation.name, pendingConfirmation.args, profile.locale);
           working.push({ role: 'assistant', content: reply });
           break;
         }
@@ -1206,7 +1283,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         deadlineHit = true;
         deadlineCause = 'tools-skipped';
         stopReason = 'step_limit';
-        reply = deadlineReply(steps);
+        reply = deadlineReply(steps, tools, profile.locale);
         break;
       }
 
@@ -1238,7 +1315,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         });
         totalToolCalls += 1;
         stopReason = 'confirm';
-        reply = confirmationPrompt(call.name, args);
+        reply = confirmationPrompt(call.name, args, profile.locale);
         working.push({ role: 'assistant', content: reply });
         break;
       }
@@ -1291,7 +1368,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           maxSteps,
           now,
           executiveOverload,
-        })}\n\n${FINAL_SYNTHESIS_DIRECTIVE}`;
+        })}\n\n${readOnly ? `${READ_ONLY_DIRECTIVE}\n\n` : ''}${FINAL_SYNTHESIS_DIRECTIVE}`;
 
         await notifyProgress({ stage: 'model', step: iteration });
         await traceTurn({ stage: 'model-start', modelStarted: true });

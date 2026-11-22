@@ -490,13 +490,19 @@ export async function diagnosticsReply(
       ? diagnosticsStamp(clock.lastExternalSuccessAt, timeZone)
       : '«ещё не было»';
     lines.push(`Внешний будильник: последний тик ${attempted}, последний успех ${succeeded}.`);
+    // Фактический такт проговаривается всегда: иначе редкий тик читается как
+    // поломка. GitHub отдаёт лишь часть запусков `*/15` (2–6 в сутки), поэтому
+    // «молчание» в несколько часов — норма, а не остановка расписания.
+    lines.push(
+      'Такт внешних часов — best-effort: GitHub отдаёт лишь часть запусков расписания (фактически 2–6 в сутки). Напоминания добираются при каждом касании бота.',
+    );
     const successMs = clock.lastExternalSuccessAt ? Date.parse(clock.lastExternalSuccessAt) : NaN;
     const ageMinutes = Number.isFinite(successMs)
       ? Math.floor((now.getTime() - successMs) / 60_000)
       : null;
     if (ageMinutes === null || ageMinutes >= CLOCK_STALL_AFTER_MINUTES) {
       lines.push(
-        'Внешние часы молчат: успеха дольше 45 минут нет — расписание GitHub Actions остановилось.',
+        'Внешние часы: больше суток без успешного тика — проверь personal-clock.yml в GitHub Actions. Напоминания пока добираются при касании бота.',
       );
     }
     if (clock.kinds.morning_digest === 'failed') {
