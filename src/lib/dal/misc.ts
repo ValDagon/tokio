@@ -152,6 +152,153 @@ export async function kvSetJson(key: string, value: unknown): Promise<KvRow> {
 }
 
 // ---------------------------------------------------------------------------
+// Крошка хода агента: где умер медленный ход и что стало с индикатором
+// ---------------------------------------------------------------------------
+
+/**
+ * Почему ход остановился по времени.
+ *
+ * `budget` — резерв не пустил очередной вызов модели (бюджет съеден моделью),
+ * `tools-skipped` — вызов прошёл, но инструменты уже не успевали.
+ */
+export type TurnDeadlineCause = 'budget' | 'tools-skipped';
+
+/** Стадия, до которой ход дошёл: последняя перезаписывает предыдущую. */
+export type TurnTraceStage = 'start' | 'model-start' | 'model-end' | 'send';
+
+/** Судьба живой строки «⏳ …»: показана, оба способа отправки отказали, не открывалась. */
+export type TurnIndicatorState = 'none' | 'shown' | 'unavailable';
+
+/** Последний ход пользователя — перезаписывается каждым прогоном. */
+export interface TurnTrace {
+  startedAt: IsoTimestamp;
+  updatedAt: IsoTimestamp;
+  stage: TurnTraceStage;
+  /** Сколько вызовов модели ход уже сделал (первый — 1). */
+  modelCalls: number;
+  /** Модели, которые ответили: запасная в цепочке видна сразу. */
+  models: string[];
+  deadlineAt: IsoTimestamp | null;
+  deadlineCause: TurnDeadlineCause | null;
+  indicator: TurnIndicatorState;
+  stopReason: string | null;
+}
+
+/** Счётчики ходов пользователя: сколько всего и сколько упёрлось в дедлайн. */
+export interface TurnStats {
+  turns: number;
+  deadlineTurns: number;
+  updatedAt: IsoTimestamp;
+}
+
+/** Что именно дописывается в крошку: отсутствующее поле не трогается. */
+export interface TurnTracePatch {
+  stage?: TurnTraceStage;
+  /** Начинается ещё один вызов модели: счётчик вызовов +1. */
+  modelStarted?: boolean;
+  /** Модель, которая ответила (пустая строка/`null` — не записываем). */
+  model?: string | null;
+  /** Дедлайн сработал: время, причина и счётчик дедлайнов. */
+  deadline?: TurnDeadlineCause;
+  indicator?: TurnIndicatorState;
+  stopReason?: string | null;
+}
+
+const TURN_TRACE_PREFIX = 'turn_trace:v1:';
+const TURN_STATS_PREFIX = 'turn_stats:v1:';
+
+const turnTraceKey = (userId: number): string => `${TURN_TRACE_PREFIX}${Number(userId)}`;
+const turnStatsKey = (userId: number): string => `${TURN_STATS_PREFIX}${Number(userId)}`;
+
+const EMPTY_TURN_STATS: TurnStats = { turns: 0, deadlineTurns: 0, updatedAt: '' };
+
+/**
+ * Крошка хода и счётчики.
+ *
+ * Зачем: 22.11.2026 ход «разбери инбокс» отвечал дедлайном после отказа
+ * `gemini-4-hydrogen`, но ни `/diagnostics`, ни `kv` не говорили, где именно
+ * ушло время и почему не появилась строка «⏳ …». Крошка отвечает на это тремя
+ * фактами: до какой стадии дошёл ход, почему сработал дедлайн и что стало с
+ * индикатором. В журнал сбоев она не пишется: дедлайн — латентность, а не отказ.
+ *
+ * Все функции молчат на ошибках хранилища — крошка не имеет права ломать ход.
+ */
+export async function readTurnTrace(
+  userId: number,
+): Promise<{ trace: TurnTrace | null; stats: TurnStats | null }> {
+  try {
+    const [trace, stats] = await Promise.all([
+      kvGetJson<TurnTrace | null>(turnTraceKey(userId), null),
+      kvGetJson<TurnStats | null>(turnStatsKey(userId), null),
+    ]);
+    return { trace, stats };
+  } catch {
+    return { trace: null, stats: null };
+  }
+}
+
+/** Новый ход: чистая крошка и `turns + 1`. */
+export async function startTurnTrace(userId: number): Promise<void> {
+  try {
+    const at = nowIso();
+    const stats = await kvGetJson<TurnStats>(turnStatsKey(userId), EMPTY_TURN_STATS);
+    const trace: TurnTrace = {
+      startedAt: at,
+      updatedAt: at,
+      stage: 'start',
+      modelCalls: 0,
+      models: [],
+      deadlineAt: null,
+      deadlineCause: null,
+      indicator: 'none',
+      stopReason: null,
+    };
+    await kvSetJson(turnTraceKey(userId), trace);
+    await kvSetJson(turnStatsKey(userId), {
+      turns: Math.max(0, Number(stats?.turns) || 0) + 1,
+      deadlineTurns: Math.max(0, Number(stats?.deadlineTurns) || 0),
+      updatedAt: at,
+    } satisfies TurnStats);
+  } catch {
+    // крошка — украшение диагностики
+  }
+}
+
+/** Дописывает факт в крошку текущего хода (read-merge-write). */
+export async function patchTurnTrace(userId: number, patch: TurnTracePatch): Promise<void> {
+  try {
+    const at = nowIso();
+    const current = await kvGetJson<TurnTrace | null>(turnTraceKey(userId), null);
+    const trace: TurnTrace = {
+      startedAt: current?.startedAt ?? at,
+      updatedAt: at,
+      stage: patch.stage ?? current?.stage ?? 'start',
+      modelCalls: (Math.max(0, Number(current?.modelCalls) || 0) || 0) + (patch.modelStarted ? 1 : 0),
+      models: [...(Array.isArray(current?.models) ? current.models : [])],
+      deadlineAt: patch.deadline ? at : (current?.deadlineAt ?? null),
+      deadlineCause: patch.deadline ?? current?.deadlineCause ?? null,
+      indicator: patch.indicator ?? current?.indicator ?? 'none',
+      stopReason: patch.stopReason !== undefined ? patch.stopReason : (current?.stopReason ?? null),
+    };
+    const model = typeof patch.model === 'string' ? patch.model.trim() : '';
+    if (model && !trace.models.includes(model)) trace.models.push(model);
+    await kvSetJson(turnTraceKey(userId), trace);
+
+    // Счётчик дедлайнов идёт отдельно от крошки: он переживает следующий ход.
+    if (patch.deadline) {
+      const stats = await kvGetJson<TurnStats>(turnStatsKey(userId), EMPTY_TURN_STATS);
+      await kvSetJson(turnStatsKey(userId), {
+        turns: Math.max(0, Number(stats?.turns) || 0),
+        deadlineTurns: Math.max(0, Number(stats?.deadlineTurns) || 0) + 1,
+        updatedAt: at,
+      } satisfies TurnStats);
+    }
+  } catch {
+    // крошка — украшение диагностики
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Решения по обязательствам за месяц («Проверка списаний»)
 // ---------------------------------------------------------------------------
 

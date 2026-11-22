@@ -47,7 +47,7 @@ import { ensureAccounts } from '../../src/lib/dal/finances';
 import { ensureUser } from '../../src/lib/dal/users';
 import { LLM_ERROR_TEXT } from '../../src/lib/agent/engine';
 import { listNotes } from '../../src/lib/dal/notes';
-import { kvGet, kvSetJson } from '../../src/lib/dal/misc';
+import { kvGet, kvSetJson, readTurnTrace } from '../../src/lib/dal/misc';
 import { beginReplyTurn, endReplyTurn } from '../../src/lib/reply_turn';
 import { smartIngest } from '../../src/handlers/ingest';
 import { startTurnProgress } from '../../src/handlers/progress';
@@ -401,5 +401,29 @@ describe('живая индикация хода агента', () => {
     await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
 
     expect(sentTexts()).toContain('Готово: посчитал.');
+  });
+
+  it('крошка хода фиксирует показанную строку', async () => {
+    const progress = startTurnProgress({ chatId: CHAT, userId: USER, now: () => clock.now });
+    clock.now = STARTED_AT + 9_000;
+    await progress.onProgress({ stage: 'tool', step: 0, tool: 'add_expense' });
+    await progress.finish();
+
+    const { trace } = await readTurnTrace(USER);
+    expect(trace?.indicator).toBe('shown');
+  });
+
+  it('крошка хода фиксирует недоступность строки, если отказали оба способа', async () => {
+    (api as Record<string, unknown>).sendMessage = async () => {
+      throw new BotApiError('sendMessage', 500, 'Internal Server Error');
+    };
+
+    const progress = startTurnProgress({ chatId: CHAT, userId: USER, now: () => clock.now });
+    clock.now = STARTED_AT + 9_000;
+    await progress.onProgress({ stage: 'tool', step: 0, tool: 'add_expense' });
+    await progress.finish();
+
+    const { trace } = await readTurnTrace(USER);
+    expect(trace?.indicator).toBe('unavailable');
   });
 });

@@ -36,7 +36,13 @@ import type { ProviderId, ProviderToolCall, ProviderToolSpec } from '../provider
 import { DEFAULT_BASE_CURRENCY, DEFAULT_TIMEZONE } from '../config.js';
 import { getChapter } from '../dal/docs.js';
 import { listDoses } from '../dal/medications.js';
-import { kvSetJson } from '../dal/misc.js';
+import {
+  kvSetJson,
+  patchTurnTrace,
+  startTurnTrace,
+  type TurnDeadlineCause,
+  type TurnTracePatch,
+} from '../dal/misc.js';
 import { listTasks } from '../dal/tasks.js';
 import { getUser } from '../dal/users.js';
 import { listActiveSkills, recordFailure, recordSkillRun, type FailureReason } from '../evolution.js';
@@ -110,6 +116,11 @@ export interface AgentChatReply {
   toolCalls: ProviderToolCall[];
   /** Причина остановки генерации провайдером (`'stop'`, `'length'`, `'max_tokens'`, …). */
   finishReason?: string | null;
+  /**
+   * Модель, которая ответила фактически. В цепочке Gemini вторая модель — это
+   * уже запасная, поэтому имя нужно крошке хода и диагностике.
+   */
+  model?: string | null;
 }
 
 /**
@@ -143,6 +154,7 @@ const defaultChat: AgentChatFn = async (request) => {
     content: result.content ?? '',
     toolCalls: result.toolCalls ?? [],
     finishReason: result.finishReason,
+    model: result.model ?? null,
   };
 };
 
@@ -700,6 +712,13 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   'get_custom_directives',
 ]);
 
+/** Имя модели из ответа: строковый контракт модель не называет. */
+function answeredModel(raw: AgentChatResult): string | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const model = raw.model;
+  return typeof model === 'string' && model.trim() ? model.trim() : null;
+}
+
 function isParallelSafeReadCall(call: ThreadToolCall, tools: readonly Tool[]): boolean {
   const validName = normalizeToolName(call.name);
   if (!validName || !READ_ONLY_TOOL_NAMES.has(validName)) return false;
@@ -800,12 +819,23 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     let llmErrorDetail: string | null = null;
     /** Дедлайн уже сработал: синтез и инструменты после него не зовутся. */
     let deadlineHit = false;
+    /** Почему сработал дедлайн: бюджет до вызова модели или пропущенные инструменты. */
+    let deadlineCause: TurnDeadlineCause | null = null;
     /** Сколько длился самый долгий вызов модели в этом прогоне, мс. */
     let slowestModelCallMs = 0;
     /** Сколько вызовов модели ход уже сделал: у первого ограничения нет. */
     let modelCallsStarted = 0;
     /** Сколько ход уже идёт. */
     const elapsedMs = (): number => clock() - startedAt;
+
+    /**
+     * Крошка хода в `kv`: где именно умер медленный ход. Пишет движок, индикатор
+     * дописывает `handlers/progress.ts`. Сбой записи ход не рвёт — это диагностика.
+     */
+    const traceTurn = async (patch: TurnTracePatch): Promise<void> => {
+      await patchTurnTrace(userId, patch);
+    };
+    await startTurnTrace(userId);
     /**
      * Бюджет исчерпан с учётом резерва на конец хода: инструменты уже не зовём,
      * ответ собираем и отправляем тем временем, которое осталось окна платформы.
@@ -863,6 +893,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           { role: 'assistant', content: partialReply },
         ]);
         await notifyProgress({ stage: 'model', step: iteration });
+        await traceTurn({ stage: 'model-start', modelStarted: true });
         const contRaw = await chatFn({
           userId,
           systemPrompt: activeSystemPrompt,
@@ -872,6 +903,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           ],
           purpose: 'agent',
         });
+        await traceTurn({ stage: 'model-end', model: answeredModel(contRaw) });
         const contNative = normalizeChatReply(contRaw);
         const contCalls = contNative.toolCalls.filter(
           (call) => typeof call.name === 'string' && call.name.trim(),
@@ -896,6 +928,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       // уже собрано, и гасим индикатор штатным путём.
       if (!modelCallFitsBudget()) {
         deadlineHit = true;
+        deadlineCause = 'budget';
         stopReason = 'step_limit';
         reply = deadlineReply(steps);
         break;
@@ -916,6 +949,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       });
 
       await notifyProgress({ stage: 'model', step: iteration });
+      await traceTurn({ stage: 'model-start', modelStarted: true });
       let raw: AgentChatResult;
       try {
         const callStartedAt = clock();
@@ -928,6 +962,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           purpose: 'agent',
         });
         slowestModelCallMs = Math.max(slowestModelCallMs, clock() - callStartedAt);
+        await traceTurn({ stage: 'model-end', model: answeredModel(raw) });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!healed && isRecoverableHistoryError(message)) {
@@ -1025,6 +1060,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           // тред соврёт модели о невыполненном действии.
           if (pastDeadline()) {
             deadlineHit = true;
+            deadlineCause = 'tools-skipped';
             for (let k = i; k < calls.length; k += 1) {
               const skipped = calls[k]!;
               working.push({
@@ -1141,6 +1177,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       // записи шага, чтобы в треде не осталось вызова без наблюдения.
       if (pastDeadline()) {
         deadlineHit = true;
+        deadlineCause = 'budget';
         stopReason = 'step_limit';
         reply = deadlineReply(steps);
         break;
@@ -1230,12 +1267,14 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         })}\n\n${FINAL_SYNTHESIS_DIRECTIVE}`;
 
         await notifyProgress({ stage: 'model', step: iteration });
+        await traceTurn({ stage: 'model-start', modelStarted: true });
         const synthRaw = await chatFn({
           userId,
           systemPrompt: synthesisSystemPrompt,
           messages: toSynthesisMessages(prepared),
           purpose: 'agent',
         });
+        await traceTurn({ stage: 'model-end', model: answeredModel(synthRaw) });
         const synthNative = normalizeChatReply(synthRaw);
         const synthCalls = synthNative.toolCalls.filter(
           (call) => typeof call.name === 'string' && call.name.trim(),
@@ -1282,6 +1321,15 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         // сбой записи не должен отнимать у пользователя готовый ответ
       }
     }
+
+    // Крошка хода: последняя метка — «ответ собран и тред сохранён». Если её нет
+    // в `kv`, а есть только `model-start`, значит ход убит внутри вызова модели.
+    // Дедлайн считается отдельным счётчиком и в журнал сбоев не идёт.
+    await traceTurn({
+      stage: 'send',
+      stopReason,
+      ...(deadlineHit ? { deadline: deadlineCause ?? 'budget' } : {}),
+    });
 
     // Журнал повторяемости: одна сигнатура на прогон за терминальную причину и
     // по одной на неожиданный отказ инструмента. `final` и `confirm` — не сбои,

@@ -24,7 +24,7 @@ import {
   tasksSummary,
 } from '../src/lib/summary';
 import { listItems, recordFailure } from '../src/lib/evolution';
-import { kvSetJson } from '../src/lib/dal/misc';
+import { kvSetJson, patchTurnTrace, startTurnTrace } from '../src/lib/dal/misc';
 import { clockHeartbeatKey } from '../src/lib/jobs';
 import { createAccount, createLiability, createTransaction } from '../src/lib/dal/finances';
 import { createMedication } from '../src/lib/dal/medications';
@@ -403,6 +403,31 @@ describe('diagnosticsReply', () => {
     expect(text).toContain('Диагностика');
     expect(text).toContain('Сбоев не записано');
     expect(text).not.toContain('Кластеры');
+  });
+
+  it('показывает крошку хода даже при пустом журнале', async () => {
+    await ensureUser(USER);
+    await db.run(sql`
+      UPDATE users SET timezone = 'UTC' WHERE id = ${USER}
+    `);
+    await startTurnTrace(USER);
+    await patchTurnTrace(USER, {
+      stage: 'send',
+      modelStarted: true,
+      model: 'gemini-3.8-flash',
+      deadline: 'budget',
+      stopReason: 'step_limit',
+    });
+
+    const text = await diagnosticsReply(USER);
+
+    // Пустой журнал не маскирует крошку: видно, что ход был и на чём встал.
+    expect(text).toContain('Сбоев не записано');
+    expect(text).toContain('⏱ <b>Ходы:</b>');
+    expect(text).toContain('с дедлайном 1');
+    expect(text).toContain('дедлайн: бюджет');
+    expect(text).toContain('модели gemini-3.8-flash');
+    expect(text).toContain('индикатор не открывался');
   });
 
   it('показывает кластеры с количеством и временем, а не сырые тексты', async () => {

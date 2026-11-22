@@ -18,7 +18,7 @@
 import { BASE_CURRENCY, type RateTable, convert, getRates, hasRate, toEurCents } from './dal/fx';
 import { listAccounts, listLiabilities, listTransactions } from './dal/finances';
 import { listDoses } from './dal/medications';
-import { kvGetJson } from './dal/misc';
+import { kvGetJson, readTurnTrace } from './dal/misc';
 import {
   CLOCK_STALL_AFTER_MINUTES,
   clockHeartbeatKey,
@@ -361,6 +361,48 @@ function diagnosticsStamp(at: string | null, timeZone: string): string {
   return formatDateTime(new Date(parsed), timeZone);
 }
 
+/**
+ * Строка крошки хода: сколько ходов было, сколько упёрлось в дедлайн, до какой
+ * стадии дошёл последний и что стало с индикатором. Нужна, чтобы отличать
+ * «дедлайн по бюджету» от «дедлайн после отказа основной модели» и видеть
+ * судьбу строки «⏳ …»; поэтому пишется и в пустой журнал.
+ */
+function turnTraceLine(
+  trace: Awaited<ReturnType<typeof readTurnTrace>>['trace'],
+  stats: Awaited<ReturnType<typeof readTurnTrace>>['stats'],
+  timeZone: string,
+): string | null {
+  if (!trace && !stats) return null;
+  const parts: string[] = [];
+  if (stats && (stats.turns > 0 || stats.deadlineTurns > 0)) {
+    parts.push(`ходов ${stats.turns}`);
+    parts.push(`с дедлайном ${stats.deadlineTurns}`);
+  }
+  if (trace) {
+    const cause =
+      trace.deadlineCause === 'tools-skipped'
+        ? 'инструменты не успели'
+        : trace.deadlineCause === 'budget'
+          ? 'бюджет'
+          : null;
+    const indicator =
+      trace.indicator === 'shown'
+        ? 'показан'
+        : trace.indicator === 'unavailable'
+          ? 'недоступен'
+          : 'не открывался';
+    const details = [
+      `стадия ${trace.stage}`,
+      ...(cause ? [`дедлайн: ${cause}`] : []),
+      `индикатор ${indicator}`,
+      ...(trace.models.length > 0 ? [`модели ${trace.models.join(', ')}`] : []),
+      ...(trace.stopReason ? [`стоп ${trace.stopReason}`] : []),
+    ];
+    parts.push(`${diagnosticsStamp(trace.updatedAt, timeZone)} · ${details.join(' · ')}`);
+  }
+  return parts.length > 0 ? `⏱ <b>Ходы:</b> ${parts.join(' · ')}` : null;
+}
+
 /** Один кластер одной строкой: код, сколько раз, когда, восстановлен ли. */
 function failureLine(item: FailureAggregate, timeZone: string): string {
   const code = item.signature
@@ -395,8 +437,13 @@ export async function diagnosticsReply(
     } | null>('llm_last_failure', null),
     userTimezone(userId),
   ]);
+  const { trace: turnTrace, stats: turnStats } = await readTurnTrace(userId);
+  const turnLine = turnTraceLine(turnTrace, turnStats, timeZone);
 
-  if (clusters.length === 0 && !lastFailure) return DIAGNOSTICS_EMPTY_TEXT;
+  if (clusters.length === 0 && !lastFailure) {
+    // Пустой журнал не пустой экран: крошка хода показывает, чем живёт агент.
+    return turnLine ? `${DIAGNOSTICS_EMPTY_TEXT}\n\n${turnLine}` : DIAGNOSTICS_EMPTY_TEXT;
+  }
 
   const lines: string[] = ['📊 <b>Диагностика</b>', ''];
 
@@ -420,6 +467,11 @@ export async function diagnosticsReply(
     if (lastFailure) lines.push('');
     lines.push(`<b>Кластеры сбоев</b> (${clusters.length}):`);
     for (const cluster of clusters) lines.push(failureLine(cluster, timeZone));
+  }
+
+  if (turnLine) {
+    lines.push('');
+    lines.push(turnLine);
   }
 
   const clock = await kvGetJson<ClockHeartbeat | null>(clockHeartbeatKey(userId), null);

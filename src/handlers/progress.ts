@@ -27,7 +27,7 @@
 import { api } from 'sdk';
 
 import type { AgentProgressEvent } from '../lib/agent/engine.js';
-import { kvDelete, kvGetJson, kvSetJson } from '../lib/dal/misc.js';
+import { kvDelete, kvGetJson, kvSetJson, patchTurnTrace } from '../lib/dal/misc.js';
 import { safeEdit, safeSendMessage } from './formatting.js';
 import { getMainKeyboard } from './keyboards.js';
 
@@ -224,12 +224,15 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
         messageId = messageIdOf(sent);
       } catch {
         unavailable = true;
+        // Крошка хода: оба способа отправки отказали — строка не появится.
+        await patchTurnTrace(userId, { indicator: 'unavailable' });
         return;
       }
     }
     // Без id строку нельзя ни обновить, ни погасить — считаем способ недоступным.
     if (messageId === null) {
       unavailable = true;
+      await patchTurnTrace(userId, { indicator: 'unavailable' });
       return;
     }
     if (closed) {
@@ -241,6 +244,9 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
     shownText = text;
     shownAt = now();
     await remember(messageId);
+    // Крошка хода: строка реально показана — по ней /diagnostics отличит
+    // «индикатор отказал» от «строку не успели открыть».
+    await patchTurnTrace(userId, { indicator: 'shown' });
   };
 
   const update = async (text: string): Promise<void> => {
