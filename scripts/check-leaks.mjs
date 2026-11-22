@@ -22,7 +22,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-const SCAN_DIRS = ['src', 'miniapp/src', 'example', 'locales', 'tests', 'docs', '.agents', '.github', '.githooks', 'scripts'];
+const SCAN_DIRS = ['src', 'miniapp/src', 'public-overlay', 'example', 'locales', 'tests', 'docs', '.agents', '.github', '.githooks', 'scripts'];
 const ROOT_FILES = [
   'AGENTS.md',
   'CITATION.cff',
@@ -52,6 +52,17 @@ const SELF_EXCLUDED_PATHS = new Set([
   '.gitleaks.toml',
   'package-lock.json',
   'miniapp/package-lock.json',
+]);
+
+// Narrow, path-scoped rule exemptions (path -> exempt rule names). The public instance
+// (`@LifeOS_Public_bot`) tracks its own overlay in the repo and its deployment URL is public
+// by design: it backs that bot's Mini App button. The README documents the same address.
+// `manifest.json` and `README.md` are the exact two paths `.gitleaks.toml` already exempts;
+// every other overlay file is still fully scanned. Guard against widening: do not add a
+// directory or a whole-prefix here.
+const PATH_RULE_ALLOWLIST = new Map([
+  ['public-overlay/manifest.json', new Set(['Hardcoded tgcloud URL'])],
+  ['public-overlay/README.md', new Set(['Hardcoded tgcloud URL'])],
 ]);
 
 export function normalizeAntiSplit(text) {
@@ -102,8 +113,10 @@ export function scanContent(content, rel, options = {}) {
 
   const violations = [];
   const isTest = normalizedRel.startsWith('tests/') || normalizedRel.endsWith('.test.ts') || normalizedRel.endsWith('.test.tsx');
+  const exemptRules = PATH_RULE_ALLOWLIST.get(normalizedRel) ?? new Set();
 
   for (const rule of LAYER1_PATTERNS) {
+    if (exemptRules.has(rule.name)) continue;
     rule.re.lastIndex = 0;
     let match;
     while ((match = rule.re.exec(content)) !== null) {

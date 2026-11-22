@@ -27,6 +27,30 @@ jobs:
           npm ci
           npm run check:leaks
 
+      # build.mjs writes an empty fallback stub when tgcloud/lib/secrets.js is missing, and CI
+      # always starts from a fresh checkout, so without this step `npx tgcloud push --force`
+      # would deploy a stub (empty GEMINI_API_KEY / MASTER_KEY / WHITELIST_IDS) to production —
+      # exactly the incident that left revision 58 without keys. Restore the real module first,
+      # and fail closed instead of silently skipping: a quiet skip already hid this once.
+      - name: Restore deployment secrets module
+        env:
+          TGCLOUD_SECRETS_JS: ${{ secrets.TGCLOUD_SECRETS_JS }}
+        run: |
+          if [ -z "$TGCLOUD_SECRETS_JS" ]; then
+            echo "::error::TGCLOUD_SECRETS_JS is not set — refusing to deploy a stub secrets module"
+            exit 1
+          fi
+          mkdir -p tgcloud/lib
+          printf '%s\n' "$TGCLOUD_SECRETS_JS" > tgcloud/lib/secrets.js
+          grep -Eq 'ADMIN_IDS[[:space:]]*=[[:space:]]*\[[[:space:]]*[0-9]' tgcloud/lib/secrets.js || {
+            echo "::error::restored tgcloud/lib/secrets.js has no ADMIN_IDS — refusing to deploy"
+            exit 1
+          }
+          grep -Eq 'GEMINI_API_KEY[[:space:]]*=[[:space:]]*"[^"]+"' tgcloud/lib/secrets.js || {
+            echo "::error::restored tgcloud/lib/secrets.js has an empty GEMINI_API_KEY — refusing to deploy"
+            exit 1
+          }
+
       - name: Build backend (esbuild -> tgcloud/)
         run: npm run build
 
