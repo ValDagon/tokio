@@ -236,63 +236,69 @@ async function tryAgentAutonomousStep(
   try {
     agentRes = await runAgent({ userId, text: fullQuery, onProgress: progress.onProgress });
   } catch (error) {
-    // Ход упал — индикатор не должен остаться висеть: заменяем честным текстом.
-    await progress.fail(LLM_ERROR_TEXT);
+    // Ход упал, но сообщение ещё не потеряно: smartIngest после броска идёт в
+    // детерминированные фолбэки и может ответить по существу. Заменять строку
+    // ошибкой здесь нельзя — иначе честный ответ встанет рядом с «сбой модели».
+    // Строку просто гасим: ход продолжается.
+    await progress.finish();
     throw error;
   }
 
-  // Сбой модели — не ответ по существу. Вопрос не должен умирать вместе с
-  // провайдером: деньги, задачи и аптечка считаются из SQLite, модель для них
-  // не нужна. Заглушка остаётся только прочим сообщениям — и то лишь если в
-  // этом же ходе не ушёл детерминированный ответ (сводка, задача, заметка,
-  // напоминание), чтобы извинение не вставало рядом с настоящим ответом.
-  if (agentRes.stopReason === 'llm_error') {
-    // Текст сбоя одинаков для ответа и для индикатора: пользователь видит одну
-    // честную строку, а не «⏳ Думаю…», оставшуюся навсегда.
-    const outageText = isQuestion
-      ? await modelOutageReply(
-          userId,
-          [agentQuery || userText, replyContext].filter(Boolean).join(' '),
-        )
-      : LLM_ERROR_TEXT;
+  try {
+    // Сбой модели — не ответ по существу. Вопрос не должен умирать вместе с
+    // провайдером: деньги, задачи и аптечка считаются из SQLite, модель для них
+    // не нужна. Заглушка остаётся только прочим сообщениям — и то лишь если в
+    // этом же ходе не ушёл детерминированный ответ (сводка, задача, заметка,
+    // напоминание), чтобы извинение не вставало рядом с настоящим ответом.
+    if (agentRes.stopReason === 'llm_error') {
+      // Текст сбоя считается один раз: он же закрывает индикатор, когда ход
+      // открыт не был (`deferReplyNotice` = false, см. lib/reply_turn.ts).
+      const outageText = isQuestion
+        ? await modelOutageReply(
+            userId,
+            [agentQuery || userText, replyContext].filter(Boolean).join(' '),
+          )
+        : LLM_ERROR_TEXT;
 
-    if (await progress.fail(outageText)) return true;
+      if (isQuestion) {
+        // Заглушка не встаёт рядом с настоящим ответом: пока ход открыт, она
+        // откладывается до его конца, а индикатор просто исчезает.
+        if (deferReplyNotice(chatId, outageText)) return true;
+        if (await progress.fail(outageText)) return true;
+        await safeAnswer(chatId, outageText, { replyMarkup: getMainKeyboard() });
+        return true;
+      }
 
-    if (isQuestion) {
-      // Вопрос не должен умирать вместе с провайдером: деньги, задачи и аптечка
-      // считаются из SQLite. Ответ откладывается до конца хода той же
-      // машинерией, что и прежняя заглушка: если в этом ходе уже ответила
-      // сводка или напоминание, второй ответ не нужен.
-      if (deferReplyNotice(chatId, outageText)) return true;
-      await safeAnswer(chatId, outageText, { replyMarkup: getMainKeyboard() });
+      // Не вопрос: текст не теряем — он уходит в инбокс-фоллбэк ниже.
+      deferReplyNotice(chatId, LLM_ERROR_TEXT);
+      return false;
+    }
+
+    // Проверяем, выполнил ли агент инструмент успешно
+    const executedSuccessTool = agentRes.steps.some((s) => s.action !== null && s.ok);
+
+    // Отдаём ответ модели во всех случаях, когда она дала осмысленный ответ
+    // (включая диалог, уточнение, подтверждение или объяснение отказа).
+    // В инбокс проваливается только явное молчание (`empty_reply`) или `llm_error`.
+    if (agentRes.reply.trim() && agentRes.stopReason !== 'empty_reply') {
+      const body = markdownToTelegramHtml(agentRes.reply);
+      const reply = prefixQuote ? `${prefixQuote}${body}` : body;
+      const replyMarkup = executedSuccessTool
+        ? buildAgentActionReplyMarkup(agentRes.steps)
+        : getMainKeyboard();
+
+      await safeAnswer(chatId, reply, { replyMarkup, isHtml: true });
       return true;
     }
-    deferReplyNotice(chatId, LLM_ERROR_TEXT);
+
+    // Агент промолчал (`empty_reply`) — отдаём сообщение в инбокс-фоллбэк.
     return false;
-  }
-
-  // Проверяем, выполнил ли агент инструмент успешно
-  const executedSuccessTool = agentRes.steps.some((s) => s.action !== null && s.ok);
-
-  // Отдаём ответ модели во всех случаях, когда она дала осмысленный ответ
-  // (включая диалог, уточнение, подтверждение или объяснение отказа).
-  // В инбокс проваливается только явное молчание (`empty_reply`) или `llm_error`.
-  if (agentRes.reply.trim() && agentRes.stopReason !== 'empty_reply') {
-    const body = markdownToTelegramHtml(agentRes.reply);
-    const reply = prefixQuote ? `${prefixQuote}${body}` : body;
-    const replyMarkup = executedSuccessTool
-      ? buildAgentActionReplyMarkup(agentRes.steps)
-      : getMainKeyboard();
-
-    await safeAnswer(chatId, reply, { replyMarkup, isHtml: true });
+  } finally {
+    // Любой выход из хода гасит строку: успех, тишина или сбой внутри веток
+    // (`modelOutageReply`, разметка ответа). `finish()` идемпотентен, а после
+    // `fail()` уже закрыт.
     await progress.finish();
-    return true;
   }
-
-  // Агент промолчал (`empty_reply`) — отдаём сообщение в инбокс-фоллбэк.
-  // Индикатор к этому моменту уже не нужен: строка гаснет до ответа инбокса.
-  await progress.finish();
-  return false;
 }
 
 export async function smartIngest(ctx: IngestContext): Promise<void> {

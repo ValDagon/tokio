@@ -46,6 +46,8 @@ import { resetConfigCache } from '../../src/lib/config';
 import { ensureAccounts } from '../../src/lib/dal/finances';
 import { ensureUser } from '../../src/lib/dal/users';
 import { LLM_ERROR_TEXT } from '../../src/lib/agent/engine';
+import { listNotes } from '../../src/lib/dal/notes';
+import { beginReplyTurn, endReplyTurn } from '../../src/lib/reply_turn';
 import { smartIngest } from '../../src/handlers/ingest';
 import { startTurnProgress } from '../../src/handlers/progress';
 
@@ -184,7 +186,7 @@ describe('живая индикация хода агента', () => {
     expect(sentTexts()).toEqual(['Готово: посчитал.']);
   });
 
-  it('сбой модели заменяет индикатор честным текстом ошибки', async () => {
+  it('сбой модели на вопросе заменяет индикатор честным текстом ошибки', async () => {
     scriptTurn(
       [
         { afterMs: 0, stage: 'model' },
@@ -193,12 +195,52 @@ describe('живая индикация хода агента', () => {
       { ...FINAL_RUN, reply: LLM_ERROR_TEXT, stopReason: 'llm_error' },
     );
 
-    await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'что по деньгам?', forwarded: false });
 
-    expect(callsOf('editMessageText').at(-1)?.params.text).toBe(LLM_ERROR_TEXT);
+    // Ход не открыт (`deferReplyNotice` = false) — строка сама становится ответом.
+    expect(callsOf('editMessageText').at(-1)?.params.text).toContain('Модель сейчас недоступна');
     // Заглушка не дублируется обычным сообщением и индикатор не остаётся висеть.
     expect(sentTexts()).toHaveLength(0);
     expect(callsOf('deleteMessage')).toHaveLength(0);
+  });
+
+  it('внутри открытого хода сбой не спорит с ответом: строка гаснет, заглушка откладывается', async () => {
+    beginReplyTurn();
+    scriptTurn(
+      [
+        { afterMs: 0, stage: 'model' },
+        { afterMs: 9_000, stage: 'tool', tool: 'add_task' },
+      ],
+      { ...FINAL_RUN, reply: LLM_ERROR_TEXT, stopReason: 'llm_error' },
+    );
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'что по деньгам?', forwarded: false });
+
+    // Строка исчезла, но ошибкой не подменялась: её отправит конец хода, если
+    // за ход не будет настоящего ответа (lib/reply_turn.ts).
+    expect(ephemeralSends()).toHaveLength(1);
+    expect(callsOf('editMessageText')).toHaveLength(0);
+    expect(callsOf('deleteMessage')).toHaveLength(1);
+    const notices = endReplyTurn();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.text).toContain('Модель сейчас недоступна');
+    expect(sentTexts()).toHaveLength(0);
+  });
+
+  it('сбой модели на не-вопросе не теряет сообщение: текст уходит в инбокс', async () => {
+    beginReplyTurn();
+    scriptTurn(
+      [{ afterMs: 0, stage: 'model' }, { afterMs: 9_000, stage: 'model' }],
+      { ...FINAL_RUN, reply: LLM_ERROR_TEXT, stopReason: 'llm_error' },
+    );
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'сохрани мысль: купить лампу', forwarded: false });
+
+    const notes = await listNotes(USER);
+    expect(notes.map((note) => note.rawText).join('\n')).toContain('купить лампу');
+    expect(ephemeralSends()).toHaveLength(1);
+    expect(callsOf('deleteMessage')).toHaveLength(1);
+    endReplyTurn();
   });
 
   it('без эфемерных сообщений — обычная строка, правка и удаление', async () => {
@@ -254,6 +296,29 @@ describe('живая индикация хода агента', () => {
     expect(ephemeralSends()).toHaveLength(1);
     await progress.finish();
     expect(callsOf('deleteMessage')).toHaveLength(1);
+  });
+
+  it('если сервер не вернул id строки, индикатор не висит и не пытается снова', async () => {
+    const baseSend = api.sendMessage as (params: Record<string, unknown>) => Promise<unknown>;
+    let attempts = 0;
+    (api as Record<string, unknown>).sendMessage = async (params: Record<string, unknown> = {}) => {
+      if (params.ephemeral_message_parameters !== undefined) {
+        attempts += 1;
+        return {};
+      }
+      return baseSend(params);
+    };
+
+    const progress = startTurnProgress({ chatId: CHAT, userId: USER, now: () => clock.now });
+    clock.now = STARTED_AT + 9_000;
+    await progress.onProgress({ stage: 'tool', step: 0, tool: 'add_expense' });
+    clock.now = STARTED_AT + 11_000;
+    await progress.onProgress({ stage: 'model', step: 1 });
+    await progress.finish();
+
+    expect(attempts).toBe(1);
+    expect(callsOf('editMessageText')).toHaveLength(0);
+    expect(callsOf('deleteMessage')).toHaveLength(0);
   });
 
   it('падение индикатора не ломает ход', async () => {

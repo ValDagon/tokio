@@ -28,6 +28,7 @@ import { api } from 'sdk';
 
 import type { AgentProgressEvent } from '../lib/agent/engine.js';
 import { safeEdit, safeSendMessage } from './formatting.js';
+import { getMainKeyboard } from './keyboards.js';
 
 /** Через сколько миллисекунд хода показываем строку прогресса. */
 export const PROGRESS_SHOW_AFTER_MS = 8_000;
@@ -167,6 +168,16 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
         return;
       }
     }
+    // Без id строку нельзя ни обновить, ни погасить — считаем способ недоступным.
+    if (messageId === null) {
+      unavailable = true;
+      return;
+    }
+    if (closed) {
+      // Ход закончился, пока шла отправка: строка не должна остаться висеть.
+      await hide();
+      return;
+    }
     visible = true;
     shownText = text;
     shownAt = now();
@@ -251,8 +262,8 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
       }
     }
     try {
-      // Клавиатуру не трогаем: строка ошибки — не ответ, сетка разделов пусть остаётся.
-      await safeSendMessage(chatId, text, { keepReplyKeyboard: true });
+      // Клавиатура разделов возвращается явно, как в прежних ответах о сбое.
+      await safeSendMessage(chatId, text, { replyMarkup: getMainKeyboard() });
       return true;
     } catch {
       return false;
