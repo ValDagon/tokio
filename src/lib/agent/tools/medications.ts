@@ -465,6 +465,7 @@ async function deleteMedicationTool(args: ToolArgs, ctx: ToolContext): Promise<T
 export const medicationTools: Tool[] = [
   {
     name: 'add_medication',
+    effect: { kind: 'create' },
     description:
       'Добавляет лекарство в расписание приёма: название, дозировка, время приёма, инструкция и (опционально) остаток в упаковке.',
     schema: {
@@ -495,6 +496,7 @@ export const medicationTools: Tool[] = [
   },
   {
     name: 'log_medication_taken',
+    effect: { kind: 'create' },
     description:
       'Фиксирует приём лекарства или пропуск за сегодня и списывает одну дозу из остатка упаковки.',
     schema: {
@@ -520,12 +522,14 @@ export const medicationTools: Tool[] = [
   },
   {
     name: 'get_medications_today',
+    effect: { kind: 'read' },
     description: 'Показывает сегодняшнее расписание лекарств и что уже принято, пропущено или ждёт.',
     schema: { type: 'object', properties: {}, required: [] },
     run: getMedicationsToday,
   },
   {
     name: 'update_medication',
+    effect: { kind: 'mutate' },
     description:
       'Обновляет лекарство: дозировку, время приёма, инструкцию, частоту, остаток (точно или пополнением) и статус активности.',
     schema: {
@@ -557,6 +561,7 @@ export const medicationTools: Tool[] = [
   },
   {
     name: 'delete_medication',
+    effect: { kind: 'destroy' },
     description: 'Удаляет лекарство из аптечки (история приёмов при этом сохраняется).',
     schema: {
       type: 'object',

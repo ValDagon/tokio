@@ -2164,6 +2164,7 @@ async function deleteTransactionTool(args: ToolArgs, ctx: ToolContext): Promise<
 export const financeTools: Tool[] = [
   {
     name: 'add_expense',
+    effect: { kind: 'create' },
     description:
       'Записать расход: сумма, валюта, счёт и категория. Если счёт не указан — берётся основной.',
     schema: {
@@ -2184,6 +2185,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'add_income',
+    effect: { kind: 'create' },
     description: 'Записать доход: сумма, валюта, счёт и (опционально) категория.',
     schema: {
       type: 'object',
@@ -2200,6 +2202,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'add_transfer',
+    effect: { kind: 'create' },
     description: 'Перевести деньги между своими счетами (в одной валюте).',
     schema: {
       type: 'object',
@@ -2221,6 +2224,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'add_exchange',
+    effect: { kind: 'create' },
     description:
       'Обменять валюту между счетами: списать сумму в одной валюте и зачислить в другой. ' +
       'Если to_amount не указан, сумма зачисления считается по живому курсу и округляется вверх до ,99.',
@@ -2249,6 +2253,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'set_budget',
+    effect: { kind: 'mutate' },
     description: 'Установить месячный лимит бюджета по категории расходов (в EUR).',
     schema: {
       type: 'object',
@@ -2262,6 +2267,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'query_spending',
+    effect: { kind: 'read' },
     description:
       'Показать расходы текущего месяца по категориям в сравнении с установленными бюджетами.',
     schema: { type: 'object', properties: {} },
@@ -2269,6 +2275,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'can_i_afford',
+    effect: { kind: 'read' },
     description:
       'Проверить, доступна ли покупка из свободных денег, не расходуя защищённый резерв под платежи. ' +
       'Возвращает вердикт (доступно / осторожно / недоступно) и влияние на запас дней.',
@@ -2285,12 +2292,14 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'get_fin_balances',
+    effect: { kind: 'read' },
     description: 'Показать текущие балансы всех счетов и итог в EUR.',
     schema: { type: 'object', properties: {} },
     run: getBalances,
   },
   {
     name: 'get_fx_rates',
+    effect: { kind: 'read' },
     description:
       'Показать живые курсы валют (дата, база, сколько единиц валюты за 1 базовую). Нужны для конвертации, чтобы не выдумывать курс.',
     schema: { type: 'object', properties: {} },
@@ -2298,6 +2307,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'set_fx_rate',
+    effect: { kind: 'mutate' },
     description:
       'Сохранить живой курс валюты на сегодня: сколько единиц валюты за 1 EUR. Нужен, когда для обмена нет курса на дату операции.',
     schema: {
@@ -2315,6 +2325,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'set_account_balance',
+    effect: { kind: 'mutate' },
     description: 'Установить точный баланс счёта (если счёта нет — создать его).',
     schema: {
       type: 'object',
@@ -2334,7 +2345,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'reset_finance_history',
-    destructive: true,
+    effect: { kind: 'destroy', bulk: true },
     description:
       'Удалить всю историю транзакций. Требует подтверждения confirm=true; балансы счетов сохраняются.',
     schema: {
@@ -2347,6 +2358,10 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'undo_last_transaction',
+    // Корректировка-откат, а не уничтожение: строка операции удаляется, но балансы
+    // возвращаются к состоянию до операции — защищаемый инвариант восстановлен, а сама
+    // запись воспроизводима из raw-текста. Поэтому это `mutate`, а не `destroy`.
+    effect: { kind: 'mutate' },
     description: 'Отменить последнюю транзакцию (по желанию — только по конкретному счёту).',
     schema: {
       type: 'object',
@@ -2358,6 +2373,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'edit_last_transaction',
+    effect: { kind: 'mutate' },
     description:
       'Исправить последнюю транзакцию: сумму, валюту, категорию или описание. Переводы не редактируются.',
     schema: {
@@ -2374,6 +2390,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'adjust_account_balance',
+    effect: { kind: 'mutate' },
     description: 'Скорректировать баланс счёта на дельту (положительную или отрицательную).',
     schema: {
       type: 'object',
@@ -2393,6 +2410,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'mark_liability_paid',
+    effect: { kind: 'create' },
     description: 'Отметить платёж по обязательству за текущий месяц (по желанию — со списанием со счёта).',
     schema: {
       type: 'object',
@@ -2412,6 +2430,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'link_liability_account',
+    effect: { kind: 'mutate' },
     description: 'Привязать обязательство к счёту, с которого оно оплачивается.',
     schema: {
       type: 'object',
@@ -2425,6 +2444,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'get_liabilities',
+    effect: { kind: 'read' },
     description:
       'Показать активные обязательства и долги с группировкой по очередям, сроками и статусом оплаты.',
     schema: { type: 'object', properties: {} },
@@ -2432,6 +2452,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'add_liability',
+    effect: { kind: 'create' },
     description:
       'Добавить новое обязательство, подписку, регулярный платёж, кредит или долг.',
     schema: {
@@ -2458,6 +2479,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'update_liability',
+    effect: { kind: 'mutate' },
     description:
       'Обновить параметры существующего обязательства, подписки или долга (сумму, платёж, день, счёт, активность).',
     schema: {
@@ -2482,6 +2504,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'delete_liability',
+    effect: { kind: 'destroy' },
     description: 'Удалить обязательство, подписку или долг из базы (если отказался или закрыто).',
     schema: {
       type: 'object',
@@ -2494,6 +2517,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'update_account',
+    effect: { kind: 'mutate' },
     description: 'Изменить настройки счёта: переименовать, поменять конверт (spendable/reserved) или скрыть.',
     schema: {
       type: 'object',
@@ -2510,6 +2534,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'delete_account',
+    effect: { kind: 'destroy' },
     description: 'Удалить счёт без истории транзакций (если счёт не использовался).',
     schema: {
       type: 'object',
@@ -2523,6 +2548,7 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'list_transactions',
+    effect: { kind: 'read' },
     description: 'Показать последние финансовые операции с их id, датами, суммами и счетами.',
     schema: {
       type: 'object',
@@ -2536,6 +2562,10 @@ export const financeTools: Tool[] = [
   },
   {
     name: 'delete_transaction',
+    // Корректировка-откат, а не уничтожение: строка операции удаляется, но балансы
+    // возвращаются к состоянию до операции — денежный инвариант восстановлен. Тот же
+    // класс, что у `undo_last_transaction`, поэтому `mutate`, а не `destroy`.
+    effect: { kind: 'mutate' },
     description: 'Удалить и откатить финансовую операцию по её id или описанию, вернув балансы.',
     schema: {
       type: 'object',

@@ -12,8 +12,8 @@
 
 import {
   appendReflection,
-  getOrCreateDailyDiary,
   readDailyDiary,
+  renderDailyDiary,
 } from '../../diary.js';
 import type { Tool, ToolArgs, ToolContext, ToolOutcome } from '../registry.js';
 
@@ -56,8 +56,9 @@ function readEnergy(args: ToolArgs): number | string | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Дневник за дату. Если записи нет, она создаётся из шаблона вместе с блоком
- * выполненных за день задач — так же, как это делал удалённый скрипт.
+ * Дневник за дату. Если записи нет, движок показывает отрендеренный шаблон с
+ * выполненные задачи — но **не создаёт** запись: чтение не меняет данные
+ * владельца (`effect: { kind: 'read' }`, PLAN-AGENT-WRITE-GUARD Р4).
  */
 async function readDiary(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
   const date = readDate(args);
@@ -67,12 +68,19 @@ async function readDiary(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome>
       return { ok: true, content: existing, data: { date: date ?? null, created: false } };
     }
 
-    const created = await getOrCreateDailyDiary(ctx.userId, {
+    const rendered = await renderDailyDiary(ctx.userId, {
       date,
       now: ctx.now,
       includeTasks: args.include_tasks !== false,
     });
-    return { ok: true, content: created.content, data: { date: created.date, created: true } };
+    const content =
+      `Дневник за ${rendered.date} ещё не создан — ниже шаблон, который получится при первой записи.\n\n` +
+      rendered.content;
+    return {
+      ok: true,
+      content,
+      data: { date: rendered.date, created: false, persisted: false },
+    };
   } catch (error) {
     return fail(`Не удалось прочитать дневник: ${errorText(error)}`);
   }
@@ -106,8 +114,9 @@ async function appendDiary(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
 export const diaryTools: Tool[] = [
   {
     name: 'read_daily_diary',
+    effect: { kind: 'read' },
     description:
-      'Показывает дневник рефлексии за день (по умолчанию — сегодня). Если записи ещё нет, создаёт её из шаблона и подставляет выполненные задачи.',
+      'Показывает дневник рефлексии за день (по умолчанию — сегодня). Если записи ещё нет, показывает шаблон с выполненными задачами и помечает, что запись не создана (ничего не пишет).',
     schema: {
       type: 'object',
       properties: {
@@ -123,6 +132,7 @@ export const diaryTools: Tool[] = [
   },
   {
     name: 'append_reflection',
+    effect: { kind: 'create' },
     description:
       'Добавляет вечернюю запись рефлексии в дневник за день и, если указано, обновляет уровень энергии.',
     schema: {

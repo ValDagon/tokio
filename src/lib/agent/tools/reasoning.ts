@@ -445,6 +445,7 @@ async function rememberRuleTool(args: ToolArgs, ctx: ToolContext): Promise<ToolO
 export const reasoningTools: Tool[] = [
   {
     name: 'synthesize_life_context',
+    effect: { kind: 'read' },
     description:
       'NotebookLM-режим: собирает источники и факты из жизни пользователя (заметки, память, финансы, задачи, препараты) для глубокого рассуждения. Вызывай, когда просят порассуждать о жизни, ситуации, стратегии, привычках, решениях или планах.',
     schema: {
@@ -462,6 +463,10 @@ export const reasoningTools: Tool[] = [
   },
   {
     name: 'update_custom_directives',
+    // Перезапись без истории, но по явной просьбе владельца и без потери его данных:
+    // прежний текст директив уходит в наблюдение. Сюда пробивается только входной гейт
+    // (светская реплика не получает write-тулсет), поэтому это `mutate`, не `destroy`.
+    effect: { kind: 'mutate' },
     description:
       'Обновляет персональные директивы (системный промпт поведения) в главе документации «Персональные директивы».',
     schema: {
@@ -479,12 +484,14 @@ export const reasoningTools: Tool[] = [
   },
   {
     name: 'get_custom_directives',
+    effect: { kind: 'read' },
     description: 'Показывает текущие персональные директивы (системный промпт поведения).',
     schema: { type: 'object', properties: {}, required: [] },
     run: getCustomDirectives,
   },
   {
     name: 'remember_rule',
+    effect: { kind: 'mutate' },
     description:
       'Запоминает постоянное правило или предпочтение пользователя в персональных директивах. Используй, когда просят «запомни», «всегда», «больше не предлагай».',
     schema: {

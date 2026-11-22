@@ -67,6 +67,7 @@ import {
 import {
   listTools,
   normalizeToolName,
+  requiresConfirmation,
   runTool,
   toolSummaries,
   type Tool,
@@ -697,9 +698,9 @@ function normalizeChatReply(reply: AgentChatResult): AgentChatReply {
   };
 }
 
-/** Деструктивный инструмент без явного `confirm: true` не выполняется. */
+/** Инструмент с эффектом, требующим подтверждения, без явного `confirm: true` не выполняется. */
 function needsConfirmation(tool: Tool | null, args: Record<string, unknown>): boolean {
-  return tool?.destructive === true && args.confirm !== true;
+  return tool != null && requiresConfirmation(tool.effect) && args.confirm !== true;
 }
 
 /** Инструменты без побочных эффектов: смежные вызовы в одном ходе безопасны для Promise.all. */
@@ -734,7 +735,7 @@ function isParallelSafeReadCall(call: ThreadToolCall, tools: readonly Tool[]): b
   const validName = normalizeToolName(call.name);
   if (!validName || !READ_ONLY_TOOL_NAMES.has(validName)) return false;
   const target = tools.find((t) => t.name === validName) ?? null;
-  if (!target || target.destructive || needsConfirmation(target, call.args ?? {})) return false;
+  if (!target || needsConfirmation(target, call.args ?? {})) return false;
   return true;
 }
 
@@ -770,11 +771,12 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     const toolSpecs: ProviderToolSpec[] = tools.map((tool) => {
       // Без схемы инструмент остаётся вызываемым: пустой объект валиден.
       const parameters = tool.schema ?? { type: 'object', properties: {} };
-      if (tool.destructive !== true) {
+      if (!requiresConfirmation(tool.effect)) {
         return { name: tool.name, description: tool.description, parameters };
       }
-      // Деструктивный инструмент получает поле подтверждения в самой схеме,
-      // чтобы модель видела требование, а не узнавала о нём из ошибки.
+      // Тулза с необратимым/массовым эффектом получает поле подтверждения в
+      // самой схеме, чтобы модель видела требование, а не узнавала о нём из
+      // ошибки. Уже объявленное бизнес-правило тулзы не перезаписывается.
       const properties = isRecord(parameters.properties) ? parameters.properties : {};
       return {
         name: tool.name,
@@ -783,7 +785,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           ...parameters,
           properties: {
             ...properties,
-            confirm: { type: 'boolean', description: CONFIRM_ARG_DESCRIPTION },
+            confirm: properties.confirm ?? { type: 'boolean', description: CONFIRM_ARG_DESCRIPTION },
           },
         },
       };
