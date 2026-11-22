@@ -259,9 +259,12 @@ export const MAX_TOOL_CALLS_PER_RUN = 30;
 
 /**
  * Мягкий дедлайн хода: платформа убивает изолят примерно через 30–40 с, поэтому
- * к 20-й секунде движок обязан уже отдавать ответ, а не звать модель.
+ * к 22-й секунде (бюджет минус `REPLY_RESERVE_MS`) движок обязан отдавать ответ,
+ * а не звать модель. Бюджет 26 с, а не 20: измеренная норма — 3–4 с на раунд с
+ * инструментами и 14–17 с на синтез, поэтому 20 с оставляли обычному ходу
+ * «инструменты → ответ» меньше секунды запаса.
  */
-export const TURN_BUDGET_MS = 20_000;
+export const TURN_BUDGET_MS = 26_000;
 
 /**
  * Резерв бюджета на конец хода: сохранение треда, гашение индикатора и отправка
@@ -799,6 +802,8 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     let deadlineHit = false;
     /** Сколько длился самый долгий вызов модели в этом прогоне, мс. */
     let slowestModelCallMs = 0;
+    /** Сколько вызовов модели ход уже сделал: у первого ограничения нет. */
+    let modelCallsStarted = 0;
     /** Сколько ход уже идёт. */
     const elapsedMs = (): number => clock() - startedAt;
     /**
@@ -812,9 +817,14 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
      * бюджет вместе с резервом на отправку. Ориентир — самый долгий вызов этого
      * прогона, но не меньше `MODEL_CALL_FLOOR_MS`: вызов нельзя прервать, поэтому
      * «пока было быстро» не гарантирует, что следующий не повиснет.
+     *
+     * Первый вызов — исключение: без него хода нет, а бюджет мог съесть не он,
+     * а ожидание в очереди лока (`withUserLock`). Такой ход хотя бы попробует
+     * ответить по существу, если до дедлайна ещё есть время.
      */
     const modelCallFitsBudget = (): boolean =>
       unlimited ||
+      (modelCallsStarted === 0 && !pastDeadline()) ||
       elapsedMs() + Math.max(slowestModelCallMs, MODEL_CALL_FLOOR_MS) + REPLY_RESERVE_MS <=
         turnBudgetMs;
     /** Неожиданные отказы инструментов: имя тулзы = часть сигнатуры. */
@@ -909,6 +919,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       let raw: AgentChatResult;
       try {
         const callStartedAt = clock();
+        modelCallsStarted += 1;
         raw = await chatFn({
           userId,
           systemPrompt,
@@ -1198,7 +1209,10 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       iteration += 1;
     }
 
-    if (stopReason === 'step_limit' && steps.length > 0 && !deadlineHit && modelCallFitsBudget()) {
+    // Синтез — единственный путь к настоящему ответу после лимита шагов, поэтому
+    // его гейтит резерв на отправку, а не полная проверка бюджета: «слишком
+    // длинное действие» не лучше опоздавшего ответа.
+    if (stopReason === 'step_limit' && steps.length > 0 && !deadlineHit && !pastDeadline()) {
       try {
         const prepared = sanitizeThread(working);
         const synthesisSystemPrompt = `${buildSystemPrompt({

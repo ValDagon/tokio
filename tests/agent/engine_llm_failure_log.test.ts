@@ -236,7 +236,7 @@ describe('журнал: терминальные причины и отказы 
   it('мягкий дедлайн хода — не отказ агента: журнал пуст', async () => {
     let clock = 0;
     const chatFn: AgentChatFn = async () => {
-      clock += 21_000;
+      clock += 24_000;
       return { content: 'Thought: смотрю\nAction: no_such_tool\nAction Input: {}', toolCalls: [] };
     };
 

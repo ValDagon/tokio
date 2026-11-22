@@ -138,8 +138,8 @@ describe('runAgent: мягкий дедлайн хода', () => {
     const requests: unknown[] = [];
     const chat: AgentChatFn = async (request) => {
       requests.push(request);
-      // Модель ответила уже за дедлайном: инструменты звать нельзя.
-      clock += 21_000;
+      // Модель ответила уже за дедлайном (24 с бюджета 26 с): инструменты звать нельзя.
+      clock += 24_000;
       return { content: '', toolCalls: [{ id: 'c1', name: 'echo', args: { text: 'привет' } }] };
     };
     const order: string[] = [];
@@ -178,7 +178,7 @@ describe('runAgent: мягкий дедлайн хода', () => {
       requests.push(request);
       replyIndex += 1;
       if (replyIndex === 1) return { content: '', toolCalls: [{ id: 'c1', name: 'echo', args: { text: 'привет' } }] };
-      clock += 21_000;
+      clock += 24_000;
       return { content: '', toolCalls: [{ id: 'c2', name: 'echo', args: { text: 'ещё' } }] };
     };
     const order: string[] = [];
@@ -209,9 +209,10 @@ describe('runAgent: мягкий дедлайн хода', () => {
     let calls = 0;
     const chat: AgentChatFn = async () => {
       calls += 1;
-      // Первый вызов — 5 с: следующий (5 + 12 + 4) уже не влезает в бюджет,
-      // поэтому инструмент выполняется, а ответ отдаётся детерминированно.
-      clock += 5_000;
+      // Первый вызов — 17 с (замеренное окно 14:19): следующий (17 + 12 + 4)
+      // уже не влезает в бюджет, поэтому инструмент выполняется, а ответ
+      // отдаётся детерминированно.
+      clock += 17_000;
       return { content: '', toolCalls: [{ id: `c${calls}`, name: 'echo', args: { text: String(calls) } }] };
     };
     const order: string[] = [];
@@ -228,8 +229,8 @@ describe('runAgent: мягкий дедлайн хода', () => {
       clock: () => clock,
     });
 
-    // Живой сбой 22.11.2026 14:19: второй вызов модели повис и платформа убила
-    // ход. После медленного первого вызова второго больше нет.
+    // Живой сбой 22.11.2026 14:19: медленный вызов съел бюджет, ответа не было.
+    // После медленного вызова второго больше нет — отвечаем собранным.
     expect(calls).toBe(1);
     expect(order).toEqual(['tool:1']);
     expect(result.stopReason).toBe('step_limit');
@@ -258,10 +259,84 @@ describe('runAgent: мягкий дедлайн хода', () => {
       profile: PROFILE,
       now: NOW,
       clock: () => clock,
+      maxSteps: 2,
+    });
+
+    expect(calls).toBe(3);
+    expect(order).toEqual(['tool:1', 'tool:2']);
+    expect(result.stopReason).toBe('step_limit');
+  });
+
+  it('время инструментов входит в бюджет, но не отменяет второй вызов', async () => {
+    // Регрессия из ревью: раньше раунд «3 с модель + инструменты» упирался в
+    // порог и обычный ход схлопывался в шаблон.
+    let clock = 0;
+    let calls = 0;
+    const chat: AgentChatFn = async () => {
+      calls += 1;
+      if (calls === 1) {
+        clock += 3_000;
+        return { content: '', toolCalls: [{ id: 'c1', name: 'echo', args: { text: 'привет' } }] };
+      }
+      clock += 15_000;
+      return { content: 'Готово: привет.', toolCalls: [] };
+    };
+    const order: string[] = [];
+    const slowEcho: Tool = {
+      name: 'echo',
+      description: 'Возвращает переданный текст как есть',
+      schema: { type: 'object', properties: { text: { type: 'string' } } },
+      run: (args) => {
+        clock += 1_500;
+        order.push(`tool:${String(args.text ?? '')}`);
+        return `эхо: ${String(args.text ?? '')}`;
+      },
+    };
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'разбери инбокс',
+      mode: 'action',
+      tools: [slowEcho],
+      store: null,
+      chatFn: chat,
+      profile: PROFILE,
+      now: NOW,
+      clock: () => clock,
     });
 
     expect(calls).toBe(2);
-    expect(order).toEqual(['tool:1', 'tool:2']);
+    expect(order).toEqual(['tool:привет']);
+    expect(result.stopReason).toBe('final');
+    expect(result.reply).toBe('Готово: привет.');
+  });
+
+  it('первый вызов модели не блокируется даже маленьким бюджетом', async () => {
+    // `turnBudgetMs` — публичная опция: значение меньше floor+reserve не должно
+    // молча обнулять модель. Один вызов есть всегда, дальше — дедлайн.
+    let clock = 0;
+    let calls = 0;
+    const chat: AgentChatFn = async () => {
+      calls += 1;
+      clock += 1_000;
+      return { content: '', toolCalls: [{ id: 'c1', name: 'echo', args: { text: 'привет' } }] };
+    };
+    const order: string[] = [];
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'разбери инбокс',
+      mode: 'action',
+      tools: [echoTool(order)],
+      store: null,
+      chatFn: chat,
+      profile: PROFILE,
+      now: NOW,
+      clock: () => clock,
+      turnBudgetMs: 5_000,
+    });
+
+    expect(calls).toBe(1);
     expect(result.stopReason).toBe('step_limit');
   });
 
@@ -270,9 +345,9 @@ describe('runAgent: мягкий дедлайн хода', () => {
     let calls = 0;
     const chat: AgentChatFn = async () => {
       calls += 1;
-      // Вызов вернулся на 17-й секунде: до бюджета осталось 3 с — меньше
+      // Вызов вернулся на 24-й секунде: до бюджета осталось 2 с — меньше
       // резерва, поэтому инструмент не выполняется, ответ уходит сразу.
-      clock += 17_000;
+      clock += 24_000;
       return { content: '', toolCalls: [{ id: 'c1', name: 'echo', args: { text: 'привет' } }] };
     };
     const order: string[] = [];
