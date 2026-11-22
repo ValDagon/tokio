@@ -245,6 +245,7 @@
   },
   "agent": {
     "confirm_prompt": "⚠️ Confirm the action: {{name}}{{detail}}\n\nNothing has been changed yet. Reply “yes” and I will do it.",
+    "confirm_expired": "⏱ The confirmation has expired — nothing was done. Ask again if you still need it.",
     "deadline_base": "⏱ I could not finish everything in one turn and stopped so I could answer.",
     "deadline_done_header": "Done before stopping:",
     "deadline_more": "…and {{count}} more, not listed above.",

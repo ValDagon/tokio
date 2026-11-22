@@ -815,6 +815,20 @@ function withoutConfirm(args: Record<string, unknown>): Record<string, unknown> 
   return payload;
 }
 
+/**
+ * Хвост треда ждёт ответа на вопрос подтверждения: вопрос в `meta` без финала
+ * после него. Нужен, когда право на исполнение уже протухло и
+ * `readAgentTurnState` честно отдаёт `null`: вопрос остался, но «да» на него
+ * больше не разрешение, и модель эту сцену видеть не должна.
+ */
+function threadAwaitsConfirm(messages: readonly AgentMessage[]): boolean {
+  const closed = dropUnfinishedTail(messages);
+  if (closed.length >= messages.length) return false;
+  return messages
+    .slice(closed.length)
+    .some((message) => typeof message.meta?.[CONFIRM_PROMPT_KEY] === 'string');
+}
+
 /** Инструменты без побочных эффектов: смежные вызовы в одном ходе безопасны для Promise.all. */
 export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   'list_tasks',
@@ -943,15 +957,22 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       isAffirmativeReply(text)
         ? { name: confirmationTool.name, args: withoutConfirm(turnState.confirmation.args) }
         : null;
-    if (turnState.confirmation) {
-      if (pendingConfirm) {
-        // Вопрос и висячее «действие не выполнено» в историю не идут: ответ
-        // владельца уже здесь, а исполнение ниже — детерминированное.
-        stored = dropUnfinishedTail(stored);
-      } else if (text) {
+    /** Просроченное (или потерявшее право) подтверждение встретило «да». */
+    let staleYes = false;
+    // Право может протухнуть до того, как о нём прочитают: `kv` тогда отдаёт
+    // `null`, а вопрос остался в треде — «да» на него всё равно не разрешение.
+    const awaitingConfirm = turnState.confirmation !== null || threadAwaitsConfirm(stored);
+    if (awaitingConfirm) {
+      // Ждущий вопрос — не закрытая просьба: в историю он не идёт никогда, ни
+      // при живом подтверждении, ни когда права на исполнение уже нет.
+      stored = dropUnfinishedTail(stored);
+      if (!pendingConfirm && text) {
         // Любая другая реплика — владелец занят другим: право на исполнение
         // сгорает, и «вспомнить» его моделью больше нельзя.
         await patchAgentTurnState(userId, { confirmation: null });
+        // «Да» после TTL модель не исполняет: висячая сцена с вызовом ей не
+        // отдаётся, иначе она сама повторит тулзу с `confirm: true`.
+        staleYes = isAffirmativeReply(text);
       }
     }
     if (!text) {
@@ -961,6 +982,33 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         steps: [],
         stopReason: 'empty_reply',
         thread: stored,
+        appliedSkillIds: [],
+      };
+    }
+
+    if (staleYes) {
+      // Детерминированный отказ: право истекло, и «да» больше не разрешение.
+      // Модель здесь не зовётся — иначе она восстановит вызов из треда сама.
+      const reply = t(profile.locale, 'agent.confirm_expired');
+      const thread = sanitizeThread([
+        ...stored,
+        { role: 'user', content: text },
+        { role: 'assistant', content: reply },
+      ]);
+      if (store) {
+        try {
+          await store.save(userId, thread);
+        } catch {
+          // сбой записи не должен отнимать у пользователя готовый ответ
+        }
+      }
+      await patchAgentTurnState(userId, { lastTurnAt: new Date(clock()).toISOString() }, clock());
+      return {
+        reply,
+        mode: resolvedMode,
+        steps: [],
+        stopReason: 'step_limit',
+        thread,
         appliedSkillIds: [],
       };
     }
@@ -1047,14 +1095,20 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       // не «починит» синтезированным успехом.
       const args = { ...pendingConfirm.args, confirm: true };
       const call: ThreadToolCall = {
-        id: `call_confirm_${steps.length + 1}`,
+        id: `call_confirm_${clock()}`,
         name: pendingConfirm.name,
         args,
       };
       working.push({ role: 'assistant', content: '', meta: toolCallsMeta([call]) });
-      await notifyProgress({ stage: 'tool', step: iteration, tool: pendingConfirm.name });
+      await notifyProgress({ stage: 'tool', step: 1, tool: pendingConfirm.name });
       await traceTurn({ stage: 'tool', tool: pendingConfirm.name });
       const outcome = await runTool(pendingConfirm.name, args, ctx, tools);
+      if (outcome.ok) {
+        // Подпись хода: повтор того же вызова моделью ниже считается повтором,
+        // а не первым вызовом, и вторая исполненная тулза невозможна.
+        lastTurnSignature = turnCallSignature([{ name: call.name, args }]);
+        consecutiveSameTurn = 1;
+      }
       if (outcome.unexpected === true) unexpectedTools.add(pendingConfirm.name);
       const observation = toolObservation(outcome, pendingConfirm.name);
       working.push({

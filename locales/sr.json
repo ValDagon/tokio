@@ -245,6 +245,7 @@
   },
   "agent": {
     "confirm_prompt": "⚠️ Potvrdi radnju: {{name}}{{detail}}\n\nNišta još nije izmenjeno. Odgovori „da” i izvršiću.",
+    "confirm_expired": "⏱ Potvrda je istekla — radnja nije izvršena. Ako ti i dalje treba, zamoli ponovo.",
     "deadline_base": "⏱ Nisam stigao sve u jednom potezu i zaustavio sam se da bih odgovorio.",
     "deadline_done_header": "Urađeno pre zaustavljanja:",
     "deadline_more": "…i još {{count}}, nije prikazano.",

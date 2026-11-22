@@ -32,7 +32,14 @@ import {
   type PendingConfirmation,
 } from '../../src/lib/dal/misc';
 import { ensureUser } from '../../src/lib/dal/users';
-import { runAgent, type AgentChatFn } from '../../src/lib/agent/engine';
+import { t } from '../../src/lib/i18n';
+import {
+  runAgent,
+  type AgentChatFn,
+  type AgentThreadStore,
+} from '../../src/lib/agent/engine';
+import { CONFIRM_PROMPT_KEY, toolCallsOf } from '../../src/lib/agent/sanitize';
+import type { AgentMessage } from '../../src/types';
 
 const USER = 909090;
 const NOW = new Date('2026-11-22T15:00:00Z');
@@ -65,7 +72,7 @@ async function seedLiability(): Promise<void> {
 }
 
 /** Ход, в котором модель просит удалить обязательство: должен упереться в confirm. */
-async function askDelete(): Promise<Awaited<ReturnType<typeof runAgent>>> {
+async function askDelete(store?: AgentThreadStore): Promise<Awaited<ReturnType<typeof runAgent>>> {
   const chatFn: AgentChatFn = async () => ({
     content: '',
     toolCalls: [{ id: 'call_1', name: 'delete_liability', args: { liability_name: LIABILITY } }],
@@ -78,7 +85,30 @@ async function askDelete(): Promise<Awaited<ReturnType<typeof runAgent>>> {
     chatFn,
     now: NOW,
     clock: () => NOW_MS,
+    store,
   });
+}
+
+/**
+ * Тред в памяти: следующая реплика читает ровно то, что записала предыдущая,
+ * поэтому по `thread()` видно, что именно унаследовал новый ход.
+ */
+function memoryThread(): { store: AgentThreadStore; thread: () => AgentMessage[] } {
+  let saved: AgentMessage[] = [];
+  return {
+    store: {
+      async load() {
+        return saved.map((message) => ({ ...message }));
+      },
+      async save(_userId, next) {
+        saved = [...next];
+      },
+      async clear() {
+        saved = [];
+      },
+    },
+    thread: () => saved,
+  };
 }
 
 /**
@@ -96,6 +126,25 @@ async function replyWith(text: string): Promise<Awaited<ReturnType<typeof runAge
     now: NOW,
     clock: () => NOW_MS,
     store: null,
+  });
+}
+
+/** Ход на заданных часах с общим тредом: `clock` двигается между репликами. */
+async function runIn(
+  store: AgentThreadStore,
+  text: string,
+  clockMs: number,
+  chatFn: AgentChatFn,
+): Promise<Awaited<ReturnType<typeof runAgent>>> {
+  return runAgent({
+    userId: USER,
+    text,
+    mode: 'action',
+    profile: PROFILE,
+    chatFn,
+    now: new Date(clockMs),
+    clock: () => clockMs,
+    store,
   });
 }
 
@@ -181,6 +230,61 @@ describe('подтверждение живёт в kv', () => {
 
     expect(result.steps.filter((step) => step.action !== null)).toHaveLength(0);
     expect(await listLiabilities(USER)).toHaveLength(1);
+    expect((await rawState(USER))?.confirmation).toBeNull();
+  });
+
+  it('«да» после TTL отвергает движок: висячий вызов и вопрос до модели не доходят', async () => {
+    await seedLiability();
+    const mem = memoryThread();
+    await askDelete(mem.store);
+    // Confirm-ход оставил в треде вопрос и незакрытую просьбу.
+    expect(
+      mem.thread().some((message) => typeof message.meta?.[CONFIRM_PROMPT_KEY] === 'string'),
+    ).toBe(true);
+
+    const late = NOW_MS + PENDING_CONFIRM_TTL_MS + 60_000;
+    const seen: string[] = [];
+    const chatFn: AgentChatFn = async () => {
+      seen.push('model');
+      // Если модель всё-таки позовут, она повторит удаление — как в баге.
+      return {
+        content: '',
+        toolCalls: [{ id: 'call_2', name: 'delete_liability', args: { liability_name: LIABILITY } }],
+      };
+    };
+
+    const result = await runIn(mem.store, 'да', late, chatFn);
+
+    // Тулза не исполнена, модель не спрошена, ответ — локализованный отказ.
+    expect(seen).toHaveLength(0);
+    expect(result.steps).toHaveLength(0);
+    expect(await listLiabilities(USER)).toHaveLength(1);
+    expect(result.reply).toBe(t('ru', 'agent.confirm_expired'));
+    // В унаследованном треде нет ни вызова, ни вопроса.
+    const thread = mem.thread();
+    expect(thread.flatMap((message) => toolCallsOf(message).map((call) => call.name))).toEqual([]);
+    expect(
+      thread.some((message) => typeof message.meta?.[CONFIRM_PROMPT_KEY] === 'string'),
+    ).toBe(false);
+    expect(thread.at(-1)?.content).toBe(t('ru', 'agent.confirm_expired'));
+    expect((await rawState(USER))?.confirmation).toBeNull();
+  });
+
+  it('не-согласная реплика срезает вопрос и вызов, а не отдаёт их модели', async () => {
+    await seedLiability();
+    const mem = memoryThread();
+    await askDelete(mem.store);
+
+    const chatFn: AgentChatFn = async () => ({ content: 'Хорошо, покажу задачи.', toolCalls: [] });
+    await runIn(mem.store, 'нет, покажи мои задачи', NOW_MS + 60_000, chatFn);
+
+    expect(await listLiabilities(USER)).toHaveLength(1);
+    const thread = mem.thread();
+    expect(thread.flatMap((message) => toolCallsOf(message).map((call) => call.name))).toEqual([]);
+    expect(
+      thread.some((message) => typeof message.meta?.[CONFIRM_PROMPT_KEY] === 'string'),
+    ).toBe(false);
+    expect(JSON.stringify(thread)).not.toContain(LIABILITY);
     expect((await rawState(USER))?.confirmation).toBeNull();
   });
 
