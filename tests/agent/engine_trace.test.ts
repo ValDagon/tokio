@@ -141,4 +141,67 @@ describe('крошка хода', () => {
     expect(trace?.deadlineCause).toBe('tools-skipped');
     expect(stats?.deadlineTurns).toBe(1);
   });
+
+  it('пропущенные инструменты в текстовом протоколе — та же причина «tools-skipped»', async () => {
+    // Легаси-ветка: модель ответила текстовым действием, нативных toolCalls нет.
+    let calls = 0;
+    const chatFn: AgentChatFn = async () => {
+      calls += 1;
+      return {
+        content: '{"thought":"собери","action":"echo_tool","action_input":{"value":"a"}}',
+        toolCalls: [],
+      };
+    };
+    // Модель вернулась на 23-й секунде: резерв (26 − 4) съеден, инструмент не зовём.
+    const started = NOW.getTime();
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'сделай что-нибудь',
+      tools: [echoTool],
+      profile: PROFILE,
+      chatFn,
+      now: NOW,
+      clock: () => started + (calls === 0 ? 0 : 23_000),
+      store: null,
+    });
+
+    expect(result.stopReason).toBe('step_limit');
+
+    const { trace, stats } = await readTurnTrace(USER);
+    expect(trace?.deadlineCause).toBe('tools-skipped');
+    expect(stats?.deadlineTurns).toBe(1);
+  });
+
+  it('обрыв ответа по бюджету — дедлайн, а не штатный final', async () => {
+    let calls = 0;
+    const chatFn: AgentChatFn = async () => {
+      calls += 1;
+      // Ответ оборван по длине, а добор не влезает в бюджет (12 + floor 12 + 4 > 26):
+      // частичный ответ отдаём, но ход обязан попасть в счётчик дедлайнов.
+      return { content: 'Частичный ответ без конца', toolCalls: [], finishReason: 'length' };
+    };
+    const started = NOW.getTime();
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'расскажи подробно',
+      tools: [],
+      profile: PROFILE,
+      chatFn,
+      now: NOW,
+      clock: () => started + (calls === 0 ? 0 : 12_000),
+      store: null,
+    });
+
+    expect(calls).toBe(1);
+    expect(result.stopReason).toBe('final');
+    expect(result.reply).toBe('Частичный ответ без конца');
+
+    const { trace, stats } = await readTurnTrace(USER);
+    expect(trace?.stopReason).toBe('final');
+    expect(trace?.deadlineCause).toBe('budget');
+    expect(trace?.deadlineAt).not.toBeNull();
+    expect(stats?.deadlineTurns).toBe(1);
+  });
 });

@@ -27,12 +27,19 @@
 import { api } from 'sdk';
 
 import type { AgentProgressEvent } from '../lib/agent/engine.js';
+import { PROGRESS_SHOW_AFTER_MS } from '../lib/agent/engine.js';
 import { kvDelete, kvGetJson, kvSetJson, patchTurnTrace } from '../lib/dal/misc.js';
 import { safeEdit, safeSendMessage } from './formatting.js';
 import { getMainKeyboard } from './keyboards.js';
 
-/** Через сколько миллисекунд хода показываем строку прогресса. */
-export const PROGRESS_SHOW_AFTER_MS = 8_000;
+/**
+ * Через сколько миллисекунд хода показываем строку прогресса.
+ *
+ * Живёт в движке (`lib/agent/engine.ts`): по тому же порогу он решает, повторять
+ * ли стадию `model` после возврата модели. Здесь — реэкспорт, чтобы у индикатора
+ * и у движка не разъехались два числа.
+ */
+export { PROGRESS_SHOW_AFTER_MS };
 
 /** Минимальный интервал между правками строки. */
 export const PROGRESS_UPDATE_EVERY_MS = 2_000;
