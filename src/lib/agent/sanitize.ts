@@ -44,6 +44,16 @@ export const TOOL_CALLS_KEY = 'toolCalls';
 /** Ключ `meta` у наблюдения: какому вызову оно отвечает. */
 export const TOOL_RESULT_KEY = 'toolResult';
 
+/**
+ * Ключ `meta` у вопроса подтверждения: имя тулзы, которую ждёт владелец.
+ *
+ * Метка нужна, чтобы вопрос не считался финальным ответом при срезе
+ * незакрытого хвоста (`dropUnfinishedTail`): по форме он неотличим от ответа —
+ * шаг ассистента без объявленных вызовов. Поле аддитивное: старые треды читаются
+ * как раньше, `toProviderMessages` лишний ключ игнорирует.
+ */
+export const CONFIRM_PROMPT_KEY = 'confirmPrompt';
+
 /** Текст синтезированного наблюдения — дословно как в upstream. */
 export const SYNTHESIZED_OBSERVATION = 'Действие успешно зафиксировано.';
 
@@ -320,6 +330,29 @@ export function trimThread(messages: readonly AgentMessage[], options: TrimOptio
     start = anchoredTokens <= maxTokens * ANCHOR_BUDGET_FACTOR ? anchored : windowStart;
   }
   return budgeted.slice(start);
+}
+
+/**
+ * Отрезает незакрытый хвост: просьбу, вызовы и вопрос подтверждения, после
+ * которых финального ответа так и не было.
+ *
+ * Возвращает префикс до последнего шага ассистента без объявленных вызовов —
+ * это единственное, что владелец прочитал как ответ. Вопрос подтверждения
+ * (`CONFIRM_PROMPT_KEY`) финальным ответом не считается: он ждёт реплики, а
+ * значит, просьба ещё не закрыта. Если такого шага нет, история пуста:
+ * инструкция без ответа не должна наследоваться новым ходом (применяется при
+ * простое дольше `THREAD_STALE_AFTER_MS`). Идемпотентна.
+ */
+export function dropUnfinishedTail(messages: readonly AgentMessage[]): AgentMessage[] {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role !== 'assistant') continue;
+    if (toolCallsOf(message).length > 0) continue;
+    if (typeof message.meta?.[CONFIRM_PROMPT_KEY] === 'string') continue;
+    return messages.slice(0, index + 1);
+  }
+  return [];
 }
 
 export interface SanitizeOptions extends TrimOptions {
