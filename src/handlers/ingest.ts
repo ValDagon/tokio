@@ -7,7 +7,7 @@
 
 import { api } from 'sdk';
 import { CUSTOM_INSTRUCTIONS_SLUG, formatAgentQueryWithReply } from '../lib/agent/constants.js';
-import { LLM_ERROR_TEXT, runAgent } from '../lib/agent/engine.js';
+import { LLM_ERROR_TEXT, runAgent, type AgentRunResult } from '../lib/agent/engine.js';
 // [public-only] Лимит $2: гейты перед LLM-вызовами есть только в публичной редакции (4 места ниже).
 import { checkSpendLimit, spendLimitExceededMessage } from '../lib/billing.js';
 import { normalizeInboxMessage } from '../lib/classifier.js';
@@ -83,6 +83,7 @@ import {
   type VisionResult,
 } from '../lib/vision.js';
 import { escapeAmpLtGt, safeAnswer, safeEdit } from './formatting.js';
+import { startTurnProgress } from './progress.js';
 import {
   buildAgentDeepLinkKeyboard,
   buildUndoWithAppKeyboard,
@@ -226,7 +227,19 @@ async function tryAgentAutonomousStep(
   const agentQuery = userText.replace(/^\/(?:ask|agent|агент)\s*/i, '').trim();
   const fullQuery = formatAgentQueryWithReply(agentQuery, replyContext);
 
-  const agentRes = await runAgent({ userId, text: fullQuery });
+  // Живая индикация: «печатает…» сразу, строка прогресса — только на медленном
+  // ходе. Вся индикация внутри себя глушит сбои Bot API (handlers/progress.ts).
+  const progress = startTurnProgress({ chatId, userId });
+  await progress.typing();
+
+  let agentRes: AgentRunResult;
+  try {
+    agentRes = await runAgent({ userId, text: fullQuery, onProgress: progress.onProgress });
+  } catch (error) {
+    // Ход упал — индикатор не должен остаться висеть: заменяем честным текстом.
+    await progress.fail(LLM_ERROR_TEXT);
+    throw error;
+  }
 
   // Сбой модели — не ответ по существу. Вопрос не должен умирать вместе с
   // провайдером: деньги, задачи и аптечка считаются из SQLite, модель для них
@@ -234,15 +247,24 @@ async function tryAgentAutonomousStep(
   // этом же ходе не ушёл детерминированный ответ (сводка, задача, заметка,
   // напоминание), чтобы извинение не вставало рядом с настоящим ответом.
   if (agentRes.stopReason === 'llm_error') {
+    // Текст сбоя одинаков для ответа и для индикатора: пользователь видит одну
+    // честную строку, а не «⏳ Думаю…», оставшуюся навсегда.
+    const outageText = isQuestion
+      ? await modelOutageReply(
+          userId,
+          [agentQuery || userText, replyContext].filter(Boolean).join(' '),
+        )
+      : LLM_ERROR_TEXT;
+
+    if (await progress.fail(outageText)) return true;
+
     if (isQuestion) {
       // Вопрос не должен умирать вместе с провайдером: деньги, задачи и аптечка
       // считаются из SQLite. Ответ откладывается до конца хода той же
       // машинерией, что и прежняя заглушка: если в этом ходе уже ответила
       // сводка или напоминание, второй ответ не нужен.
-      const outageTopic = [agentQuery || userText, replyContext].filter(Boolean).join(' ');
-      const outage = await modelOutageReply(userId, outageTopic);
-      if (deferReplyNotice(chatId, outage)) return true;
-      await safeAnswer(chatId, outage, { replyMarkup: getMainKeyboard() });
+      if (deferReplyNotice(chatId, outageText)) return true;
+      await safeAnswer(chatId, outageText, { replyMarkup: getMainKeyboard() });
       return true;
     }
     deferReplyNotice(chatId, LLM_ERROR_TEXT);
@@ -263,10 +285,13 @@ async function tryAgentAutonomousStep(
       : getMainKeyboard();
 
     await safeAnswer(chatId, reply, { replyMarkup, isHtml: true });
+    await progress.finish();
     return true;
   }
 
-  // Агент промолчал (`empty_reply`) — отдаём сообщение в инбокс-фоллбэк
+  // Агент промолчал (`empty_reply`) — отдаём сообщение в инбокс-фоллбэк.
+  // Индикатор к этому моменту уже не нужен: строка гаснет до ответа инбокса.
+  await progress.finish();
   return false;
 }
 
