@@ -210,6 +210,21 @@ describe('trimThread: бюджет истории', () => {
     expect(result[0]!.content).toBe('Разбери инбокс и разложи всё по задачам');
     expect(isObservation(result[0]!)).toBe(false);
   });
+
+  it('не раздувает окно до бесконечности ради вопроса', () => {
+    const long = 'о'.repeat(4000);
+    const thread: AgentMessage[] = [{ role: 'user', content: 'Разбери инбокс' }];
+    for (let index = 0; index < 12; index += 1) {
+      thread.push(assistantWithCall(`c${index}`), observation(`c${index}`, long));
+    }
+
+    const result = trimThread(thread, { maxTokens: 2500 });
+    const tokens = result.reduce((sum, message) => sum + approximateTokens(message.content), 0);
+
+    // Вопрос важнее бюджета, но не любой ценой: окно ограничено множителем
+    // ANCHOR_BUDGET_FACTOR, иначе латентность съест весь ход.
+    expect(tokens).toBeLessThanOrEqual(2500 * 4);
+  });
 });
 
 describe('toProviderMessages: пары вызов ↔ результат', () => {

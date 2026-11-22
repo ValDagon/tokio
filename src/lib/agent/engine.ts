@@ -984,9 +984,20 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
 
         let i = 0;
         while (i < calls.length) {
-          // Инструменты после дедлайна не зовём: ход и так уже длинный.
+          // Действия после дедлайна не выполняем, но парность сохраняем: на каждый
+          // невыполненный вызов пишем честное наблюдение с ok: false. Иначе
+          // repairToolPairing синтезирует «Действие успешно зафиксировано.», и
+          // тред соврёт модели о невыполненном действии.
           if (pastDeadline()) {
             deadlineHit = true;
+            for (let k = i; k < calls.length; k += 1) {
+              const skipped = calls[k]!;
+              working.push({
+                role: 'user',
+                content: 'Не выполнено: ход превысил лимит времени.',
+                meta: observationMeta({ id: skipped.id, name: skipped.name, ok: false }),
+              });
+            }
             break;
           }
           const current = calls[i]!;
@@ -1237,9 +1248,13 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     // Журнал повторяемости: одна сигнатура на прогон за терминальную причину и
     // по одной на неожиданный отказ инструмента. `final` и `confirm` — не сбои,
     // ожидаемые отказы инструментов сюда не попадают (см. `ToolOutcome.unexpected`).
+    // Мягкий дедлайн тоже не сбой: это свойство латентности хода, а не отказ
+    // агента — иначе медленная сеть приносила бы владельцу задачу
+    // «самодиагностика: лимит шагов» и портила статистику скиллов.
     // Запись не бросает, поэтому результат прогона не меняется.
-    const terminalReason: FailureReason | null =
-      stopReason === 'llm_error'
+    const terminalReason: FailureReason | null = deadlineHit
+      ? null
+      : stopReason === 'llm_error'
         ? 'llm_error'
         : stopReason === 'empty_reply'
           ? 'empty_reply'

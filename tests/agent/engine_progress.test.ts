@@ -15,6 +15,7 @@ import { createTableStatements } from '../../src/db/ddl';
 import { TABLES } from '../../src/db/tables';
 import type { Tool } from '../../src/lib/agent/registry';
 import type { AgentProfile } from '../../src/lib/agent/prompts';
+import { SYNTHESIZED_OBSERVATION, toolResultOf } from '../../src/lib/agent/sanitize';
 import {
   runAgent,
   type AgentChatFn,
@@ -159,6 +160,14 @@ describe('runAgent: мягкий дедлайн хода', () => {
     expect(order).toEqual([]);
     expect(result.stopReason).toBe('step_limit');
     expect(result.reply.trim().length).toBeGreaterThan(0);
+
+    // Парность в треде сохранена честно: объявленный вызов получил наблюдение
+    // «не выполнено», а не синтезированное «Действие успешно зафиксировано».
+    const observations = result.thread
+      .map((message) => toolResultOf(message))
+      .filter((observation) => observation !== null);
+    expect(observations).toEqual([{ id: 'c1', name: 'echo', ok: false }]);
+    expect(result.thread.some((message) => message.content === SYNTHESIZED_OBSERVATION)).toBe(false);
   });
 
   it('на дедлайне отдаёт собранное, без синтеза и новых инструментов', async () => {
