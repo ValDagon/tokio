@@ -148,8 +148,9 @@ describe('живая индикация хода агента', () => {
     // «Печатает…» — первый вызов хода, до обращения к модели.
     expect(apiCalls[0]?.method).toBe('sendChatAction');
     expect(apiCalls[0]?.params).toMatchObject({ chat_id: CHAT, action: 'typing' });
-    // Перед каждым вызовом модели — снова «печатает…» (старт + две стадии модели).
-    expect(typingCalls()).toHaveLength(3);
+    // Старт хода и первая стадия модели: строки ещё нет. Как только строка
+    // открыта, повторная стадия модели второго «печатает…» уже не шлёт.
+    expect(typingCalls()).toHaveLength(2);
 
     // Одна эфемерная строка: появляется на медленной стадии с подписью инструмента.
     const [indicator] = ephemeralSends();
@@ -174,6 +175,29 @@ describe('живая индикация хода агента', () => {
     // Индикатор закрыт раньше ответа не был: удаление — последний шаг.
     const tail = methods().slice(-2);
     expect(tail).toEqual(['sendMessage', 'deleteMessage']);
+  });
+
+  it('повторная стадия модели при открытой строке не шлёт второе «печатает…»', async () => {
+    scriptTurn(
+      [
+        { afterMs: 0, stage: 'model' },
+        { afterMs: 9_000, stage: 'tool', tool: 'add_expense' },
+        { afterMs: 11_000, stage: 'model' },
+      ],
+      FINAL_RUN,
+    );
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
+
+    // «Печатает…» — старт хода и первая стадия модели, когда строки ещё нет.
+    expect(typingCalls()).toHaveLength(2);
+    // Строка открыта: повтор стадии модели продлевает её правкой, а не вторым
+    // sendChatAction в узком месте перед отправкой ответа.
+    expect(ephemeralSends()).toHaveLength(1);
+    expect(callsOf('editMessageText').at(-1)?.params).toMatchObject({
+      chat_id: CHAT,
+      text: '⏳ Думаю…',
+    });
   });
 
   it('предел хода: детерминированный ответ уходит, строка индикатора гаснет', async () => {

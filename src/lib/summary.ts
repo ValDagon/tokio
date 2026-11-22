@@ -424,7 +424,12 @@ function turnTraceLine(
           ]
         : []),
       ...(shownTools.length > 0 ? [t(locale, 'diagnostics.tools', { tools: toolsText })] : []),
-      ...(trace.stopReason ? [t(locale, 'diagnostics.stop', { reason: escapeHtml(trace.stopReason) })] : []),
+      // Поле приходит из `kv` строкой JSON: старая или битая запись может
+      // положить сюда число или объект, и `replace` внутри `escapeHtml` упал бы
+      // с `TypeError` — приводим к строке до экранирования.
+      ...(trace.stopReason
+        ? [t(locale, 'diagnostics.stop', { reason: escapeHtml(String(trace.stopReason)) })]
+        : []),
     ];
     parts.push(`${diagnosticsStamp(trace.updatedAt, timeZone, locale)} · ${details.join(' · ')}`);
   }

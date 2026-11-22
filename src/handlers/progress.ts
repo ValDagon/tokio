@@ -7,7 +7,7 @@
  *
  * Что здесь есть:
  *  - `typing()` — `sendChatAction typing`; вызывается сразу на старте хода и
- *    движком перед каждым обращением к модели;
+ *    перед обращением к модели, пока строка прогресса ещё не открыта;
  *  - `onProgress(event)` — хук движка (`AgentProgressEvent`): на медленной
  *    стадии (>= 8 с) показывает одну строку «⏳ Думаю…» / «⏳ Считаю расходы…»
  *    и обновляет её не чаще раза в 2 с;
@@ -280,7 +280,13 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
   const onProgress = async (event: AgentProgressEvent): Promise<void> => {
     if (closed) return;
     try {
-      if (event.stage === 'model') await typing();
+      // «Печатает…» уходит, только пока строки нет: открытая строка «⏳ …» уже
+      // и есть индикатор хода. Повторный `sendChatAction` на каждой стадии
+      // модели — лишний сетевой вызов в узком месте (резерв отправки ответа —
+      // `REPLY_RESERVE_MS = 4 с`), поэтому при видимой строке её вместо
+      // действия продлевает правка ниже.
+      const modelStage = event.stage === 'model';
+      if (modelStage && !visible) await typing();
       if (unavailable) return;
 
       const text = progressText(event);
@@ -296,7 +302,9 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
         return;
       }
       if (text === shownText || busy) return;
-      if (now() - shownAt < PROGRESS_UPDATE_EVERY_MS) return;
+      // Окно в 2 с защищает от частой смены подписи инструмента; стадия модели
+      // — признак живого хода, её правка строку продлевает сразу.
+      if (!modelStage && now() - shownAt < PROGRESS_UPDATE_EVERY_MS) return;
       busy = true;
       try {
         await update(text);
