@@ -7,7 +7,9 @@
  *
  * Что здесь есть:
  *  - `typing()` — `sendChatAction typing`; вызывается сразу на старте хода и
- *    перед обращением к модели, пока строка прогресса ещё не открыта;
+ *    перед обращением к модели, пока строка прогресса ещё не открыта, но не
+ *    чаще раза в `TYPING_REFRESH_MS` — иначе старт и первая стадия `model`
+ *    шлют один и тот же сигнал дважды;
  *  - `onProgress(event)` — хук движка (`AgentProgressEvent`): на медленной
  *    стадии (>= 8 с) показывает одну строку «⏳ Думаю…» / «⏳ Считаю расходы…»
  *    и обновляет её не чаще раза в 2 с;
@@ -43,6 +45,15 @@ export { PROGRESS_SHOW_AFTER_MS };
 
 /** Минимальный интервал между правками строки. */
 export const PROGRESS_UPDATE_EVERY_MS = 2_000;
+
+/**
+ * Через сколько миллисекунд «печатает…» отправляется повторно.
+ *
+ * Telegram гасит индикатор через 5 с, поэтому `begin()` и первая стадия
+ * `model` — один и тот же сигнал, если между ними нет пяти секунд: второй
+ * `sendChatAction` в узком месте перед отправкой ответа ничего не добавляет.
+ */
+export const TYPING_REFRESH_MS = 5_000;
 
 /** Текст стадии «модель думает». */
 export const THINKING_TEXT = '⏳ Думаю…';
@@ -183,9 +194,14 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
   let messageId: number | null = null;
   let shownText = '';
   let shownAt = 0;
+  /** Когда «печатает…» ушло в последний раз: повтор не чаще `TYPING_REFRESH_MS`. */
+  let lastTypingAt = 0;
   let closed = false;
 
   const typing = async (): Promise<void> => {
+    // Отметка ставится и на отказе: индикатор — украшение, а повторять упавший
+    // запрос на каждой стадии дороже, чем потерять одну «печатает…».
+    lastTypingAt = now();
     try {
       await api.sendChatAction({ chat_id: chatId, action: 'typing' });
     } catch {
@@ -263,7 +279,11 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
       shownText = text;
       shownAt = now();
     } catch {
-      // Устаревшая стадия в строке лучше, чем упавший ход
+      // Правка отказала (эфемерную строку могли погасить, сервер — отдохнуть).
+      // `visible` не сбрасываем: осиротевшая строка осталась бы в чате, —
+      // вместо этого продлеваем индикатор «печатает…», чтобы ход не молчал до
+      // конца. Сетевой вызов случается только на отказе.
+      await typing();
     }
   };
 
@@ -284,9 +304,11 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
       // и есть индикатор хода. Повторный `sendChatAction` на каждой стадии
       // модели — лишний сетевой вызов в узком месте (резерв отправки ответа —
       // `REPLY_RESERVE_MS = 4 с`), поэтому при видимой строке её вместо
-      // действия продлевает правка ниже.
+      // действия продлевает правка ниже. Первая стадия модели идёт сразу за
+      // `begin()`: порог `TYPING_REFRESH_MS` не даёт ей отправить второй
+      // `sendChatAction` в ту же секунду.
       const modelStage = event.stage === 'model';
-      if (modelStage && !visible) await typing();
+      if (modelStage && !visible && now() - lastTypingAt >= TYPING_REFRESH_MS) await typing();
       if (unavailable) return;
 
       const text = progressText(event);
