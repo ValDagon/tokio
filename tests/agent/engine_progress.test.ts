@@ -50,6 +50,7 @@ function nativeChat(replies: readonly AgentChatResult[]): AgentChatFn {
 function echoTool(order: string[]): Tool {
   return {
     name: 'echo',
+    effect: { kind: 'read' },
     description: 'Возвращает переданный текст как есть',
     schema: { type: 'object', properties: { text: { type: 'string' } } },
     run: (args) => {
@@ -317,6 +318,7 @@ describe('runAgent: мягкий дедлайн хода', () => {
     const order: string[] = [];
     const slowEcho: Tool = {
       name: 'echo',
+      effect: { kind: 'read' },
       description: 'Возвращает переданный текст как есть',
       schema: { type: 'object', properties: { text: { type: 'string' } } },
       run: (args) => {

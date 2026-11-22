@@ -124,18 +124,25 @@ export async function readDailyDiary(userId: number, opts: DiaryOptions = {}): P
 }
 
 /**
- * Возвращает дневник за дату, создавая его из шаблона при первом обращении.
- * В новый дневник подставляется блок выполненных задач (если `includeTasks`).
+ * Рендерит дневник за дату **без записи в kv**: шаблон + блок выполненных
+ * задач. Используется и ленивым созданием (`getOrCreateDailyDiary`), и
+ * агентом для чтения отсутствующей записи — чтение не должно менять данные.
  */
-export async function getOrCreateDailyDiary(
+export async function renderDailyDiary(
   userId: number,
   opts: DiaryOptions & { includeTasks?: boolean; template?: string } = {},
-): Promise<DiaryCreateResult> {
+): Promise<DiaryRecord> {
   const { date, timeZone } = await resolveContext(userId, opts);
+  return { date, content: await renderContent(userId, date, timeZone, opts) };
+}
 
-  const existing = await kvGet(diaryStorageKey(userId, date));
-  if (existing !== null) return { date, content: existing, created: false };
-
+/** Шаблон + выполненные задачи для уже разрешённой даты (без kv). */
+async function renderContent(
+  userId: number,
+  date: string,
+  timeZone: string,
+  opts: { includeTasks?: boolean; template?: string },
+): Promise<string> {
   let content = opts.template && opts.template.trim() !== '' ? opts.template : DEFAULT_DIARY_TEMPLATE;
   // Шаблон-строка: поддерживаем и `{{DATE}}`, и «пустой» заголовок.
   content = content.includes('{{DATE}}') ? content.replace(/\{\{DATE\}\}/g, date) : content;
@@ -153,6 +160,23 @@ export async function getOrCreateDailyDiary(
     }
   }
 
+  return content;
+}
+
+/**
+ * Возвращает дневник за дату, создавая его из шаблона при первом обращении.
+ * В новый дневник подставляется блок выполненных задач (если `includeTasks`).
+ */
+export async function getOrCreateDailyDiary(
+  userId: number,
+  opts: DiaryOptions & { includeTasks?: boolean; template?: string } = {},
+): Promise<DiaryCreateResult> {
+  const { date, timeZone } = await resolveContext(userId, opts);
+
+  const existing = await kvGet(diaryStorageKey(userId, date));
+  if (existing !== null) return { date, content: existing, created: false };
+
+  const content = await renderContent(userId, date, timeZone, opts);
   await kvSet(diaryStorageKey(userId, date), content);
   return { date, content, created: true };
 }

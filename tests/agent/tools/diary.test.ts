@@ -2,8 +2,8 @@
  * Тулзы агента: дневник рефлексии (PLAN-AGENT-FIRST T2).
  *
  * Держим инварианты тулз:
- *  - `read_daily_diary` создаёт дневник из шаблона при первом обращении и
- *    возвращает его содержимое; повторное чтение не перезаписывает запись;
+ *  - `read_daily_diary` ничего не пишет: если записи нет, отдаёт шаблон за день
+ *    и помечает, что запись ещё не создана; сохранённую запись возвращает как есть;
  *  - `append_reflection` дописывает запись с меткой времени и, если передан,
  *    уровень энергии;
  *  - пустой текст рефлексии — `ok:false`, а не исключение;
@@ -66,15 +66,16 @@ beforeEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe('read_daily_diary', () => {
-  it('создаёт дневник из шаблона за сегодня и сохраняет его', async () => {
+  it('отдаёт шаблон за сегодня и ничего не пишет, пока записи нет', async () => {
     const outcome = await run('read_daily_diary', {});
 
     expect(outcome.ok).toBe(true);
     expect(outcome.content).toContain('# Дневник: 2026-03-15');
     expect(outcome.content).toContain('уровень энергии');
-    expect(outcome.data).toMatchObject({ date: '2026-03-15', created: true });
+    expect(outcome.content).toContain('ещё не создан');
+    expect(outcome.data).toMatchObject({ date: '2026-03-15', created: false, persisted: false });
 
-    expect(await kvGet(diaryStorageKey(USER_A, '2026-03-15'))).toBe(outcome.content);
+    expect(await kvGet(diaryStorageKey(USER_A, '2026-03-15'))).toBeNull();
   });
 
   it('второе чтение возвращает сохранённую запись, а не шаблон', async () => {
@@ -88,9 +89,13 @@ describe('read_daily_diary', () => {
     expect(again.data).toMatchObject({ created: false });
   });
 
-  it('читает заданную дату и не показывает чужие дневники', async () => {
-    await run('read_daily_diary', { date: '2026-03-01' });
-    await run('append_reflection', { text: 'Запись А' });
+  it('читает заданную дату, не создавая запись, и не показывает чужие дневники', async () => {
+    const before = await run('read_daily_diary', { date: '2026-03-01' });
+
+    expect(before.content).toContain('# Дневник: 2026-03-01');
+    expect(await kvGet(diaryStorageKey(USER_A, '2026-03-01'))).toBeNull();
+
+    await run('append_reflection', { text: 'Запись А', date: '2026-03-01' });
 
     const other = await run('read_daily_diary', {}, contextFor(USER_B));
 
