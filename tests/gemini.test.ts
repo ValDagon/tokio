@@ -171,6 +171,16 @@ describe('resolveApiKey', () => {
     expect(error.status).toBe(0);
     expect(error.retryable).toBe(false);
   });
+
+  it('нечитаемый BYOK (сменился MASTER_KEY) не ломает ответ — берётся продуктовый ключ', async () => {
+    await ensureUser(USER);
+    // Ключ запечатан старым MASTER_KEY: расшифровка даёт мусор, а не ключ.
+    await updateUser(USER, {
+      byok: await sealByok(USER, BYOK_KEY, { masterKey: 'old-master-key-32-chars-long-aaaa' }),
+    });
+
+    expect(await resolveApiKey(USER)).toEqual({ apiKey: PRODUCT_KEY, byok: false });
+  });
 });
 
 // ---------------------------------------------------------------------------

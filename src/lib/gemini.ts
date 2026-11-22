@@ -134,6 +134,22 @@ export interface ResolvedApiKey {
 }
 
 /**
+ * Предупреждение о нечитаемом BYOK — не чаще раза в 10 минут на пользователя.
+ * Иначе один ход агента печатает его на каждый вызов модели (наблюдалось 8 раз
+ * за сообщение) и лог перестаёт быть читаемым.
+ */
+const BYOK_WARN_TTL_MS = 10 * 60 * 1000;
+const byokWarnedAt = new Map<number, number>();
+
+function warnBrokenByokOnce(userId: number, message: string): void {
+  const now = Date.now();
+  const last = byokWarnedAt.get(userId) ?? 0;
+  if (now - last < BYOK_WARN_TTL_MS) return;
+  byokWarnedAt.set(userId, now);
+  console.warn(message);
+}
+
+/**
  * Ключ для вызова: BYOK пользователя, иначе продуктовый.
  *
  * BYOK используется только если он сохранён для того же провайдера, к которому
@@ -164,7 +180,10 @@ export async function resolveApiKey(
           if (looksLikeApiKey(normalized)) {
             return { apiKey: normalized, byok: true };
           }
-          console.warn(`gemini: BYOK key of user ${userId} failed the sanity check, using product key`);
+          warnBrokenByokOnce(
+            userId,
+            `gemini: BYOK key of user ${userId} failed the sanity check, using product key`,
+          );
         }
       }
     } catch (error) {

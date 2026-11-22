@@ -266,6 +266,36 @@ describe('routeMessage: команды', () => {
     }
   });
 
+  it('/byok clear убирает сохранённый ключ', async () => {
+    const { sealByok } = await import('../../src/lib/crypto');
+    await updateUser(USER, {
+      byok: await sealByok(USER, 'AIzaSyTestByokKeyForRouter1234567890', {
+        masterKey: 'test-master-key-32-chars-long-aaaa',
+      }),
+    });
+    expect((await getUser(USER))?.byok ?? null).not.toBeNull();
+
+    await routeMessage(msg('/byok clear'));
+
+    expect((await getUser(USER))?.byok ?? null).toBeNull();
+    expect(sentTexts().join('\n')).toContain('Персональный ключ удалён');
+  });
+
+  it('/byok предупреждает, если сохранённый ключ не читается', async () => {
+    const { sealByok } = await import('../../src/lib/crypto');
+    await updateUser(USER, {
+      byok: await sealByok(USER, 'AIzaSyTestByokKeyForRouter1234567890', {
+        masterKey: 'old-master-key-32-chars-long-aaaa',
+      }),
+    });
+
+    await routeMessage(msg('/byok'));
+
+    const text = sentTexts().join('\n');
+    expect(text).toContain('Сохранённый ключ не читается');
+    expect(text).toContain('/byok clear');
+  });
+
   it('слэш-алиасы и @botname', async () => {
     await routeMessage(msg('/сводка'));
     await routeMessage(msg('/balance@tokio_bot'));
