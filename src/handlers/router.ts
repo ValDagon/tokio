@@ -95,6 +95,7 @@ import type { NoteRow } from '../lib/types';
 import { truncate, zonedParts } from '../lib/utils';
 
 import { escapeAmpLtGt, safeAnswer, safeEdit } from './formatting';
+import { startTurnProgress } from './progress';
 import {
   buildAgentDeepLinkKeyboard,
   buildUndoWithAppKeyboard,
@@ -962,26 +963,47 @@ async function handleAsk(
     return;
   }
 
-  await sendTyping(chatId);
+  const progress = startTurnProgress({ chatId, userId });
+  await progress.begin();
   try {
     if (seams.agent) {
       const reply = await seams.agent({ userId, chatId, text: effectiveQuery });
       // Сбой модели откладываем до конца хода: если в том же ходе ушёл настоящий
       // ответ (сводка, напоминание), извинение уже не нужно (lib/reply_turn.ts).
-      if (isLlmErrorReply(reply) && deferReplyNotice(chatId, reply)) return;
+      // Индикатор при этом просто исчезает: строка не висит и не спорит с ответом.
+      if (isLlmErrorReply(reply)) {
+        if (deferReplyNotice(chatId, reply)) return;
+        if (await progress.fail(reply)) return;
+        await safeAnswer(chatId, reply, { replyMarkup: getMainKeyboard() });
+        return;
+      }
       await safeAnswer(chatId, reply, { replyMarkup: getMainKeyboard() });
       return;
     }
 
-    const result = await runAgent({ userId, text: effectiveQuery });
-    if (isLlmErrorReply(result.reply) && deferReplyNotice(chatId, result.reply)) return;
+    const result = await runAgent({
+      userId,
+      text: effectiveQuery,
+      onProgress: progress.onProgress,
+    });
+    if (isLlmErrorReply(result.reply)) {
+      if (deferReplyNotice(chatId, result.reply)) return;
+      if (await progress.fail(result.reply)) return;
+      await safeAnswer(chatId, result.reply, {
+        replyMarkup: buildAgentDeepLinkKeyboard(result.steps) ?? getMainKeyboard(),
+      });
+      return;
+    }
     await safeAnswer(chatId, result.reply, {
       replyMarkup: buildAgentDeepLinkKeyboard(result.steps) ?? getMainKeyboard(),
     });
   } catch (error) {
-    await safeAnswer(chatId, `⚠️ Ошибка агента: ${errorText(error)}`, {
-      replyMarkup: getMainKeyboard(),
-    });
+    const text = `⚠️ Ошибка агента: ${errorText(error)}`;
+    if (await progress.fail(text)) return;
+    await safeAnswer(chatId, text, { replyMarkup: getMainKeyboard() });
+  } finally {
+    // Строка гасится на любом выходе; после `fail()` она уже закрыта.
+    await progress.finish();
   }
 }
 

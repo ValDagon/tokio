@@ -233,6 +233,29 @@ describe('журнал: терминальные причины и отказы 
     expect(await listFailureAggregates(USER)).toEqual([]);
   });
 
+  it('мягкий дедлайн хода — не отказ агента: журнал пуст', async () => {
+    let clock = 0;
+    const chatFn: AgentChatFn = async () => {
+      clock += 24_000;
+      return { content: 'Thought: смотрю\nAction: no_such_tool\nAction Input: {}', toolCalls: [] };
+    };
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'разбери инбокс и разложи всё по задачам',
+      tools: [],
+      store: null,
+      chatFn,
+      now: NOW,
+      clock: () => clock,
+    });
+
+    expect(result.stopReason).toBe('step_limit');
+    expect(result.reply.trim().length).toBeGreaterThan(0);
+    // Медленный ход не должен попадать в «самодиагностику: лимит шагов».
+    expect(await listFailureAggregates(USER)).toEqual([]);
+  });
+
   it('повторный прогон с тем же исходом увеличивает тот же счётчик', async () => {
     const run = (): Promise<unknown> =>
       runAgent({

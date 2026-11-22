@@ -28,6 +28,7 @@ import {
   observationMeta,
   toolResultOf,
   trimThread,
+  toProviderMessages,
   type ThreadToolCall,
 } from '../../src/lib/agent/sanitize';
 
@@ -187,6 +188,94 @@ describe('trimThread: бюджет истории', () => {
     }));
 
     expect(trimThread(thread, { maxMessages: 4 })).toHaveLength(4);
+  });
+
+  it('не теряет вопрос, даже если бюджет вытеснил его наблюдениями', () => {
+    // Живой сбой 22.11.2026: длинный ход «Разбери инбокс» набрал наблюдений
+    // больше бюджета, окно осталось без реплики пользователя и начиналось с
+    // tool-результата — провайдер ответил 400 «function_response.name».
+    const long = 'о'.repeat(4000);
+    const thread: AgentMessage[] = [
+      { role: 'user', content: 'Разбери инбокс и разложи всё по задачам' },
+      assistantWithCall('c1'),
+      observation('c1', long),
+      assistantWithCall('c2'),
+      observation('c2', long),
+      assistantWithCall('c3'),
+      observation('c3', long),
+    ];
+
+    const result = trimThread(thread, { maxTokens: 2500 });
+
+    expect(result[0]!.content).toBe('Разбери инбокс и разложи всё по задачам');
+    expect(isObservation(result[0]!)).toBe(false);
+  });
+
+  it('не раздувает окно до бесконечности ради вопроса', () => {
+    const long = 'о'.repeat(4000);
+    const thread: AgentMessage[] = [{ role: 'user', content: 'Разбери инбокс' }];
+    for (let index = 0; index < 12; index += 1) {
+      thread.push(assistantWithCall(`c${index}`), observation(`c${index}`, long));
+    }
+
+    const result = trimThread(thread, { maxTokens: 2500 });
+    const tokens = result.reduce((sum, message) => sum + approximateTokens(message.content), 0);
+
+    // Вопрос важнее бюджета, но не любой ценой: окно ограничено множителем
+    // ANCHOR_BUDGET_FACTOR, иначе латентность съест весь ход.
+    expect(tokens).toBeLessThanOrEqual(2500 * 4);
+  });
+});
+
+describe('toProviderMessages: пары вызов ↔ результат', () => {
+  it('не отправляет tool-результат без парного assistant-вызова', () => {
+    const thread: AgentMessage[] = [
+      { role: 'user', content: 'Разбери инбокс' },
+      observation('ghost', 'Найдено 12 заметок'),
+      { role: 'assistant', content: 'Final Answer: Готово.' },
+    ];
+
+    const messages = toProviderMessages(thread);
+
+    // Ни одного tool-результата: имя функции провайдеру взять не из чего, и он
+    // отвечает 400 «function_response.name: Name cannot be empty».
+    expect(messages.flatMap((message) => message.toolResults ?? [])).toEqual([]);
+    // Наблюдение не теряется — оно уходит текстом, как старый текстовый ReAct.
+    expect(messages.map((message) => message.content)).toEqual([
+      'Разбери инбокс',
+      `${OBSERVATION_PREFIX}Найдено 12 заметок`,
+      'Final Answer: Готово.',
+    ]);
+  });
+
+  it('парный результат уходит нативным tool-результатом', () => {
+    const thread: AgentMessage[] = [
+      { role: 'user', content: 'Поставь задачу' },
+      assistantWithCall('c1'),
+      observation('c1', 'Задача создана.'),
+    ];
+
+    const messages = toProviderMessages(thread);
+
+    expect(messages.flatMap((message) => message.toolResults ?? [])).toEqual([
+      { toolCallId: 'c1', content: 'Задача создана.' },
+    ]);
+    expect(messages.some((message) => typeof message.content === 'string' && message.content.startsWith(OBSERVATION_PREFIX))).toBe(false);
+  });
+
+  it('результат из прошлого шага не становится сиротой-обёрткой', () => {
+    // Вызов c1 объявлен до настоящей реплики пользователя: пара разорвана
+    // санитайзом или обрезкой, поэтому результат уходит текстом.
+    const thread: AgentMessage[] = [
+      assistantWithCall('c1'),
+      { role: 'user', content: 'Спасибо' },
+      observation('c1', 'Задача создана.'),
+    ];
+
+    const messages = toProviderMessages(thread);
+
+    expect(messages.flatMap((message) => message.toolResults ?? [])).toEqual([]);
+    expect(messages.at(-1)?.content).toBe(`${OBSERVATION_PREFIX}Задача создана.`);
   });
 });
 

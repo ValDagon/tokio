@@ -227,6 +227,13 @@ export const DEFAULT_MAX_MESSAGES = 80;
 export const DEFAULT_MAX_OBSERVATION_CHARS = 4000;
 
 /**
+ * Во сколько раз окно может превысить бюджет, если иначе из него выпадает
+ * последняя реплика пользователя. Вопрос в запросе важнее бюджета, но не любой
+ * ценой: слишком большое окно — это латентность, с которой борется дедлайн хода.
+ */
+export const ANCHOR_BUDGET_FACTOR = 4;
+
+/**
  * Грубая оценка токенов без токенизатора: кириллица и латиница в среднем
  * укладываются в ~4 символа на токен, плюс накладные расходы на сообщение.
  * Точность здесь не нужна — нужен предсказуемый и дешёвый потолок.
@@ -255,9 +262,10 @@ function clampObservations(
 }
 
 /**
- * Оставляет хвост истории в бюджете токенов и сообщений. Окно начинается с
- * настоящей реплики пользователя: обрезанное наблюдение без своего вызова
- * сбивает модель с толку.
+ * Оставляет хвост истории в бюджете токенов и сообщений. Окно всегда начинается
+ * с настоящей реплики пользователя: обрезанное наблюдение без своего вызова
+ * сбивает модель с толку, а запрос, который начинается с tool-результата,
+ * провайдер отвергает (`function_response.name: Name cannot be empty`).
  */
 export function trimThread(messages: readonly AgentMessage[], options: TrimOptions = {}): AgentMessage[] {
   const maxTokens = Math.max(1, Math.floor(options.maxTokens ?? DEFAULT_MAX_TOKENS));
@@ -268,8 +276,20 @@ export function trimThread(messages: readonly AgentMessage[], options: TrimOptio
   );
   if (budgeted.length === 0) return [];
 
+  /** Последняя настоящая реплика пользователя: якорь окна. */
+  let anchor = -1;
+  for (let index = budgeted.length - 1; index >= 0; index -= 1) {
+    const message = budgeted[index]!;
+    if (message.role === 'user' && !isObservation(message)) {
+      anchor = index;
+      break;
+    }
+  }
+
   const kept: AgentMessage[] = [];
   let tokens = 0;
+  /** Индекс первого сообщения, попавшего в бюджетное окно. */
+  let windowStart = budgeted.length;
   for (let index = budgeted.length - 1; index >= 0; index -= 1) {
     const message = budgeted[index]!;
     const cost = messageTokens(message);
@@ -277,17 +297,29 @@ export function trimThread(messages: readonly AgentMessage[], options: TrimOptio
     if (kept.length > 0 && tokens + cost > maxTokens) break;
     kept.unshift(message);
     tokens += cost;
+    windowStart = index;
   }
 
   // Поднимаем начало окна до реплики пользователя (не наблюдения).
-  let start = 0;
-  while (start < kept.length) {
-    const message = kept[start]!;
+  let start = windowStart;
+  while (start < budgeted.length) {
+    const message = budgeted[start]!;
     if (message.role === 'user' && !isObservation(message)) break;
     start += 1;
   }
-  if (start >= kept.length) return kept;
-  return kept.slice(start);
+  if (start >= budgeted.length) {
+    // Бюджет вытеснил вопрос: длинный ход набрал наблюдений больше, чем влезает.
+    // Начинаем с последней реплики пользователя — без вопроса история бесполезна,
+    // а наблюдение первым сообщением провайдер отвергает. Но окно всё равно
+    // ограничено: иначе «спасение» вопроса превращается в огромный запрос.
+    const anchored = anchor >= 0 ? anchor : windowStart;
+    let anchoredTokens = 0;
+    for (let index = anchored; index < budgeted.length; index += 1) {
+      anchoredTokens += messageTokens(budgeted[index]!);
+    }
+    start = anchoredTokens <= maxTokens * ANCHOR_BUDGET_FACTOR ? anchored : windowStart;
+  }
+  return budgeted.slice(start);
 }
 
 export interface SanitizeOptions extends TrimOptions {
@@ -344,9 +376,17 @@ export function toChatMessages(messages: readonly AgentMessage[]): ChatMessage[]
  * Наблюдение без метаданных (история, записанная текстовым ReAct до перехода
  * на нативный function calling) остаётся текстом с префиксом `Observation:` —
  * старые треды читаются дальше.
+ *
+ * Наблюдение, чей вызов не объявлен в непосредственно предшествующем шаге
+ * ассистента, тоже уходит текстом. Иначе провайдер получает tool-результат без
+ * имени функции и отвечает 400 `function_response.name: Name cannot be empty`
+ * (живой сбой 22.11.2026: «Разбери инбокс» — ход умирал именно так).
  */
 export function toProviderMessages(messages: readonly AgentMessage[]): ProviderChatMessage[] {
   const result: ProviderChatMessage[] = [];
+  /** Id вызовов последнего шага ассистента: только они имеют право на `toolResults`. */
+  let declared = new Set<string>();
+
   for (const message of messages) {
     if (message.role === 'system') continue;
 
@@ -357,6 +397,7 @@ export function toProviderMessages(messages: readonly AgentMessage[]): ProviderC
         args: call.args ?? {},
         ...(call.extraContent ? { extraContent: call.extraContent } : {}),
       }));
+      declared = new Set(calls.map((call) => call.id));
       result.push(
         calls.length > 0
           ? { role: 'assistant', content: message.content, toolCalls: calls }
@@ -367,6 +408,15 @@ export function toProviderMessages(messages: readonly AgentMessage[]): ProviderC
 
     const observation = toolResultOf(message);
     if (observation) {
+      if (!declared.has(observation.id)) {
+        // Сирота: пары нет (тред обрезан, история починена наполовину, ход
+        // продолжен с середины). Текстовое наблюдение читается моделью так же.
+        result.push({
+          role: 'user',
+          content: `${OBSERVATION_PREFIX}${message.content}`,
+        });
+        continue;
+      }
       // Текст наблюдения — тело tool-результата. Дублировать его ещё и в
       // `user`-сообщении нельзя: OpenAI ждёт `tool` сразу за ассистентом.
       result.push({
@@ -377,6 +427,7 @@ export function toProviderMessages(messages: readonly AgentMessage[]): ProviderC
       continue;
     }
 
+    declared = new Set();
     result.push({ role: 'user', content: message.content });
   }
   return result;

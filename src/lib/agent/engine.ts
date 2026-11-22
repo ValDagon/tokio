@@ -36,14 +36,20 @@ import type { ProviderId, ProviderToolCall, ProviderToolSpec } from '../provider
 import { DEFAULT_BASE_CURRENCY, DEFAULT_TIMEZONE } from '../config.js';
 import { getChapter } from '../dal/docs.js';
 import { listDoses } from '../dal/medications.js';
-import { kvSetJson } from '../dal/misc.js';
+import {
+  kvSetJson,
+  patchTurnTrace,
+  startTurnTrace,
+  type TurnDeadlineCause,
+  type TurnTracePatch,
+} from '../dal/misc.js';
 import { listTasks } from '../dal/tasks.js';
 import { getUser } from '../dal/users.js';
 import { listActiveSkills, recordFailure, recordSkillRun, type FailureReason } from '../evolution.js';
 import { chat, type ChatMessage } from '../gemini.js';
 import { normalizeLocale } from '../i18n.js';
 import { getOverlay } from '../overlay.js';
-import { dateKey } from '../utils.js';
+import { dateKey, truncate } from '../utils.js';
 import { CUSTOM_INSTRUCTIONS_SLUG } from './constants.js';
 import {
   clearThread,
@@ -110,6 +116,11 @@ export interface AgentChatReply {
   toolCalls: ProviderToolCall[];
   /** Причина остановки генерации провайдером (`'stop'`, `'length'`, `'max_tokens'`, …). */
   finishReason?: string | null;
+  /**
+   * Модель, которая ответила фактически. В цепочке Gemini вторая модель — это
+   * уже запасная, поэтому имя нужно крошке хода и диагностике.
+   */
+  model?: string | null;
 }
 
 /**
@@ -143,6 +154,7 @@ const defaultChat: AgentChatFn = async (request) => {
     content: result.content ?? '',
     toolCalls: result.toolCalls ?? [],
     finishReason: result.finishReason,
+    model: result.model ?? null,
   };
 };
 
@@ -163,6 +175,19 @@ export const dbThreadStore: AgentThreadStore = {
 
 /** Почему цикл остановился. */
 export type AgentStopReason = 'final' | 'step_limit' | 'empty_reply' | 'llm_error' | 'confirm';
+
+/**
+ * Стадия прогона для живой индикации (`handlers/progress.ts`): перед обращением
+ * к модели и перед выполнением инструмента. Движок ничего не знает про Telegram,
+ * поэтому наружу уходит только факт стадии и имя тулзы.
+ */
+export interface AgentProgressEvent {
+  stage: 'model' | 'tool';
+  /** Номер шага цикла (0 — первый). */
+  step: number;
+  /** Имя инструмента для стадии `tool`. */
+  tool?: string;
+}
 
 /** Один шаг цикла: что модель подумала и что из этого вышло. */
 export interface AgentStep {
@@ -211,6 +236,24 @@ export interface RunAgentOptions {
   profile?: Partial<AgentProfile> | null;
   /** Момент прогона (для промпта и контекста инструментов). */
   now?: Date;
+  /**
+   * Часы прогона в миллисекундах; по умолчанию системные. Отдельно от `now`:
+   * `now` задаёт момент для промпта, а часы меряют, сколько ход уже идёт.
+   * В тестах подменяются, чтобы шаг вышел за дедлайн.
+   */
+  clock?: () => number;
+  /**
+   * Мягкий дедлайн хода в миллисекундах (по умолчанию `TURN_BUDGET_MS`).
+   * После него движок не зовёт ни модель, ни инструменты, а сразу отдаёт
+   * детерминированный ответ: платформа убивает изолят по лимиту времени, и
+   * убитый ход не успевает ни ответить, ни погасить индикатор. `0` — без предела.
+   */
+  turnBudgetMs?: number;
+  /**
+   * Живая индикация стадий («печатает…» и строка прогресса). Хук необязателен,
+   * а его ошибки проглатываются: падение индикатора не должно рвать ход.
+   */
+  onProgress?: (event: AgentProgressEvent) => void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +268,32 @@ export const MAX_STEPS_CAP = 20;
 
 /** Жёсткий потолок суммарных вызовов инструментов за один прогон. */
 export const MAX_TOOL_CALLS_PER_RUN = 30;
+
+/**
+ * Мягкий дедлайн хода: платформа убивает изолят примерно через 30–40 с, поэтому
+ * к 22-й секунде (бюджет минус `REPLY_RESERVE_MS`) движок обязан отдавать ответ,
+ * а не звать модель. Бюджет 26 с, а не 20: измеренная норма — 3–4 с на раунд с
+ * инструментами и 14–17 с на синтез, поэтому 20 с оставляли обычному ходу
+ * «инструменты → ответ» меньше секунды запаса.
+ */
+export const TURN_BUDGET_MS = 26_000;
+
+/**
+ * Резерв бюджета на конец хода: сохранение треда, гашение индикатора и отправка
+ * ответа в Telegram. Дедлайн считается с этим запасом, иначе ответ собирается,
+ * но не успевает уйти до того, как платформа убьёт изолят (живой сбой 22.11.2026
+ * в 14:19: единственный вызов модели занял ~28 с, и ответ уже не отправился).
+ */
+export const REPLY_RESERVE_MS = 4_000;
+
+/**
+ * Пессимистичная длительность следующего вызова модели. Движок не может
+ * прервать вызов (в изоляте нет ни `setTimeout`, ни `AbortController`), поэтому
+ * единственный рычаг — не начинать вызов, который с реалистичной задержкой не
+ * оставит времени на ответ. Наблюдаемый «самый долгий вызов» для этого не
+ * годится: он растёт только после того, как медленный вызов уже случился.
+ */
+export const MODEL_CALL_FLOOR_MS = 12_000;
 
 /** Сколько подряд одинаковых ходов (tool+args) считаем зацикливанием. */
 export const MAX_CONSECUTIVE_DUPLICATE_TURNS = 3;
@@ -525,6 +594,21 @@ function stepLimitReply(steps: readonly AgentStep[]): string {
   return detail ? `${base}\n\n${detail}` : base;
 }
 
+/**
+ * Ответ, когда ход уперся в мягкий дедлайн: честно про собранное.
+ *
+ * Детерминированный и короткий — его надо успеть отправить до того, как
+ * платформа убьёт изолят. Поэтому причиной остановки остаётся `step_limit`,
+ * а не `llm_error`: модели на этом пути уже не было.
+ */
+function deadlineReply(steps: readonly AgentStep[]): string {
+  const lastObservation = [...steps].reverse().find((step) => step.observation)?.observation;
+  const gathered = lastObservation ? truncate(lastObservation.trim(), 400).trim() : '';
+  const base = '⏱ Не успел всё за один ход и остановился, чтобы успеть ответить.';
+  const detail = gathered ? `\n\nУспел собрать вот это:\n${gathered}` : '';
+  return `${base}${detail}\n\nОстальное — следующим сообщением.`;
+}
+
 /** Детерминированная каноническая сериализация JSON (устойчива к порядку ключей). */
 function canonicalJson(value: unknown): string {
   if (value === undefined) return 'null';
@@ -629,6 +713,13 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   'get_custom_directives',
 ]);
 
+/** Имя модели из ответа: строковый контракт модель не называет. */
+function answeredModel(raw: AgentChatResult): string | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const model = raw.model;
+  return typeof model === 'string' && model.trim() ? model.trim() : null;
+}
+
 function isParallelSafeReadCall(call: ThreadToolCall, tools: readonly Tool[]): boolean {
   const validName = normalizeToolName(call.name);
   if (!validName || !READ_ONLY_TOOL_NAMES.has(validName)) return false;
@@ -650,6 +741,13 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
   const now = options.now ?? new Date();
   const chatFn = options.chatFn ?? defaultChat;
   const store = options.store === undefined ? dbThreadStore : options.store === null ? null : options.store;
+  const clock = options.clock ?? (() => Date.now());
+  const startedAt = clock();
+  const turnBudgetMs =
+    typeof options.turnBudgetMs === 'number' && Number.isFinite(options.turnBudgetMs)
+      ? Math.max(0, Math.floor(options.turnBudgetMs))
+      : TURN_BUDGET_MS;
+  const unlimited = turnBudgetMs <= 0;
 
   return withUserLock(userId, async () => {
     const profile = options.profile ?? (await loadAgentProfile(userId, now));
@@ -720,8 +818,58 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     let pendingConfirmation: { name: string; args: Record<string, unknown> } | null = null;
     /** Хвост причины отказа модели — уходит в журнал вместе с `llm_error`. */
     let llmErrorDetail: string | null = null;
+    /** Дедлайн уже сработал: синтез и инструменты после него не зовутся. */
+    let deadlineHit = false;
+    /** Почему сработал дедлайн: бюджет до вызова модели или пропущенные инструменты. */
+    let deadlineCause: TurnDeadlineCause | null = null;
+    /** Сколько длился самый долгий вызов модели в этом прогоне, мс. */
+    let slowestModelCallMs = 0;
+    /** Сколько вызовов модели ход уже сделал: у первого ограничения нет. */
+    let modelCallsStarted = 0;
+    /** Сколько ход уже идёт. */
+    const elapsedMs = (): number => clock() - startedAt;
+
+    /**
+     * Крошка хода в `kv`: где именно умер медленный ход. Пишет движок, индикатор
+     * дописывает `handlers/progress.ts`. Сбой записи ход не рвёт — это диагностика.
+     */
+    const traceTurn = async (patch: TurnTracePatch): Promise<void> => {
+      await patchTurnTrace(userId, patch);
+    };
+    await startTurnTrace(userId);
+    /**
+     * Бюджет исчерпан с учётом резерва на конец хода: инструменты уже не зовём,
+     * ответ собираем и отправляем тем временем, которое осталось окна платформы.
+     */
+    const pastDeadline = (): boolean =>
+      !unlimited && elapsedMs() + REPLY_RESERVE_MS >= turnBudgetMs;
+    /**
+     * Есть ли смысл начинать ещё один вызов модели: он не должен вывести ход за
+     * бюджет вместе с резервом на отправку. Ориентир — самый долгий вызов этого
+     * прогона, но не меньше `MODEL_CALL_FLOOR_MS`: вызов нельзя прервать, поэтому
+     * «пока было быстро» не гарантирует, что следующий не повиснет.
+     *
+     * Первый вызов — исключение: без него хода нет, а бюджет мог съесть не он,
+     * а ожидание в очереди лока (`withUserLock`). Такой ход хотя бы попробует
+     * ответить по существу, если до дедлайна ещё есть время.
+     */
+    const modelCallFitsBudget = (): boolean =>
+      unlimited ||
+      (modelCallsStarted === 0 && !pastDeadline()) ||
+      elapsedMs() + Math.max(slowestModelCallMs, MODEL_CALL_FLOOR_MS) + REPLY_RESERVE_MS <=
+        turnBudgetMs;
     /** Неожиданные отказы инструментов: имя тулзы = часть сигнатуры. */
     const unexpectedTools = new Set<string>();
+
+    /** Стадия прогона наружу: ошибки индикации не рвут ход. */
+    const notifyProgress = async (event: AgentProgressEvent): Promise<void> => {
+      if (!options.onProgress) return;
+      try {
+        await options.onProgress(event);
+      } catch {
+        // индикация — украшение, а не часть прогона
+      }
+    };
 
     const registerTurnSignature = (
       calls: ReadonlyArray<{ name: string; args?: Record<string, unknown> }>,
@@ -738,11 +886,15 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       activeSystemPrompt: string,
     ): Promise<string> => {
       if (!isTruncatedFinishReason(finishReason) || !partialReply.trim()) return partialReply;
+      // Добор обрыва — ещё один вызов модели: после дедлайна отдаём как есть.
+      if (!modelCallFitsBudget()) return partialReply;
       try {
         const prepared = sanitizeThread([
           ...working,
           { role: 'assistant', content: partialReply },
         ]);
+        await notifyProgress({ stage: 'model', step: iteration });
+        await traceTurn({ stage: 'model-start', modelStarted: true });
         const contRaw = await chatFn({
           userId,
           systemPrompt: activeSystemPrompt,
@@ -752,6 +904,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           ],
           purpose: 'agent',
         });
+        await traceTurn({ stage: 'model-end', model: answeredModel(contRaw) });
         const contNative = normalizeChatReply(contRaw);
         const contCalls = contNative.toolCalls.filter(
           (call) => typeof call.name === 'string' && call.name.trim(),
@@ -771,6 +924,16 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     };
 
     while (iteration < maxSteps && totalToolCalls < MAX_TOOL_CALLS_PER_RUN) {
+      // Мягкий дедлайн: платформа убьёт изолят раньше, чем модель ответит, и
+      // пользователь не получит ничего. Поэтому до вызова модели отдаём то, что
+      // уже собрано, и гасим индикатор штатным путём.
+      if (!modelCallFitsBudget()) {
+        deadlineHit = true;
+        deadlineCause = 'budget';
+        stopReason = 'step_limit';
+        reply = deadlineReply(steps);
+        break;
+      }
       const prepared = sanitizeThread(working);
       const systemPrompt = buildSystemPrompt({
         locale: profile.locale,
@@ -786,8 +949,12 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         executiveOverload,
       });
 
+      await notifyProgress({ stage: 'model', step: iteration });
+      await traceTurn({ stage: 'model-start', modelStarted: true });
       let raw: AgentChatResult;
       try {
+        const callStartedAt = clock();
+        modelCallsStarted += 1;
         raw = await chatFn({
           userId,
           systemPrompt,
@@ -795,6 +962,8 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           tools: toolSpecs,
           purpose: 'agent',
         });
+        slowestModelCallMs = Math.max(slowestModelCallMs, clock() - callStartedAt);
+        await traceTurn({ stage: 'model-end', model: answeredModel(raw) });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!healed && isRecoverableHistoryError(message)) {
@@ -886,6 +1055,23 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
 
         let i = 0;
         while (i < calls.length) {
+          // Действия после дедлайна не выполняем, но парность сохраняем: на каждый
+          // невыполненный вызов пишем честное наблюдение с ok: false. Иначе
+          // repairToolPairing синтезирует «Действие успешно зафиксировано.», и
+          // тред соврёт модели о невыполненном действии.
+          if (pastDeadline()) {
+            deadlineHit = true;
+            deadlineCause = 'tools-skipped';
+            for (let k = i; k < calls.length; k += 1) {
+              const skipped = calls[k]!;
+              working.push({
+                role: 'user',
+                content: 'Не выполнено: ход превысил лимит времени.',
+                meta: observationMeta({ id: skipped.id, name: skipped.name, ok: false }),
+              });
+            }
+            break;
+          }
           const current = calls[i]!;
           if (isParallelSafeReadCall(current, tools)) {
             const batch: ThreadToolCall[] = [];
@@ -894,7 +1080,11 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
               i += 1;
             }
             const outcomes = await Promise.all(
-              batch.map((c) => runTool(normalizeToolName(c.name)!, c.args ?? {}, ctx, tools)),
+              batch.map(async (c) => {
+                const name = normalizeToolName(c.name)!;
+                await notifyProgress({ stage: 'tool', step: iteration, tool: name });
+                return runTool(name, c.args ?? {}, ctx, tools);
+              }),
             );
             for (let k = 0; k < batch.length; k += 1) {
               recordOutcome(batch[k]!, outcomes[k]!);
@@ -930,13 +1120,22 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           }
 
           const outcome: ToolOutcome = validName
-            ? await runTool(validName, args, ctx, tools)
+            ? await (async () => {
+                await notifyProgress({ stage: 'tool', step: iteration, tool: validName });
+                return runTool(validName, args, ctx, tools);
+              })()
             : {
                 ok: false,
                 unexpected: true,
                 content: `Имя инструмента не распознано: «${call.name || 'пусто'}». Доступные инструменты: ${available}.`,
               };
           recordOutcome(call, outcome);
+        }
+
+        if (deadlineHit) {
+          stopReason = 'step_limit';
+          reply = deadlineReply(steps);
+          break;
         }
 
         if (pendingConfirmation) {
@@ -975,6 +1174,16 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       const args = parsed.action?.args ?? {};
       const call: ThreadToolCall = { id: `call_${steps.length + 1}`, name: name || rawName || 'unknown', args };
 
+      // Дедлайн: инструмент не зовём — отвечаем собранным. Проверка стоит до
+      // записи шага, чтобы в треде не осталось вызова без наблюдения.
+      if (pastDeadline()) {
+        deadlineHit = true;
+        deadlineCause = 'budget';
+        stopReason = 'step_limit';
+        reply = deadlineReply(steps);
+        break;
+      }
+
       if (registerTurnSignature([{ name: call.name, args }])) {
         break;
       }
@@ -1009,7 +1218,10 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       }
 
       const outcome: ToolOutcome = name
-        ? await runTool(name, args, ctx, tools)
+        ? await (async () => {
+            await notifyProgress({ stage: 'tool', step: iteration, tool: name });
+            return runTool(name, args, ctx, tools);
+          })()
         : {
             ok: false,
             unexpected: true,
@@ -1035,7 +1247,10 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       iteration += 1;
     }
 
-    if (stopReason === 'step_limit' && steps.length > 0) {
+    // Синтез — единственный путь к настоящему ответу после лимита шагов, поэтому
+    // его гейтит резерв на отправку, а не полная проверка бюджета: «слишком
+    // длинное действие» не лучше опоздавшего ответа.
+    if (stopReason === 'step_limit' && steps.length > 0 && !deadlineHit && !pastDeadline()) {
       try {
         const prepared = sanitizeThread(working);
         const synthesisSystemPrompt = `${buildSystemPrompt({
@@ -1052,12 +1267,15 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           executiveOverload,
         })}\n\n${FINAL_SYNTHESIS_DIRECTIVE}`;
 
+        await notifyProgress({ stage: 'model', step: iteration });
+        await traceTurn({ stage: 'model-start', modelStarted: true });
         const synthRaw = await chatFn({
           userId,
           systemPrompt: synthesisSystemPrompt,
           messages: toSynthesisMessages(prepared),
           purpose: 'agent',
         });
+        await traceTurn({ stage: 'model-end', model: answeredModel(synthRaw) });
         const synthNative = normalizeChatReply(synthRaw);
         const synthCalls = synthNative.toolCalls.filter(
           (call) => typeof call.name === 'string' && call.name.trim(),
@@ -1091,7 +1309,8 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     }
 
     if (stopReason === 'step_limit') {
-      reply = stepLimitReply(steps);
+      // На дедлайне ответ уже собран детерминированно — синтеза не было.
+      if (!deadlineHit) reply = stepLimitReply(steps);
       working.push({ role: 'assistant', content: reply });
     }
 
@@ -1104,12 +1323,25 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       }
     }
 
+    // Крошка хода: последняя метка — «ответ собран и тред сохранён». Если её нет
+    // в `kv`, а есть только `model-start`, значит ход убит внутри вызова модели.
+    // Дедлайн считается отдельным счётчиком и в журнал сбоев не идёт.
+    await traceTurn({
+      stage: 'send',
+      stopReason,
+      ...(deadlineHit ? { deadline: deadlineCause ?? 'budget' } : {}),
+    });
+
     // Журнал повторяемости: одна сигнатура на прогон за терминальную причину и
     // по одной на неожиданный отказ инструмента. `final` и `confirm` — не сбои,
     // ожидаемые отказы инструментов сюда не попадают (см. `ToolOutcome.unexpected`).
+    // Мягкий дедлайн тоже не сбой: это свойство латентности хода, а не отказ
+    // агента — иначе медленная сеть приносила бы владельцу задачу
+    // «самодиагностика: лимит шагов» и портила статистику скиллов.
     // Запись не бросает, поэтому результат прогона не меняется.
-    const terminalReason: FailureReason | null =
-      stopReason === 'llm_error'
+    const terminalReason: FailureReason | null = deadlineHit
+      ? null
+      : stopReason === 'llm_error'
         ? 'llm_error'
         : stopReason === 'empty_reply'
           ? 'empty_reply'
@@ -1139,6 +1371,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         skills: appliedSkills,
         stopReason,
         steps,
+        ...(deadlineHit ? { deadline: true } : {}),
       });
     }
 
