@@ -93,7 +93,8 @@ The compiler validates `schemaVersion === 1`, `brand.assistantName`, `features`,
     "feedbackEnabled": true,
     "overloadShield": true,
     "microFocusTriage": true,
-    "calmModeUi": true
+    "calmModeUi": true,
+    "publicOpenAccess": false
   },
   "finance": {
     "accountAliases": [
@@ -151,6 +152,31 @@ Previously, edition differences were maintained via inline `[public-only]` and `
 | `overloadShield` | `boolean` | Dynamic cognitive overload shield appended to system prompt tail. |
 | `microFocusTriage` | `boolean` | 1+3 daily micro-focus triage helpers. |
 | `calmModeUi` | `boolean` | Low-stimulation (Calm) mode toggle in the Mini App and prompt. |
+| `publicOpenAccess` | `boolean` (optional) | Explicit open registration for a public instance: `true` lets `checkAccess` admit users outside `ADMIN_IDS` / `BETA_WHITELIST` / `users`. |
+
+### 5.1 `publicOpenAccess` — open registration without weakening fail-closed
+
+The default stays fail-closed: an empty access list in production replies
+`ACCESS_UNCONFIGURED_*`, and a non-empty list rejects unknown users. `publicOpenAccess`
+is the single, explicit way to open it:
+
+- **Only the overlay can set it.** There is no env variable and no config key; the value
+  comes from `overlay/manifest.json` (or `OVERLAY_DIR`) at build time.
+- **Only a literal `true` opens anything.** The field is optional, so an overlay that never
+  declares it (the personal one) reads `undefined`, which the gate treats as `false`. Adding
+  this key therefore does not require editing an existing personal overlay and cannot flip it
+  open by accident.
+- **It short-circuits the whole tree,** including the production "access list is not
+  configured" branch. That is deliberate: a public instance may legitimately run with an
+  empty `ADMIN_IDS`, and the flag is the statement of intent that makes it safe.
+- **Use it only for a deliberately public bot.** A private/personal instance should omit the
+  key or set it to `false`, and keep `ADMIN_IDS` populated so the fail-closed gate stays armed.
+- **Scope.** `checkAccess` is the only gate that admits a Telegram *user*; administrative and
+  machine-only routes keep their own checks (`/api/feedback` `{action:'list'}` still requires
+  `adminIds`, the clock endpoint still requires a `users` row). Consequence for an open
+  instance: an empty `ADMIN_IDS` means nobody is an admin there, so admin-only routes stay
+  unavailable and `adminIds` is still how the shared-key spend cap is bypassed
+  (`src/lib/billing.ts`). Populate `ADMIN_IDS` with the operator even when the flag is on.
 
 ---
 

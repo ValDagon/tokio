@@ -23,7 +23,7 @@ Out of the box, if `<repo>/overlay/manifest.json` does not exist, `scripts/compi
 2. Edit `overlay/manifest.json`:
    - `brand`: set your `assistantName`, `localizedNames`, `backupPrefix`, `supportContact`, `miniAppUrl`, and `accessDeniedMessage`.
    - `defaults`: configure `timezone`, `baseCurrency`, `summaryTime`, `supportedCurrencies`, and `inboxCurrencies`.
-   - `features`: toggle instance capabilities (`spendLimitEnabled`, `spendLimitUsd`, `onboardingWizard`, `byokCommand`, `feedbackEnabled`, `overloadShield`, `microFocusTriage`, `calmModeUi`).
+   - `features`: toggle instance capabilities (`spendLimitEnabled`, `spendLimitUsd`, `onboardingWizard`, `byokCommand`, `feedbackEnabled`, `overloadShield`, `microFocusTriage`, `calmModeUi`, `publicOpenAccess`).
    - `finance`: define `accountAliases`, `defaultAccountByCurrency`, `genericCardAccountByCurrency`, and `reserveAmount`.
    - `miniapp`: customize `tabs` and `accountThemes`.
    - `prompts.personaStyles`: customize the four persona presets (`mentor`, `strategist`, `calm_partner`, `concise`).

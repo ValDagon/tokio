@@ -50,6 +50,7 @@ import {
   stepGeminiText,
 } from '../../src/handlers/onboarding';
 import {
+  isPublicOpenAccessEnabled,
   resetOverlayOverride,
   setOverlayOverride,
   type OverlayOverride,
@@ -77,6 +78,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  resetOverlayOverride();
 });
 
 // ---------------------------------------------------------------------------
@@ -149,6 +151,82 @@ describe('checkAccess', () => {
     vi.stubEnv('APP_ENV', 'production');
     setConfigOverrides({ betaWhitelist: [], adminIds: [ADMIN] });
     await expect(checkAccess(ADMIN, { kind: 'callback' })).resolves.toEqual({ allowed: true });
+  });
+
+  it('publicOpenAccess: true открывает вход, даже когда списки пусты в production', async () => {
+    vi.stubEnv('APP_ENV', 'production');
+    setConfigOverrides({ betaWhitelist: [], adminIds: [] });
+    setOverlayOverride({
+      manifest: { features: { publicOpenAccess: true } },
+    } as unknown as OverlayOverride);
+
+    await expect(checkAccess(OTHER, { kind: 'message' })).resolves.toEqual({ allowed: true });
+    await expect(checkAccess(OTHER, { kind: 'callback' })).resolves.toEqual({ allowed: true });
+  });
+
+  it('publicOpenAccess: true пускает неизвестного при непустом списке', async () => {
+    setConfigOverrides({ betaWhitelist: [USER], adminIds: [ADMIN] });
+    setOverlayOverride({
+      manifest: { features: { publicOpenAccess: true } },
+    } as unknown as OverlayOverride);
+
+    await expect(checkAccess(OTHER, { kind: 'message' })).resolves.toEqual({ allowed: true });
+  });
+
+  it('publicOpenAccess: false не ослабляет закрытый режим личного бота', async () => {
+    setConfigOverrides({ betaWhitelist: [USER], adminIds: [ADMIN] });
+    setOverlayOverride({
+      manifest: { features: { publicOpenAccess: false } },
+    } as unknown as OverlayOverride);
+
+    await expect(checkAccess(OTHER, { kind: 'message' })).resolves.toEqual({
+      allowed: false,
+      reply: ACCESS_DENIED_MESSAGE,
+    });
+  });
+
+  it('отсутствие флага читается как закрытый режим (shipped example overlay)', async () => {
+    // Пример-оверлей объявляет `false`; форма личного оверлея — ключа нет
+    // вовсе, и это проверяет `isPublicOpenAccessEnabled({})` в tests/overlay.test.ts.
+    expect(isPublicOpenAccessEnabled()).toBe(false);
+
+    vi.stubEnv('APP_ENV', 'production');
+    setConfigOverrides({ betaWhitelist: [], adminIds: [] });
+
+    await expect(checkAccess(USER, { kind: 'message' })).resolves.toEqual({
+      allowed: false,
+      reply: ACCESS_UNCONFIGURED_MESSAGE,
+    });
+  });
+
+  it('открытый режим создаёт строку users для callback до /start', async () => {
+    setConfigOverrides({ betaWhitelist: [ADMIN], adminIds: [ADMIN] });
+    setOverlayOverride({
+      manifest: { features: { publicOpenAccess: true } },
+    } as unknown as OverlayOverride);
+    expect(await getUser(OTHER)).toBeNull();
+
+    await routeCallback({
+      id: 'cb-first-contact',
+      from: { id: OTHER, first_name: 'Новый' },
+      data: 'onboard:step:overview',
+      message: { message_id: 1, chat: { id: OTHER } },
+    });
+
+    const user = await getUser(OTHER);
+    expect(user).not.toBeNull();
+    expect(user?.onboardingStep).toBe('overview');
+  });
+
+  it('открытый режим нельзя включить переменной окружения', async () => {
+    vi.stubEnv('APP_ENV', 'production');
+    vi.stubEnv('PUBLIC_OPEN_ACCESS', 'true');
+    setConfigOverrides({ betaWhitelist: [], adminIds: [] });
+
+    await expect(checkAccess(USER, { kind: 'message' })).resolves.toEqual({
+      allowed: false,
+      reply: ACCESS_UNCONFIGURED_MESSAGE,
+    });
   });
 
   it('пользователь из таблицы users пускается даже если не в betaWhitelist/adminIds', async () => {
