@@ -189,6 +189,23 @@ describe('живая индикация хода агента', () => {
     expect(ephemeralSends()).toHaveLength(0);
   });
 
+  it('зависший sendChatAction не съедает ход: сигнал не ждём', async () => {
+    // Риск ревью 23.11.2026: отменить зависший запрос Bot API в изоляте нечем
+    // (нет ни `setTimeout`, ни `AbortController`). «Печатает…» — украшение,
+    // поэтому ответ не имеет права ждать его вечно; сигнал уходит без `await`.
+    const original = api.sendChatAction;
+    (api as Record<string, unknown>).sendChatAction = () => new Promise(() => {});
+    try {
+      scriptTurn([{ afterMs: 0, stage: 'model' }], FINAL_RUN);
+
+      await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
+
+      expect(sentTexts().at(-1)).toBe('Готово: посчитал.');
+    } finally {
+      (api as Record<string, unknown>).sendChatAction = original;
+    }
+  });
+
   it('повторная стадия модели при открытой строке не шлёт второе «печатает…»', async () => {
     scriptTurn(
       [

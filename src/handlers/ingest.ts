@@ -82,7 +82,7 @@ import {
   type VisionInvoice,
   type VisionResult,
 } from '../lib/vision.js';
-import { escapeAmpLtGt, safeAnswer, safeEdit } from './formatting.js';
+import { escapeAmpLtGt, safeAnswer, safeEdit, signalChatAction } from './formatting.js';
 import { startTurnProgress } from './progress.js';
 import {
   buildAgentDeepLinkKeyboard,
@@ -910,7 +910,7 @@ async function runVoicePipeline(params: VoicePipelineParams): Promise<void> {
     });
   };
 
-  await api.sendChatAction({ chat_id: chatId, action: 'typing' });
+  signalChatAction(chatId, 'typing');
 
   const spend = await checkSpendLimit(userId);
   if (!spend.allowed) {
@@ -2801,7 +2801,7 @@ async function runPhotoPipeline(params: PhotoPipelineParams): Promise<void> {
     );
   };
 
-  await api.sendChatAction({ chat_id: chatId, action: 'typing' });
+  signalChatAction(chatId, 'typing');
 
   // [public-only] Лимит расходов на общий ключ: без него Vision не вызываем,
   // фото сохраняем в инбокс сырым.

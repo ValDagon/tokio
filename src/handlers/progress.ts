@@ -36,7 +36,7 @@ import { api } from 'sdk';
 import type { AgentProgressEvent } from '../lib/agent/engine.js';
 import { PROGRESS_SHOW_AFTER_MS } from '../lib/agent/engine.js';
 import { kvDelete, kvGetJson, kvSetJson, patchTurnTrace, readTurnTrace } from '../lib/dal/misc.js';
-import { safeEdit, safeSendMessage } from './formatting.js';
+import { safeEdit, safeSendMessage, signalChatAction } from './formatting.js';
 import { getMainKeyboard } from './keyboards.js';
 
 /**
@@ -258,11 +258,10 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
     // Отметка ставится и на отказе: индикатор — украшение, а повторять упавший
     // запрос на каждой стадии дороже, чем потерять одну «печатает…».
     lastTypingAt = now();
-    try {
-      await api.sendChatAction({ chat_id: chatId, action: 'typing' });
-    } catch {
-      // «печатает…» — украшение: сбой не должен ломать ход
-    }
+    // Ответ Bot API не ждём: отменить зависший запрос в изоляте нечем (нет ни
+    // `setTimeout`, ни `AbortController`), а «печатает…» — не часть ответа.
+    // Ожидание подвисшего сигнала убило бы ход, который ещё может ответить.
+    signalChatAction(chatId, 'typing');
   };
 
   /** Запоминает открытую строку, чтобы следующий ход мог её погасить. */
