@@ -74,3 +74,53 @@ jobs:
           esac
         env:
           TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN || secrets.CLOUD_TOKEN }}
+
+  # A green `deploy` job proves only that `tgcloud push` returned 0: revision 58 shipped a
+  # `secrets.js` stub exactly that way, and the job log looked fine. This job checks what is
+  # actually live — the cloud copy of `tgcloud/lib/secrets.js` (real module, non-empty
+  # ADMIN_IDS and GEMINI_API_KEY) and the host itself (`/` → 200, the assets index.html
+  # points at → 200, an unsigned `POST /api/rpc` → 401). Secret values never reach the log:
+  # scripts/verify-deploy.mjs reports presence, never content. The same script runs locally
+  # against the public instance (`node scripts/verify-deploy.mjs --url <app url>`).
+  verify:
+    name: Verify deploy (secrets snapshot + live smoke)
+    needs: deploy
+    if: needs.deploy.result == 'success'
+    runs-on: ubuntu-latest
+    env:
+      # Optional override. Without it the address is derived from the deploy token
+      # (`app<id>:<secret>` → `https://app<id>.tgcloud.ai`), so no instance address is
+      # hardcoded in the public repo.
+      APP_URL_OVERRIDE: ${{ vars.PUBLIC_APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      # `tgcloud fetch` downloads the deployed modules into `.tgcloud/remote/` and touches
+      # nothing else — that snapshot is the only ground truth about what the isolate runs.
+      - name: Resolve target and download deployed snapshot
+        env:
+          TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN || secrets.CLOUD_TOKEN }}
+        run: |
+          if [ -z "$TGCLOUD_TOKEN" ]; then
+            echo "::warning::TGCLOUD_TOKEN is not set — the deploy job skipped the push, so there is no new revision to verify."
+            echo "SNAPSHOT_AVAILABLE=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          APP_URL="${APP_URL_OVERRIDE:-}"
+          if [ -z "$APP_URL" ]; then
+            APP_URL="https://${TGCLOUD_TOKEN%%:*}.tgcloud.ai"
+          fi
+          echo "APP_URL=$APP_URL" >> "$GITHUB_ENV"
+          npx tgcloud fetch
+
+      - name: Verify deployed secrets module and live host
+        if: env.SNAPSHOT_AVAILABLE != '0'
+        run: node scripts/verify-deploy.mjs --url "$APP_URL" --snapshot .tgcloud/remote/lib/secrets.js
