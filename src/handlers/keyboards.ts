@@ -97,12 +97,13 @@ export const OPEN_APP_LABEL = '🚀 Открыть';
  * Возвращает URL Mini App: `WEBAPP_URL` / `MINIAPP_URL` из окружения
  * переопределяет адрес из оверлея (`brand.miniAppUrl`).
  *
- * Если переменная окружения задана, но не является `https://`-адресом
- * (или `process.env` недоступен), возвращает `null`.
+ * Если переменная окружения задана, но не является `https://`-адресом —
+ * возвращает `null`. В V8-изоляте, где `process` отсутствует (`undefined`),
+ * сразу переходит к `brand.miniAppUrl` из скомпилированного оверлея.
  */
 export function webAppUrl(): string | null {
-  if (typeof process === 'undefined' || !process.env) return null;
-  const raw = process.env.WEBAPP_URL ?? process.env.MINIAPP_URL;
+  const env = typeof process !== 'undefined' && process.env ? process.env : undefined;
+  const raw = env ? (env.WEBAPP_URL ?? env.MINIAPP_URL) : undefined;
   if (raw !== undefined) {
     const url = raw.trim();
     if (!url.startsWith('https://')) return null;
