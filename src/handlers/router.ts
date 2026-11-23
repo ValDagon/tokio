@@ -94,7 +94,7 @@ import {
 import type { NoteRow } from '../lib/types';
 import { truncate, zonedParts } from '../lib/utils';
 
-import { escapeAmpLtGt, safeAnswer, safeEdit } from './formatting';
+import { escapeAmpLtGt, safeAnswer, safeEdit, signalChatAction } from './formatting';
 import { startTurnProgress } from './progress';
 import {
   buildAgentDeepLinkKeyboard,
@@ -403,7 +403,9 @@ function messageIdOf(result: unknown): number | null {
 }
 
 async function sendTyping(chatId: number): Promise<void> {
-  await api.sendChatAction({ chat_id: chatId, action: 'typing' });
+  // Сигнал не ждём: зависший `sendChatAction` иначе съедает ход, а отменить его
+  // в изоляте нечем — см. `signalChatAction` в `formatting.ts`.
+  signalChatAction(chatId, 'typing');
 }
 
 async function answerCallback(
@@ -537,7 +539,7 @@ async function handleStart(userId: number, chatId: number): Promise<void> {
 }
 
 async function handleBackup(userId: number, chatId: number): Promise<void> {
-  await api.sendChatAction({ chat_id: chatId, action: 'upload_document' });
+  signalChatAction(chatId, 'upload_document');
   const statusId = messageIdOf(await safeAnswer(chatId, BACKUP_STATUS_TEXT));
 
   try {
