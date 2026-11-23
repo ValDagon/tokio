@@ -22,7 +22,7 @@
 ```mermaid
 flowchart LR
   TG["Telegram-бот и Mini App<br/>(React 19 + Vite SPA)"] -->|Webhook и POST /api/rpc| ISO["V8-изолят Telegram Serverless<br/>(tgcloud.ai, <= 100 модулей)"]
-  ISO --> AGENT["Движок агента (54 инструмента)<br/>STT · Vision OCR · Финансовый парсер"]
+  ISO --> AGENT["Движок агента (57 инструментов)<br/>STT · Vision OCR · Финансовый парсер"]
   ISO --> OVERLAY["Скомпилированный оверлей и i18n<br/>(EN · RU · SR-Latn · JA)"]
   ISO --> CRYPTO["Pure-TS криптография<br/>ChaCha20-Poly1305 BYOK"]
   AGENT --> DAL["Изолированный DAL<br/>(фильтрация по user_id)"]

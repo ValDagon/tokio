@@ -69,7 +69,7 @@ npx tgcloud push && npx tgcloud migrate --yes
 
 - `src/lib/db/tables.ts` & `src/schema.ts`: Single-source 24-table SQLite schema (`users`, `tasks`, `accounts`, `transactions`, `liabilities`, `notes`, `entities`, `relations`, `medications`, `due_jobs`, `agent_state`, `feedback`, etc.).
 - `src/lib/dal/`: Tenant-scoped SQLite Data Access Layer.
-- `src/lib/agent/`: Native ReAct loop (`engine.ts`, `prompts.ts`, `constants.ts`) and 54 tools (`tools/index.ts`).
+- `src/lib/agent/`: Native ReAct loop (`engine.ts`, `prompts.ts`, `constants.ts`) and 57 tools (`tools/index.ts`; the count is locked by `tests/agent/boot.test.ts`).
 - `src/handlers/`: Telegram update handlers (`message.ts`, `callback_query.ts`, `router.ts`, `ingest.ts`, `onboarding.ts`, `keyboards.ts`, `formatting.ts`).
 - `src/endpoints/rpc.ts`: Unified RPC gateway for the Mini App (`POST /api/rpc`) with Telegram `initData` HMAC-SHA256 validation.
 - `src/lib/overlay.ts` & `src/lib/i18n.ts`: Runtime entrypoints compiled from `overlay/` (or `example/overlay/`) and `locales/*.json` by `scripts/compile-runtime-assets.mjs`.
@@ -98,5 +98,5 @@ npx tgcloud push && npx tgcloud migrate --yes
   4. `docs/system/OVERLAY-SPEC.md` (Level 1 Overlay manifest, prompt compilation, feature flags)
 - **Branch & PR Workflow**:
   - Develop core mechanics (tools, bug fixes, Mini App features, i18n, feature flags) on a feature branch and submit a PR to `main` so maintainers can review cleanly.
-  - Downstream private instances consume this repository as a pinned `core/` git submodule and keep all instance-specific branding, prompts, and feature toggles inside their own `overlay/` (or `OVERLAY_DIR`).
+  - Downstream private instances consume this repository either as a vendored copy of `core/` or as a git submodule, and keep all instance-specific branding, prompts, and feature toggles inside their own `overlay/` (or `OVERLAY_DIR`).
   - Before submitting or handing off work between models/harnesses, run `npm run check:leaks:history`, `npm run typecheck`, `npm test`, `npm run build`, and Mini App `npm run lint && npm test && npm run build`, and leave the branch clean with a concise status summary.
