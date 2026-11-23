@@ -8,7 +8,7 @@
 [![SQLite](https://img.shields.io/badge/SQLite-24%20Tables-003B57.svg)](src/lib/db/tables.ts)
 [![Mini App](https://img.shields.io/badge/Mini%20App-React%2019-61DAFB.svg)](miniapp/)
 [![Locales](https://img.shields.io/badge/i18n-EN%20%7C%20RU%20%7C%20SR%20%7C%20JA-informational.svg)](locales/)
-[![Tests](https://img.shields.io/badge/tests-1912%20%2B%2036%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-2113%20%2B%2052%20passed-brightgreen.svg)](tests/)
 
 **Tokio** je open-source jezgro ličnog AI asistenta nativno projektovano za **Telegram Serverless** (`tgcloud.ai`). Izvršava se u potpunosti unutar V8 izolata nad ugrađenom SQLite bazom od 24 tabele, uključuje **React 19 Telegram Mini App** sa 5 kartica, podržava **4 jezika od samog početka** (`EN`, `RU`, `SR-Latn`, `JA`) i razdvaja neutralnu mehaniku jezgra od lične konfiguracije putem **deklarativnih overlay paketa nivoa 1**.
 
@@ -22,7 +22,7 @@
 ```mermaid
 flowchart LR
   TG["Telegram bot i Mini App<br/>(React 19 + Vite SPA)"] -->|Webhook i POST /api/rpc| ISO["Telegram Serverless V8 izolat<br/>(tgcloud.ai, <= 100 modula)"]
-  ISO --> AGENT["Agent Engine (54 alata)<br/>STT · Vision OCR · Finansijski parser"]
+  ISO --> AGENT["Agent Engine (60 alata)<br/>STT · Vision OCR · Finansijski parser"]
   ISO --> OVERLAY["Kompajlirani overlay i i18n<br/>(EN · RU · SR-Latn · JA)"]
   ISO --> CRYPTO["Pure-TS kriptografija<br/>ChaCha20-Poly1305 BYOK"]
   AGENT --> DAL["Izolovani DAL po korisniku<br/>(user_id provera)"]
@@ -36,9 +36,9 @@ Detalje o izvršnom okruženju i modulima potražite u [`docs/system/ARCHITECTUR
 ## Ključne mogućnosti
 
 - **Jedinstveni izvor SQLite šeme (`24` tabele)**: Definisana jednom u [`src/lib/db/tables.ts`](src/lib/db/tables.ts), kompajlira se u DSL platforme (`src/schema.ts`) za `tgcloud migrate` i u SQL DDL (`src/lib/db/ddl.ts`) za lokalne Vitest testove.
-- **Deklarativni overlay nivoa 1**: Privatni promptovi, stilovi komunikacije, alijasi računa, feature flag-ovi i Mini App teme ostaju izolovani u `.gitignore` fascikli `overlay/` ili u `OVERLAY_DIR`. Pogledajte [`example/README.sr.md`](example/README.sr.md).
+- **Deklarativni overlay nivoa 1 i runtime veštine**: privatni promptovi, stilovi komunikacije, runtime `skills/*.md`, alijasi računa, feature flag-ovi i Mini App teme ostaju izolovani u `.gitignore` fascikli `overlay/` ili u `OVERLAY_DIR`. Pogledajte [`example/README.sr.md`](example/README.sr.md).
 - **Podrška za 4 jezika (`EN`, `RU`, `SR-Latn`, `JA`)**: Lokalizovani odgovori bota, tastature, čarobnjak za početak rada, promptovi, Mini App interfejs i početni demo podaci (`locales/*.json` + `miniapp/src/i18n/`).
-- **54 nativna alata za agenta**: Zadaci i kalendarski događaji (`item_type: 'task' | 'event'`), multivalutne finansije i liste obaveza, beleške i graf znanja, lekovi, procena runway-a, trijaža prijemnog sandučeta, dnevnik i korpa za vraćanje obrisanog.
+- **60 nativnih alata za agenta**: Zadaci i kalendarski događaji (`item_type: 'task' | 'event'`), multivalutne finansije i liste obaveza, beleške i graf znanja, lekovi, procena runway-a, trijaža prijemnog sandučeta, dnevnik, runtime veštine (`list_skills`, `read_skill`, `draft_skill`) i korpa za vraćanje obrisanog.
 - **Deterministički finansijski parser i poništavanje**: Prepoznaje troškove, prihode, prenose i stanja računa iz teksta, glasovnih poruka (STT) i fotografija priznanica/stanja sa brzim poništavanjem jednim klikom ili komandom `/undo`.
 - **Pure-TS ChaCha20-Poly1305 BYOK enkripcija**: Bez nativnih C++ zavisnosti; korisnici mogu dodati sopstveni šifrovani Gemini API ključ uz opcione limite potrošnje i otvoreni ili zatvoreni režim pristupa.
 - **Troslojna zaštita od curenja podataka**: `overlay/` i `.forbidden-strings.local` su u `.gitignore`, `.githooks/pre-push` + `scripts/check-leaks.mjs` skeniraju fajlove i git istoriju, a GitHub Actions pokreće `gitleaks` i proveru curenja pri svakom push-u i PR-u.

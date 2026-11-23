@@ -8,7 +8,7 @@
 [![SQLite](https://img.shields.io/badge/SQLite-24%20Tables-003B57.svg)](src/lib/db/tables.ts)
 [![Mini App](https://img.shields.io/badge/Mini%20App-React%2019-61DAFB.svg)](miniapp/)
 [![Locales](https://img.shields.io/badge/i18n-EN%20%7C%20RU%20%7C%20SR%20%7C%20JA-informational.svg)](locales/)
-[![Tests](https://img.shields.io/badge/tests-1912%20%2B%2036%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-2113%20%2B%2052%20passed-brightgreen.svg)](tests/)
 
 **Tokio** — открытое ядро персонального ИИ-ассистента, созданное специально под **Telegram Serverless** (`tgcloud.ai`). Бот работает внутри V8-изолятов поверх встроенной базы SQLite из 24 таблиц, поставляется с **Telegram Mini App на React 19** (5 вкладок), поддерживает **4 языка из коробки** (`EN`, `RU`, `SR-Latn`, `JA`) и отделяет нейтральные механизмы ядра от персональных настроек с помощью **декларативных оверлеев Уровня 1**.
 
@@ -22,7 +22,7 @@
 ```mermaid
 flowchart LR
   TG["Telegram-бот и Mini App<br/>(React 19 + Vite SPA)"] -->|Webhook и POST /api/rpc| ISO["V8-изолят Telegram Serverless<br/>(tgcloud.ai, <= 100 модулей)"]
-  ISO --> AGENT["Движок агента (57 инструментов)<br/>STT · Vision OCR · Финансовый парсер"]
+  ISO --> AGENT["Движок агента (60 инструментов)<br/>STT · Vision OCR · Финансовый парсер"]
   ISO --> OVERLAY["Скомпилированный оверлей и i18n<br/>(EN · RU · SR-Latn · JA)"]
   ISO --> CRYPTO["Pure-TS криптография<br/>ChaCha20-Poly1305 BYOK"]
   AGENT --> DAL["Изолированный DAL<br/>(фильтрация по user_id)"]
@@ -36,9 +36,9 @@ flowchart LR
 ## Ключевые возможности
 
 - **Единый источник схемы SQLite (`24` таблицы)**: описана один раз в [`src/lib/db/tables.ts`](src/lib/db/tables.ts), компилируется в DSL платформы (`src/schema.ts`) для `tgcloud migrate` и в SQL DDL (`src/lib/db/ddl.ts`) для локальных тестов Vitest.
-- **Декларативные оверлеи Уровня 1**: персональные промпты, стили общения, алиасы счетов, флаги возможностей и темы Mini App вынесены в игнорируемую git папку `overlay/` или внешний `OVERLAY_DIR`. Подробнее: [`example/README.ru.md`](example/README.ru.md).
+- **Декларативные оверлеи Уровня 1 и runtime-скиллы**: персональные промпты, стили общения, процедурные `skills/*.md`, алиасы счетов, флаги возможностей и темы Mini App вынесены в игнорируемую git папку `overlay/` или внешний `OVERLAY_DIR`. Подробнее: [`example/README.ru.md`](example/README.ru.md).
 - **Поддержка 4 языков (`EN`, `RU`, `SR-Latn`, `JA`)**: локализованы ответы бота, клавиатуры, мастер знакомства, промпты, интерфейс Mini App и стартовый демо-набор (`locales/*.json` + `miniapp/src/i18n/`).
-- **54 нативных инструмента агента**: задачи и календарные события (`item_type: 'task' | 'event'`), мультивалютные финансы и очереди обязательств, заметки Второго мозга и граф знаний, аптечка, прогноз runway, разбор инбокса, дневник и корзина.
+- **60 нативных инструментов агента**: задачи и календарные события (`item_type: 'task' | 'event'`), мультивалютные финансы и очереди обязательств, заметки Второго мозга и граф знаний, аптечка, прогноз runway, разбор инбокса, дневник, runtime-скиллы (`list_skills`, `read_skill`, `draft_skill`) и корзина.
 - **Детерминированный финансовый парсер и откат**: распознаёт расходы, доходы, переводы и остатки из текста, голоса (STT) и фото чеков/балансов с мгновенным откатом по кнопке или `/undo`.
 - **Pure-TS шифрование ChaCha20-Poly1305 (BYOK)**: ноль нативных C++-зависимостей; пользователи могут подключать собственный зашифрованный ключ Gemini API поверх настраиваемых лимитов и открытого или приватного режима доступа.
 - **Трёхслойная защита от утечек**: `overlay/` и `.forbidden-strings.local` в `.gitignore`, `.githooks/pre-push` + `scripts/check-leaks.mjs` проверяют файлы и историю git, а CI запускает `gitleaks` и скан на каждый push и PR.

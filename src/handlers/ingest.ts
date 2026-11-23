@@ -36,6 +36,8 @@ import {
   type LiabilityReviewRecord,
 } from '../lib/dal/misc.js';
 import { getUser } from '../lib/dal/users.js';
+import { normalizeLocale, type LocaleCode } from '../lib/i18n.js';
+import { getOverlay } from '../lib/overlay.js';
 import {
   liabilityReviewDueDate,
   parseLiabilityReviewCallback,
@@ -249,7 +251,10 @@ function buildFinanceUndoMarkup(params: {
 }
 
 /** Подбирает клавиатуру ответа после успешного выполнения инструментов агентом. */
-function buildAgentActionReplyMarkup(steps: ReadonlyArray<AgentStepLike>): ReplyMarkup {
+function buildAgentActionReplyMarkup(
+  steps: ReadonlyArray<AgentStepLike>,
+  locale: LocaleCode = 'ru',
+): ReplyMarkup {
   let undoMarkup: InlineKeyboardMarkup | undefined;
 
   const liabStep = steps.find((s) => s.action?.name === 'mark_liability_paid' && s.ok);
@@ -279,8 +284,8 @@ function buildAgentActionReplyMarkup(steps: ReadonlyArray<AgentStepLike>): Reply
     undoMarkup = buildFinanceUndoMarkup({ transactionId: txData?.transaction_id });
   }
 
-  const deepLinkMarkup = buildAgentDeepLinkKeyboard(steps);
-  return undoMarkup ?? deepLinkMarkup ?? getMainKeyboard();
+  const deepLinkMarkup = buildAgentDeepLinkKeyboard(steps, locale);
+  return undoMarkup ?? deepLinkMarkup ?? getMainKeyboard(locale);
 }
 
 async function tryAgentAutonomousStep(
@@ -358,11 +363,13 @@ async function tryAgentAutonomousStep(
     // (включая диалог, уточнение, подтверждение или объяснение отказа).
     // В инбокс проваливается только явное молчание (`empty_reply`) или `llm_error`.
     if (agentRes.reply.trim() && agentRes.stopReason !== 'empty_reply') {
+      const user = await getUser(userId);
+      const locale = normalizeLocale(user?.language, getOverlay().manifest.defaultLocale);
       const body = markdownToTelegramHtml(agentRes.reply);
       const reply = prefixQuote ? `${prefixQuote}${body}` : body;
       const replyMarkup = executedSuccessTool
-        ? buildAgentActionReplyMarkup(agentRes.steps)
-        : getMainKeyboard();
+        ? buildAgentActionReplyMarkup(agentRes.steps, locale)
+        : getMainKeyboard(locale);
 
       await safeAnswer(chatId, reply, { replyMarkup, isHtml: true });
       return true;

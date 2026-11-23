@@ -82,7 +82,7 @@ export interface UserSettings {
   low_stimulation_mode: boolean;
   custom_instructions: string;
   persona_style: string;
-  personal_memory?: string;
+  model_provider?: string;
   role?: 'admin' | 'user';
   onboarded?: boolean;
   daily_msg_limit?: number;
@@ -124,6 +124,7 @@ export interface AccessInfo {
   daily_msg_limit?: number;
   daily_msg_used?: number;
   has_byok_key?: boolean;
+  model_provider?: string;
 }
 
 export interface OnboardingPayload {
@@ -258,6 +259,7 @@ export interface Liability {
   currency: string;
   amount_eur: number;
   monthly_payment?: number | null;
+  monthly_payment_eur?: number | null;
   payment_day?: number | null;
   total_payments?: number | null;
   end_date?: string | null;
@@ -274,7 +276,7 @@ export interface Note {
   id: string;
   raw_text: string;
   clean_text?: string | null;
-  column: 'inbox' | 'raw' | 'ideas' | 'self' | 'useful' | 'possible_tasks' | 'archive';
+  column: 'raw' | 'todo' | 'note' | 'idea' | 'archive';
   created_at: string;
   updated_at: string;
 }
@@ -352,5 +354,130 @@ export interface TrashData {
   tasks: TrashTaskItem[];
   notes: TrashNoteItem[];
   total_count: number;
+}
+
+export interface OverlaySkillItem {
+  id: string;
+  name: string;
+  description: string;
+  triggers: string[];
+  body: string;
+}
+
+export interface UserSkillItem {
+  id: string;
+  key: string;
+  title: string;
+  status: string;
+  version: number;
+  body: string;
+  origin_failure: string | null;
+  supersedes: string | null;
+  runs: number;
+  views: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface SkillsResponse {
+  builtin: OverlaySkillItem[];
+  user: UserSkillItem[];
+}
+
+export interface BacklogItem {
+  id: string;
+  category: string;
+  title: string;
+  raw_input: string;
+  status: string;
+  created_at: string | null;
+}
+
+export interface DiagnosticsTurnTrace {
+  startedAt?: string | null;
+  updatedAt?: string | null;
+  stage?: string;
+  modelCalls?: number;
+  deadlineHit?: boolean;
+}
+
+export interface DiagnosticsTurnStats {
+  turns?: number;
+  ok?: number;
+  failed?: number;
+}
+
+export interface DiagnosticsFailure {
+  status?: number;
+  at?: string | null;
+  message?: string | null;
+}
+
+export interface DiagnosticsClock {
+  lastExternalAttemptAt?: string | null;
+  lastExternalSuccessAt?: string | null;
+}
+
+export interface DiagnosticsUsage {
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  total_cost_eur: number;
+}
+
+export interface DiagnosticsResponse {
+  summary_text: string;
+  last_failure: DiagnosticsFailure | null;
+  turn_trace: DiagnosticsTurnTrace | null;
+  turn_stats: DiagnosticsTurnStats | null;
+  clock: DiagnosticsClock | null;
+  thread: {
+    count: number;
+    updated_at: string | null;
+  };
+  usage: DiagnosticsUsage;
+  model_provider: string;
+  has_byok_key: boolean;
+}
+
+export interface FxRatesResponse {
+  date: string | null;
+  base: string;
+  rates: Record<string, number>;
+  updated_at: string | null;
+}
+
+export interface CreateTransactionPayload {
+  kind: 'expense' | 'income' | 'transfer';
+  account_id: string;
+  to_account_id?: string;
+  amount: number;
+  currency?: string;
+  category_name?: string;
+  description?: string;
+}
+
+export interface TransactionWriteResponse {
+  group_id: string | null;
+  transactions: TransactionItem[];
+}
+
+export interface DocSearchResult {
+  query: string;
+  topic: string | null;
+  result: string;
+}
+
+export interface ReaderSkillData {
+  source: 'builtin' | 'user';
+  id: string;
+  title: string;
+  subtitle?: string;
+  status?: string;
+  triggers?: string[];
+  body: string;
+  runs?: number;
+  views?: number;
 }
 

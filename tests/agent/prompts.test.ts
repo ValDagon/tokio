@@ -505,5 +505,11 @@ describe('evaluateExecutiveOverload и overloadShieldBlock', () => {
     // Щит строго после блока даты в динамическом хвосте.
     expect(overloadedPrompt.indexOf(shieldMarker)).toBeGreaterThan(idxOverloaded);
     expect(manualCalmPrompt.indexOf(shieldMarker)).toBeGreaterThan(idxManualCalm);
+
+    // Каталог встроенных .md-скиллов попадает в кэшируемый префикс до даты (progressive disclosure).
+    expect(normalPrompt).toContain('КАТАЛОГ ДОМЕННЫХ СКИЛЛОВ');
+    expect(normalPrompt).toContain('inbox-triage');
+    expect(normalPrompt).toContain('read_skill');
+    expect(normalPrompt.indexOf('КАТАЛОГ ДОМЕННЫХ СКИЛЛОВ')).toBeLessThan(idxNormal);
   });
 });

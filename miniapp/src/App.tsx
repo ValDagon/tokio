@@ -28,6 +28,7 @@ import type {
   DocChapterDetail,
   TrashData,
   ReaderFontScale,
+  ReaderSkillData,
   UserSettings,
   UiConfig,
 } from './types';
@@ -70,12 +71,15 @@ import {
   restoreTrashItem,
   deleteTrashItemPermanently,
   emptyTrash,
+  activateUserSkill,
+  rejectUserSkill,
   getDataSource,
   subscribeDataSource,
   type ApiSource,
 } from './api';
 import './App.css';
 import { TodayTab, TasksTab, FinancesTab, NotesTab, SystemTab } from './tabs';
+import type { SystemSectionId } from './tabs/SystemTab';
 import { ReaderSheet } from './components/ReaderSheet';
 import { OnboardingModal } from './components/OnboardingModal';
 import { useI18n, LOCALE_BCP47, normalizeLocale } from './i18n/index';
@@ -106,8 +110,6 @@ interface PersonaPreset {
   instruction: string;
 }
 
-const SUGGESTED_QUESTIONS: readonly string[] = [] as const;
-
 const CALM_MODE_STORAGE_KEY = 'tokio_calm_mode';
 const LEGACY_CALM_MODE_STORAGE_KEY = 'ag_calm_mode';
 
@@ -124,12 +126,10 @@ export function App() {
 
   const noteColumns: readonly NoteColumnDef[] = React.useMemo(
     () => [
-      { id: 'inbox', name: t('notes.colInbox') },
       { id: 'raw', name: t('notes.colRaw') },
-      { id: 'ideas', name: t('notes.colIdeas') },
-      { id: 'self', name: t('notes.colSelf') },
-      { id: 'useful', name: t('notes.colUseful') },
-      { id: 'possible_tasks', name: t('notes.colPossibleTasks') },
+      { id: 'todo', name: t('notes.colTodo') },
+      { id: 'note', name: t('notes.colNote') },
+      { id: 'idea', name: t('notes.colIdea') },
       { id: 'archive', name: t('notes.colArchive') },
     ],
     [t]
@@ -144,22 +144,22 @@ export function App() {
         instruction: t('personas.mentorInstruction'),
       },
       {
-        id: 'executive',
-        title: t('personas.executiveTitle'),
-        desc: t('personas.executiveDesc'),
-        instruction: t('personas.executiveInstruction'),
+        id: 'strategist',
+        title: t('personas.strategistTitle'),
+        desc: t('personas.strategistDesc'),
+        instruction: t('personas.strategistInstruction'),
       },
       {
-        id: 'partner',
-        title: t('personas.partnerTitle'),
-        desc: t('personas.partnerDesc'),
-        instruction: t('personas.partnerInstruction'),
+        id: 'calm_partner',
+        title: t('personas.calmPartnerTitle'),
+        desc: t('personas.calmPartnerDesc'),
+        instruction: t('personas.calmPartnerInstruction'),
       },
       {
-        id: 'socratic',
-        title: t('personas.socraticTitle'),
-        desc: t('personas.socraticDesc'),
-        instruction: t('personas.socraticInstruction'),
+        id: 'concise',
+        title: t('personas.conciseTitle'),
+        desc: t('personas.conciseDesc'),
+        instruction: t('personas.conciseInstruction'),
       },
     ],
     [t]
@@ -186,7 +186,6 @@ export function App() {
   const [lifeContext, setLifeContext] = useState<string>('');
   const [contextDepth, setContextDepth] = useState<number>(1);
   const [loadingContext, setLoadingContext] = useState(false);
-  const [copiedPromptIndex, setCopiedPromptIndex] = useState<number | null>(null);
 
   // Documentation & Reader state
   const [docChapters, setDocChapters] = useState<DocChapterSummary[]>([]);
@@ -197,6 +196,9 @@ export function App() {
   const [loadingChapterDetail, setLoadingChapterDetail] = useState<boolean>(false);
   const [docSearchQuery, setDocSearchQuery] = useState<string>('');
   const [activeReaderNoteId, setActiveReaderNoteId] = useState<string | null>(null);
+  const [activeReaderSkill, setActiveReaderSkill] = useState<ReaderSkillData | null>(null);
+  const [skillsRefreshKey, setSkillsRefreshKey] = useState(0);
+  const [initialSystemSection, setInitialSystemSection] = useState<SystemSectionId | null>(null);
   const [showDossierReader, setShowDossierReader] = useState<boolean>(false);
   const [readerFontScale, setReaderFontScale] = useState<ReaderFontScale>(() => {
     if (typeof window !== 'undefined') {
@@ -350,6 +352,11 @@ export function App() {
       if (initialTarget.openDossier) {
         setShowDossierReader(true);
       }
+      if (initialTarget.systemSection === 'trash') {
+        setShowTrashModal(true);
+      } else if (initialTarget.systemSection) {
+        setInitialSystemSection(initialTarget.systemSection);
+      }
     }
 
     const wa = window.Telegram?.WebApp;
@@ -403,13 +410,18 @@ export function App() {
     if (!bb || typeof bb.onClick !== 'function') return;
 
     const isReaderOpen =
-      activeReaderNoteId !== null || selectedChapterSlug !== null || showDossierReader;
+      activeReaderNoteId !== null ||
+      selectedChapterSlug !== null ||
+      showDossierReader ||
+      activeReaderSkill !== null;
     const hasOpenModal = showTrashModal || budgetModalCategory !== null || isReaderOpen;
 
     if (hasOpenModal) {
       const handleBackClick = () => {
         triggerHaptic('light');
-        if (activeReaderNoteId !== null) {
+        if (activeReaderSkill !== null) {
+          setActiveReaderSkill(null);
+        } else if (activeReaderNoteId !== null) {
           setActiveReaderNoteId(null);
         } else if (selectedChapterSlug !== null) {
           setSelectedChapterSlug(null);
@@ -452,6 +464,7 @@ export function App() {
     activeReaderNoteId,
     selectedChapterSlug,
     showDossierReader,
+    activeReaderSkill,
   ]);
 
   async function loadInitialData() {
@@ -467,6 +480,21 @@ export function App() {
       ]);
 
       setUiConfig(fetchedUiConfig);
+      const allowedTabs = fetchedUiConfig.miniapp.tabs.map((k) =>
+        k === 'system' ? 'assistant' : k
+      );
+      if (allowedTabs.length > 0 && !allowedTabs.includes(activeTab)) {
+        const firstAllowed = allowedTabs[0];
+        if (
+          firstAllowed === 'today' ||
+          firstAllowed === 'tasks' ||
+          firstAllowed === 'finances' ||
+          firstAllowed === 'notes' ||
+          firstAllowed === 'assistant'
+        ) {
+          setActiveTab(firstAllowed);
+        }
+      }
       setUserSettings(settings);
       if (settings.language) {
         applyLocale(normalizeLocale(settings.language));
@@ -487,7 +515,7 @@ export function App() {
       fetchRunway().then(setRunway).catch(() => {});
       fetchLiabilities().then(setLiabilities).catch(() => {});
 
-      if (settings.custom_instructions) {
+      if (settings.custom_instructions !== undefined) {
         setCustomInstructions(settings.custom_instructions);
       }
       if (settings.persona_style) {
@@ -571,7 +599,8 @@ export function App() {
   const handleSaveDirectives = async (extra?: {
     base_currency?: string;
     timezone?: string;
-    personal_memory?: string;
+    summary_time?: string;
+    model_provider?: string;
   }) => {
     try {
       setIsSavingDirectives(true);
@@ -590,15 +619,6 @@ export function App() {
       setIsSavingDirectives(false);
     }
   };
-
-  const handleCopyPrompt = (text: string, index: number) => {
-    navigator.clipboard?.writeText(text);
-    triggerHaptic('light');
-    setCopiedPromptIndex(index);
-    setTimeout(() => setCopiedPromptIndex(null), 2000);
-  };
-
-  const suggestedQuestions = SUGGESTED_QUESTIONS;
 
   async function loadFinances() {
     try {
@@ -743,7 +763,7 @@ export function App() {
       setTasks(prev => [created, ...prev]);
       triggerHaptic('success');
     } else {
-      const created = await createNote(trimmed, 'inbox');
+      const created = await createNote(trimmed, 'raw');
       setNotes(prev => [created, ...prev]);
       triggerHaptic('success');
     }
@@ -920,6 +940,27 @@ export function App() {
     }
   };
 
+  // --- Task Edit Handler ---
+
+  const handleUpdateTaskSave = async (
+    taskId: string,
+    updates: {
+      title?: string;
+      notes?: string;
+      category_id?: string;
+      due_at?: string | null;
+      item_type?: 'task' | 'event';
+    }
+  ) => {
+    try {
+      await updateTask(taskId, updates);
+      await loadInitialData();
+    } catch (err) {
+      console.error('Failed to update task:', err);
+      await showAlert(t('common.error'));
+    }
+  };
+
   // --- Note Handlers ---
 
   const handleCreateNote = async (e: React.FormEvent) => {
@@ -928,7 +969,7 @@ export function App() {
 
     triggerHaptic('medium');
     try {
-      const col = selectedNoteCol || 'inbox';
+      const col = selectedNoteCol || 'raw';
       const created = await createNote(newNoteText.trim(), col);
       setNotes([created, ...notes]);
       setNewNoteText('');
@@ -953,7 +994,7 @@ export function App() {
       prev.map(n => (n.id === noteId ? { ...n, clean_text: newText, raw_text: newText } : n))
     );
     try {
-      await updateNote(noteId, { clean_text: newText });
+      await updateNote(noteId, { raw_text: newText, clean_text: newText });
     } catch (err) {
       console.error('Failed to save note text:', err);
       await showAlert(t('tasks.errSaveNote'));
@@ -1465,53 +1506,41 @@ export function App() {
         </div>
       </header>
 
-      {/* Navigation Tabs (5 Stacked Mobile Tabs) */}
+      {/* Navigation Tabs (config-driven order/visibility via uiConfig.miniapp.tabs) */}
       <nav className="nav-tabs" role="tablist" aria-label={t('nav.mainNav')}>
-        <button
-          role="tab"
-          aria-selected={activeTab === 'today'}
-          className={`nav-tab ${activeTab === 'today' ? 'active' : ''}`}
-          onClick={() => { triggerHaptic('light'); setActiveTab('today'); }}
-        >
-          <Compass size={17} strokeWidth={1.75} />
-          <span>{t('nav.today')}</span>
-        </button>
-        <button
-          role="tab"
-          aria-selected={activeTab === 'tasks'}
-          className={`nav-tab ${activeTab === 'tasks' ? 'active' : ''}`}
-          onClick={() => { triggerHaptic('light'); setActiveTab('tasks'); }}
-        >
-          <ListTodo size={17} strokeWidth={1.75} />
-          <span>{t('nav.tasks')}</span>
-        </button>
-        <button
-          role="tab"
-          aria-selected={activeTab === 'finances'}
-          className={`nav-tab ${activeTab === 'finances' ? 'active' : ''}`}
-          onClick={() => { triggerHaptic('light'); setActiveTab('finances'); }}
-        >
-          <Wallet size={17} strokeWidth={1.75} />
-          <span>{t('nav.finances')}</span>
-        </button>
-        <button
-          role="tab"
-          aria-selected={activeTab === 'notes'}
-          className={`nav-tab ${activeTab === 'notes' ? 'active' : ''}`}
-          onClick={() => { triggerHaptic('light'); setActiveTab('notes'); }}
-        >
-          <FileText size={17} strokeWidth={1.75} />
-          <span>{t('nav.notes')}</span>
-        </button>
-        <button
-          role="tab"
-          aria-selected={activeTab === 'assistant'}
-          className={`nav-tab ${activeTab === 'assistant' ? 'active' : ''}`}
-          onClick={() => { triggerHaptic('light'); setActiveTab('assistant'); }}
-        >
-          <Brain size={17} strokeWidth={1.75} />
-          <span>{t('nav.system')}</span>
-        </button>
+        {(() => {
+          type NavKey = 'today' | 'tasks' | 'finances' | 'notes' | 'assistant';
+          const ALL_TABS: readonly { id: NavKey; label: string; icon: React.ReactNode }[] = [
+            { id: 'today', label: t('nav.today'), icon: <Compass size={17} strokeWidth={1.75} /> },
+            { id: 'tasks', label: t('nav.tasks'), icon: <ListTodo size={17} strokeWidth={1.75} /> },
+            { id: 'finances', label: t('nav.finances'), icon: <Wallet size={17} strokeWidth={1.75} /> },
+            { id: 'notes', label: t('nav.notes'), icon: <FileText size={17} strokeWidth={1.75} /> },
+            { id: 'assistant', label: t('nav.system'), icon: <Brain size={17} strokeWidth={1.75} /> },
+          ];
+          const normalizedEnabled = new Set(
+            uiConfig.miniapp.tabs.map((k) => (k === 'system' ? 'assistant' : k))
+          );
+          const visibleTabs =
+            normalizedEnabled.size > 0
+              ? ALL_TABS.filter((tab) => normalizedEnabled.has(tab.id))
+              : ALL_TABS;
+          const renderedTabs = visibleTabs.length > 0 ? visibleTabs : ALL_TABS;
+          return renderedTabs.map((tab) => (
+            <button
+              key={tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`nav-tab ${activeTab === tab.id ? 'active' : ''}`}
+              onClick={() => {
+                triggerHaptic('light');
+                setActiveTab(tab.id);
+              }}
+            >
+              {tab.icon}
+              <span>{tab.label}</span>
+            </button>
+          ));
+        })()}
       </nav>
 
       {/* TAB: TODAY */}
@@ -1588,6 +1617,7 @@ export function App() {
           newTaskItemType={newTaskItemType}
           setNewTaskItemType={setNewTaskItemType}
           handleToggleItemType={handleToggleItemType}
+          onUpdateTask={handleUpdateTaskSave}
         />
       )}
 
@@ -1652,7 +1682,7 @@ export function App() {
         />
       )}
 
-      {/* TAB: SYSTEM (ДИРЕКТИВЫ, АПТЕЧКА, ДОСЬЕ, ДОКУМЕНТАЦИЯ) */}
+      {/* TAB: SYSTEM (ДИРЕКТИВЫ, СКИЛЛЫ, ДИАГНОСТИКА, ДОСЬЕ, ДОКУМЕНТАЦИЯ) */}
       {activeTab === 'assistant' && (
         <SystemTab
           personaPresets={personaPresets}
@@ -1663,9 +1693,6 @@ export function App() {
           isSavingDirectives={isSavingDirectives}
           directivesSavedMsg={directivesSavedMsg}
           handleSaveDirectives={handleSaveDirectives}
-          suggestedQuestions={suggestedQuestions}
-          copiedPromptIndex={copiedPromptIndex}
-          handleCopyPrompt={handleCopyPrompt}
           loadingContext={loadingContext}
           lifeContext={lifeContext}
           contextDepth={contextDepth}
@@ -1682,6 +1709,11 @@ export function App() {
           loadingChapterDetail={loadingChapterDetail}
           chapterDetail={chapterDetail}
           onOpenDossierReader={() => setShowDossierReader(true)}
+          onOpenSkillReader={setActiveReaderSkill}
+          initialOpenSection={initialSystemSection}
+          skillsRefreshKey={skillsRefreshKey}
+          showConfirm={showConfirm}
+          showAlert={showAlert}
           triggerHaptic={triggerHaptic}
           medications={medications}
           medsLoading={medsLoading}
@@ -1702,13 +1734,12 @@ export function App() {
           handleDeleteMedication={handleDeleteMedication}
           userSettings={userSettings}
           onReloadSettings={loadInitialData}
-          assistantName={uiConfig.brand.assistantName}
           backupPrefix={uiConfig.brand.backupPrefix}
           feedbackEnabled={uiConfig.features.feedbackEnabled}
         />
       )}
 
-      {/* UNIFIED FULL-SCREEN READER SHEET (NOTES, DOCS, DOSSIER) */}
+      {/* UNIFIED FULL-SCREEN READER SHEET (NOTES, DOCS, DOSSIER, SKILLS) */}
       {activeReaderNote && (
         <ReaderSheet
           mode="note"
@@ -1782,6 +1813,29 @@ export function App() {
           dossierContent={lifeContext}
           onRefreshDossier={() => loadAssistantData(contextDepth)}
           loadingDossier={loadingContext}
+        />
+      )}
+
+      {activeReaderSkill && (
+        <ReaderSheet
+          mode="skill"
+          onClose={() => setActiveReaderSkill(null)}
+          triggerHaptic={triggerHaptic}
+          fontScale={readerFontScale}
+          onChangeFontScale={handleChangeFontScale}
+          skill={activeReaderSkill}
+          onActivateSkill={async (skillId) => {
+            await activateUserSkill(skillId);
+            setActiveReaderSkill((prev) => (prev ? { ...prev, status: 'active' } : null));
+            setSkillsRefreshKey((k) => k + 1);
+          }}
+          onRejectSkill={async (skillId) => {
+            if (!(await showConfirm(t('skills.rejectConfirm')))) return false;
+            await rejectUserSkill(skillId);
+            setActiveReaderSkill((prev) => (prev ? { ...prev, status: 'rejected' } : null));
+            setSkillsRefreshKey((k) => k + 1);
+            return true;
+          }}
         />
       )}
 

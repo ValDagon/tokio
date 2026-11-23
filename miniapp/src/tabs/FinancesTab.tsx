@@ -17,8 +17,19 @@ import {
   ShieldCheck,
   Pencil,
   Plus,
+  Trash2,
+  ArrowLeftRight,
 } from 'lucide-react';
-import { updateAccount, createAccount } from '../api';
+import {
+  updateAccount,
+  createAccount,
+  deleteAccount,
+  deleteLiability,
+  createTransaction,
+  deleteTransaction,
+  fetchFxRates,
+  saveFxRates,
+} from '../api';
 import type {
   Account,
   FinanceSummary,
@@ -27,6 +38,7 @@ import type {
   Liability,
   EnvelopeStatus,
   UiConfigAccountTheme,
+  FxRatesResponse,
 } from '../types';
 import { getCurrencySymbol } from '../utils';
 import { useI18n } from '../i18n/index';
@@ -57,7 +69,15 @@ export interface FinancesTabProps {
   activeLiabilityQueue: string | null;
   setActiveLiabilityQueue: (queue: string | null) => void;
   filteredLiabilities: Liability[];
-  updateLiability: (id: string, data: { account_id?: string }) => Promise<unknown>;
+  updateLiability: (
+    id: string,
+    data: {
+      account_id?: string | null;
+      notes?: string | null;
+      monthly_payment?: number | null;
+      payment_day?: number | null;
+    }
+  ) => Promise<unknown>;
   loadFinances: () => Promise<void>;
   showAlert: (msg: string) => Promise<void>;
   showConfirm: (msg: string) => Promise<boolean>;
@@ -156,6 +176,45 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
   const [isSavingAccount, setIsSavingAccount] = React.useState(false);
   const [accountActionError, setAccountActionError] = React.useState<string | null>(null);
 
+  // Edit Liability state (details + single-item delete)
+  const [editingLiability, setEditingLiability] = React.useState<Liability | null>(null);
+  const [liabMonthlyInput, setLiabMonthlyInput] = React.useState('');
+  const [liabDayInput, setLiabDayInput] = React.useState('');
+  const [liabNotesInput, setLiabNotesInput] = React.useState('');
+  const [isSavingLiability, setIsSavingLiability] = React.useState(false);
+  const [deletingTxId, setDeletingTxId] = React.useState<string | null>(null);
+
+  // Add Transaction modal state
+  const [showTxModal, setShowTxModal] = React.useState(false);
+  const [txKind, setTxKind] = React.useState<'expense' | 'income' | 'transfer'>('expense');
+  const [txAccountId, setTxAccountId] = React.useState('');
+  const [txToAccountId, setTxToAccountId] = React.useState('');
+  const [txAmount, setTxAmount] = React.useState('');
+  const [txCategory, setTxCategory] = React.useState('');
+  const [txDescription, setTxDescription] = React.useState('');
+  const [isSavingTx, setIsSavingTx] = React.useState(false);
+
+  // FX Rates collapsible state
+  const [showFxPanel, setShowFxPanel] = React.useState(false);
+  const [fxData, setFxData] = React.useState<FxRatesResponse | null>(null);
+  const [fxCurrencyInput, setFxCurrencyInput] = React.useState('USD');
+  const [fxRateInput, setFxRateInput] = React.useState('');
+  const [isSavingFx, setIsSavingFx] = React.useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    fetchFxRates()
+      .then((res) => {
+        if (!cancelled) setFxData(res);
+      })
+      .catch((err) => {
+        console.error('Failed to load FX rates:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleToggleAccountEnvelope = async (accId: string, targetEnvelope: 'spendable' | 'reserved') => {
     try {
       triggerHaptic('medium');
@@ -227,6 +286,164 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
       setAccountActionError(msg);
     } finally {
       setIsSavingAccount(false);
+    }
+  };
+
+  const handleDeleteAccountItem = async () => {
+    if (!editingAccount) return;
+    if (!(await showConfirm(t('finances.deleteAccountConfirm', { name: editingAccount.name })))) return;
+    try {
+      setIsSavingAccount(true);
+      triggerHaptic('medium');
+      await deleteAccount(editingAccount.id);
+      triggerHaptic('success');
+      setEditingAccount(null);
+      await loadFinances();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : t('finances.errSaveAccount');
+      setAccountActionError(msg);
+    } finally {
+      setIsSavingAccount(false);
+    }
+  };
+
+  const handleOpenEditLiability = (l: Liability) => {
+    triggerHaptic('light');
+    setEditingLiability(l);
+    setLiabMonthlyInput(l.monthly_payment !== undefined && l.monthly_payment !== null ? String(l.monthly_payment) : '');
+    setLiabDayInput(l.payment_day !== undefined && l.payment_day !== null ? String(l.payment_day) : '');
+    setLiabNotesInput(l.notes || '');
+  };
+
+  const handleSaveLiabilityForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingLiability || isSavingLiability) return;
+    const monthlyVal = liabMonthlyInput.trim() === '' ? null : parseFloat(liabMonthlyInput);
+    const dayVal = liabDayInput.trim() === '' ? null : parseInt(liabDayInput, 10);
+    if (monthlyVal !== null && (!Number.isFinite(monthlyVal) || monthlyVal < 0)) {
+      await showAlert(t('finances.errInvalidAmount'));
+      return;
+    }
+    if (dayVal !== null && (!Number.isInteger(dayVal) || dayVal < 1 || dayVal > 31)) {
+      await showAlert(t('finances.errInvalidDay'));
+      return;
+    }
+    try {
+      setIsSavingLiability(true);
+      triggerHaptic('medium');
+      await updateLiability(editingLiability.id, {
+        monthly_payment: monthlyVal,
+        payment_day: dayVal,
+        notes: liabNotesInput.trim() || null,
+      });
+      triggerHaptic('success');
+      setEditingLiability(null);
+      await loadFinances();
+    } catch (err: unknown) {
+      await showAlert(err instanceof Error ? err.message : t('finances.errSaveLiability'));
+    } finally {
+      setIsSavingLiability(false);
+    }
+  };
+
+  const handleDeleteLiabilityItem = async () => {
+    if (!editingLiability) return;
+    if (!(await showConfirm(t('finances.deleteLiabilityConfirm', { name: editingLiability.name })))) return;
+    try {
+      setIsSavingLiability(true);
+      triggerHaptic('medium');
+      await deleteLiability(editingLiability.id);
+      triggerHaptic('success');
+      setEditingLiability(null);
+      await loadFinances();
+    } catch (err: unknown) {
+      await showAlert(err instanceof Error ? err.message : t('finances.errSaveLiability'));
+    } finally {
+      setIsSavingLiability(false);
+    }
+  };
+
+  const handleOpenTxModal = () => {
+    triggerHaptic('light');
+    setTxKind('expense');
+    setTxAccountId(accounts[0]?.id || '');
+    setTxToAccountId(accounts[1]?.id || accounts[0]?.id || '');
+    setTxAmount('');
+    setTxCategory('');
+    setTxDescription('');
+    setShowTxModal(true);
+  };
+
+  const handleSaveTxForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amountNum = parseFloat(txAmount.replace(',', '.'));
+    if (!txAccountId || !Number.isFinite(amountNum) || amountNum <= 0) {
+      await showAlert(t('finances.errInvalidAmount'));
+      return;
+    }
+    if (txKind === 'transfer' && (!txToAccountId || txToAccountId === txAccountId)) {
+      await showAlert(t('finances.errSameTransferAccount'));
+      return;
+    }
+    const sourceAcc = accounts.find((a) => a.id === txAccountId);
+    try {
+      setIsSavingTx(true);
+      triggerHaptic('medium');
+      await createTransaction({
+        kind: txKind,
+        account_id: txAccountId,
+        ...(txKind === 'transfer' ? { to_account_id: txToAccountId } : {}),
+        amount: amountNum,
+        ...(sourceAcc?.currency ? { currency: sourceAcc.currency } : {}),
+        ...(txKind !== 'transfer' && txCategory.trim() ? { category_name: txCategory.trim() } : {}),
+        ...(txDescription.trim() ? { description: txDescription.trim() } : {}),
+      });
+      triggerHaptic('success');
+      setShowTxModal(false);
+      await loadFinances();
+    } catch (err: unknown) {
+      await showAlert(err instanceof Error ? err.message : t('finances.errSaveTx'));
+    } finally {
+      setIsSavingTx(false);
+    }
+  };
+
+  const handleDeleteTxItem = async (tx: TransactionItem) => {
+    if (deletingTxId === tx.id) return;
+    if (!(await showConfirm(t('finances.deleteTxConfirm')))) return;
+    try {
+      setDeletingTxId(tx.id);
+      triggerHaptic('medium');
+      await deleteTransaction(tx.id);
+      triggerHaptic('success');
+      await loadFinances();
+    } catch (err: unknown) {
+      await showAlert(err instanceof Error ? err.message : t('finances.errDeleteTx'));
+    } finally {
+      setDeletingTxId(null);
+    }
+  };
+
+  const handleSaveFxForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = fxCurrencyInput.trim().toUpperCase();
+    const rateNum = parseFloat(fxRateInput.replace(',', '.'));
+    if (!/^[A-Z]{3,4}$/.test(code) || !Number.isFinite(rateNum) || rateNum <= 0) {
+      await showAlert(t('finances.errInvalidFx'));
+      return;
+    }
+    try {
+      setIsSavingFx(true);
+      triggerHaptic('medium');
+      const updated = await saveFxRates({ [code]: rateNum });
+      setFxData(updated);
+      setFxRateInput('');
+      triggerHaptic('success');
+      await loadFinances();
+    } catch (err: unknown) {
+      await showAlert(err instanceof Error ? err.message : t('finances.errSaveFx'));
+    } finally {
+      setIsSavingFx(false);
     }
   };
 
@@ -605,17 +822,117 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
         </div>
       )}
 
+      {/* Compact FX Rates Card */}
+      <div className="liabilities-summary-card" style={{ padding: '10px 14px' }}>
+        <button
+          type="button"
+          onClick={() => {
+            triggerHaptic('light');
+            setShowFxPanel((p) => !p);
+          }}
+          style={{
+            width: '100%',
+            background: 'none',
+            border: 'none',
+            padding: 0,
+            color: 'inherit',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            cursor: 'pointer',
+            gap: 8,
+          }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <ArrowLeftRight size={14} color="var(--accent-color)" />
+            <span>{t('finances.fxTitle')}</span>
+          </span>
+          <span className="tabular-nums" style={{ fontSize: 12, color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {fxData?.date ? fxData.date : t('finances.fxEmpty')}
+            {showFxPanel ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </span>
+        </button>
+
+        {fxData && Object.keys(fxData.rates).length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+            {Object.entries(fxData.rates)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([code, rate]) => (
+                <button
+                  key={code}
+                  type="button"
+                  onClick={() => {
+                    setShowFxPanel(true);
+                    setFxCurrencyInput(code);
+                    setFxRateInput(String(rate));
+                  }}
+                  className="currency-badge tabular-nums"
+                  style={{ cursor: 'pointer', border: '1px solid var(--border-hairline)', fontSize: 11.5 }}
+                >
+                  1 {fxData.base} = {formatNumber(rate, { maximumFractionDigits: 4 })} {code}
+                </button>
+              ))}
+          </div>
+        )}
+
+        {showFxPanel && (
+          <form onSubmit={handleSaveFxForm} style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              maxLength={4}
+              placeholder="USD"
+              aria-label={t('finances.fxCurrencyLabel')}
+              value={fxCurrencyInput}
+              onChange={(e) => setFxCurrencyInput(e.target.value.toUpperCase())}
+              className="input-field"
+              style={{ flex: '0 0 76px', textTransform: 'uppercase' }}
+            />
+            <input
+              type="number"
+              step="0.0001"
+              min="0.0001"
+              placeholder={t('finances.fxRatePlaceholder')}
+              aria-label={t('finances.fxRatePlaceholder')}
+              value={fxRateInput}
+              onChange={(e) => setFxRateInput(e.target.value)}
+              className="input-field"
+              style={{ flex: '1 1 120px' }}
+            />
+            <button
+              type="submit"
+              disabled={isSavingFx || !fxCurrencyInput.trim() || !fxRateInput.trim()}
+              className="btn-primary"
+              style={{ padding: '7px 14px', fontSize: 12.5 }}
+            >
+              {isSavingFx ? t('common.saving') : t('common.save')}
+            </button>
+          </form>
+        )}
+      </div>
+
       {/* 3. Monthly Payment Schedule Card */}
       {(() => {
         const scheduledLiabs = liabilities.filter(
           (l) => l.monthly_payment && l.payment_day && !isFrozenLiability(l)
         );
-        const remainingToPayRub = scheduledLiabs
-          .filter((l) => l.currency === 'RUB' && !l.is_paid_this_month)
-          .reduce((acc, l) => acc + (l.monthly_payment || 0), 0);
-        const totalMonthlyRub = scheduledLiabs
-          .filter((l) => l.currency === 'RUB')
-          .reduce((acc, l) => acc + (l.monthly_payment || 0), 0);
+        const currencies = new Set(scheduledLiabs.map((l) => l.currency));
+        const sharedCurrency = currencies.size === 1 ? scheduledLiabs[0]?.currency : null;
+        const scheduleCurrencySymbol = sharedCurrency ? getCurrencySymbol(sharedCurrency) : currSym;
+        const monthlyValueOf = (l: Liability): number => {
+          if (sharedCurrency) return l.monthly_payment || 0;
+          if (l.monthly_payment_eur !== undefined && l.monthly_payment_eur !== null) {
+            return l.monthly_payment_eur;
+          }
+          if (l.currency === baseCurrency) return l.monthly_payment || 0;
+          if (l.amount > 0 && l.monthly_payment) {
+            return (l.monthly_payment / l.amount) * l.amount_eur;
+          }
+          return 0;
+        };
+        const remainingToPay = scheduledLiabs
+          .filter((l) => !l.is_paid_this_month)
+          .reduce((acc, l) => acc + monthlyValueOf(l), 0);
+        const totalMonthly = scheduledLiabs.reduce((acc, l) => acc + monthlyValueOf(l), 0);
 
         return (
           <div className="liabilities-summary-card">
@@ -627,23 +944,23 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
                   style={{
                     fontSize: 14,
                     fontWeight: 700,
-                    color: remainingToPayRub > 0 ? 'var(--accent-color)' : '#10b981',
+                    color: remainingToPay > 0 ? 'var(--accent-color)' : '#10b981',
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 5
                   }}
                 >
-                  {remainingToPayRub > 0 ? (
-                    t('finances.toPaySuffix', { amount: formatNumber(remainingToPayRub), currency: '₽' })
+                  {remainingToPay > 0 ? (
+                    t('finances.toPaySuffix', { amount: formatNumber(remainingToPay, { maximumFractionDigits: 0 }), currency: scheduleCurrencySymbol })
                   ) : (
                     <>
                       <CheckCircle2 size={14} /> {t('finances.allPaid')}
                     </>
                   )}
                 </span>
-                {remainingToPayRub !== totalMonthlyRub && (
+                {remainingToPay !== totalMonthly && (
                   <span className="tabular-nums" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    {t('finances.ofTotal', { amount: formatNumber(totalMonthlyRub), currency: '₽' })}
+                    {t('finances.ofTotal', { amount: formatNumber(totalMonthly, { maximumFractionDigits: 0 }), currency: scheduleCurrencySymbol })}
                   </span>
                 )}
               </div>
@@ -859,17 +1176,29 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
                           {l.notes}
                         </div>
                       )}
-                      <button
-                        type="button"
-                        className="btn-link"
-                        style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4, padding: 0 }}
-                        onClick={() => {
-                          triggerHaptic('light');
-                          setLinkingLiability(l);
-                        }}
-                      >
-                        {l.account_name ? t('finances.changeAccount') : t('finances.linkAccount')}
-                      </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+                        <button
+                          type="button"
+                          className="btn-link"
+                          style={{ fontSize: 12, color: 'var(--text-muted)', padding: 0 }}
+                          onClick={() => {
+                            triggerHaptic('light');
+                            setLinkingLiability(l);
+                          }}
+                        >
+                          {l.account_name ? t('finances.changeAccount') : t('finances.linkAccount')}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-link"
+                          style={{ fontSize: 12, color: 'var(--text-muted)', padding: 0, display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                          onClick={() => handleOpenEditLiability(l)}
+                          aria-label={t('finances.editLiabilityTitle')}
+                        >
+                          <Pencil size={11} />
+                          <span>{t('common.edit')}</span>
+                        </button>
+                      </div>
                     </div>
                     <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                       <div className="tabular-nums" style={{ fontSize: 14.5, fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -914,7 +1243,7 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
       )}
 
       {/* 5. Category Budgets & Recent Transactions */}
-      {!hasBudgets && !hasTransactions ? (
+      {!hasBudgets && !hasTransactions && accounts.length === 0 ? (
         <div
           style={{
             fontSize: 12.5,
@@ -1004,89 +1333,123 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
             </div>
           )}
 
-          {hasTransactions && (
+          {(hasTransactions || accounts.length > 0) && (
             <>
               <div className="section-header-row">
                 <span className="section-title">{t('finances.recentTransactions')}</span>
-                <div style={{ display: 'flex', gap: 10 }}>
-                  <button
-                    type="button"
-                    className="btn-link"
-                    style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                    onClick={async () => {
-                      triggerHaptic('medium');
-                      try {
-                        const res = await undoLastTransaction();
-                        await showAlert(res.message);
-                        await loadFinances();
-                      } catch (err: unknown) {
-                        const message = err instanceof Error ? err.message : t('finances.errUndo');
-                        await showAlert(message);
-                      }
-                    }}
-                  >
-                    <RotateCcw size={13} />
-                    {t('finances.undo')}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-link"
-                    style={{ fontSize: 12, opacity: 0.7 }}
-                    onClick={async () => {
-                      if (!await showConfirm(t('finances.clearConfirm'))) return;
-                      triggerHaptic('light');
-                      await resetFinances();
-                      await loadFinances();
-                    }}
-                  >
-                    {t('common.clear')}
-                  </button>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  {accounts.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn-link"
+                      style={{ fontSize: 12, color: 'var(--accent-color)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                      onClick={handleOpenTxModal}
+                    >
+                      <Plus size={13} />
+                      <span>{t('finances.addTx')}</span>
+                    </button>
+                  )}
+                  {hasTransactions && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-link"
+                        style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                        onClick={async () => {
+                          triggerHaptic('medium');
+                          try {
+                            const res = await undoLastTransaction();
+                            await showAlert(res.message);
+                            await loadFinances();
+                          } catch (err: unknown) {
+                            const message = err instanceof Error ? err.message : t('finances.errUndo');
+                            await showAlert(message);
+                          }
+                        }}
+                      >
+                        <RotateCcw size={13} />
+                        {t('finances.undo')}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-link"
+                        style={{ fontSize: 12, opacity: 0.7 }}
+                        onClick={async () => {
+                          if (!await showConfirm(t('finances.clearConfirm'))) return;
+                          triggerHaptic('light');
+                          await resetFinances();
+                          await loadFinances();
+                        }}
+                      >
+                        {t('common.clear')}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
-              <div className="transactions-list">
-                {transactions.map((tx) => {
-                  const isExpense = tx.kind === 'expense';
-                  const isIncome = tx.kind === 'income';
-                  const sign = isIncome ? '+' : isExpense ? '-' : '';
-                  const dateStr = formatDate(tx.occurred_at, {
-                    day: 'numeric',
-                    month: 'short',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  });
+              {hasTransactions ? (
+                <div className="transactions-list">
+                  {transactions.map((tx) => {
+                    const isExpense = tx.kind === 'expense';
+                    const isIncome = tx.kind === 'income';
+                    const sign = isIncome ? '+' : isExpense ? '-' : '';
+                    const dateStr = formatDate(tx.occurred_at, {
+                      day: 'numeric',
+                      month: 'short',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    });
 
-                  return (
-                    <div key={tx.id} className="transaction-card">
-                      <div className="tx-main">
-                        <span className="tx-desc">
-                          {tx.description || tx.category_name || (tx.kind === 'transfer' ? t('finances.transferLabel') : t('finances.exchangeLabel'))}
-                        </span>
-                        <span className="tx-meta" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                          {tx.account_name}
-                          {tx.to_account_name && (
-                            <>
-                              <ArrowRight size={11} style={{ opacity: 0.7 }} />
-                              {tx.to_account_name}
-                            </>
-                          )}
-                          {' • '}
-                          {dateStr}
-                        </span>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <span className={`tx-amount tabular-nums ${tx.kind}`}>
-                          {sign}{formatNumber(Math.abs(tx.amount), { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {tx.currency}
-                        </span>
-                        {tx.currency !== baseCurrency && (
-                          <div className="tabular-nums" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                            ~{Math.abs(tx.amount_eur).toFixed(2)} {currSym}
+                    return (
+                      <div key={tx.id} className="transaction-card">
+                        <div className="tx-main">
+                          <span className="tx-desc">
+                            {tx.description || tx.category_name || (tx.kind === 'transfer' ? t('finances.transferLabel') : t('finances.exchangeLabel'))}
+                          </span>
+                          <span className="tx-meta" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            {tx.account_name}
+                            {tx.to_account_name && (
+                              <>
+                                <ArrowRight size={11} style={{ opacity: 0.7 }} />
+                                {tx.to_account_name}
+                              </>
+                            )}
+                            {' • '}
+                            {dateStr}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ textAlign: 'right' }}>
+                            <span className={`tx-amount tabular-nums ${tx.kind}`}>
+                              {sign}{formatNumber(Math.abs(tx.amount), { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {tx.currency}
+                            </span>
+                            {tx.currency !== baseCurrency && (
+                              <div className="tabular-nums" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                ~{Math.abs(tx.amount_eur).toFixed(2)} {currSym}
+                              </div>
+                            )}
                           </div>
-                        )}
+                          <button
+                            type="button"
+                            className="btn-link"
+                            disabled={deletingTxId === tx.id}
+                            style={{ padding: 4, opacity: deletingTxId === tx.id ? 0.3 : 0.65 }}
+                            title={t('finances.deleteTx')}
+                            aria-label={t('finances.deleteTx')}
+                            onClick={() => void handleDeleteTxItem(tx)}
+                          >
+                            <Trash2 size={13} strokeWidth={1.75} />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12.5, color: 'var(--text-muted)', padding: '6px 4px' }}>
+                  {t('finances.emptyTxHint')}
+                </div>
+              )}
             </>
           )}
         </>
@@ -1316,13 +1679,181 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
                 </div>
               )}
 
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                {editingAccount ? (
+                  <button
+                    type="button"
+                    disabled={isSavingAccount}
+                    onClick={() => void handleDeleteAccountItem()}
+                    className="btn-link"
+                    style={{ color: '#ef4444', fontSize: 12.5, padding: '6px 4px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                  >
+                    <Trash2 size={13} />
+                    <span>{t('common.delete')}</span>
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingAccount(null);
+                      setIsCreatingAccount(false);
+                    }}
+                    className="btn-secondary"
+                    style={{ padding: '8px 14px', fontSize: 13 }}
+                  >
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingAccount}
+                    className="btn-primary"
+                    style={{ padding: '8px 18px', fontSize: 13 }}
+                  >
+                    {isSavingAccount ? t('common.saving') : editingAccount ? t('common.save') : t('finances.createAccountBtn')}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Transaction Bottom-Sheet Modal */}
+      {showTxModal && (
+        <div
+          className="sheet-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowTxModal(false);
+          }}
+        >
+          <div className="sheet-panel">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 14.5, fontWeight: 600 }}>{t('finances.newTxHeader')}</span>
+              <button
+                type="button"
+                className="btn-link"
+                aria-label={t('common.close')}
+                onClick={() => setShowTxModal(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={handleSaveTxForm} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {(['expense', 'income', 'transfer'] as const).map((k) => {
+                  const active = txKind === k;
+                  return (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setTxKind(k)}
+                      style={{
+                        flex: 1,
+                        padding: '7px 8px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: active ? '1px solid var(--accent-color)' : '1px solid var(--border-hairline)',
+                        background: active ? 'rgba(245, 158, 11, 0.16)' : 'rgba(255, 255, 255, 0.04)',
+                        color: active ? 'var(--accent-color)' : 'var(--text-secondary)',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {t(`finances.txKind_${k}`)}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <div style={{ flex: '1 1 140px', minWidth: 0 }}>
+                  <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                    {txKind === 'transfer' ? t('finances.txFromAccount') : t('finances.txAccount')}
+                  </label>
+                  <select
+                    value={txAccountId}
+                    onChange={(e) => setTxAccountId(e.target.value)}
+                    className="input-field"
+                  >
+                    {accounts.map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} ({acc.currency})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {txKind === 'transfer' && (
+                  <div style={{ flex: '1 1 140px', minWidth: 0 }}>
+                    <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                      {t('finances.txToAccount')}
+                    </label>
+                    <select
+                      value={txToAccountId}
+                      onChange={(e) => setTxToAccountId(e.target.value)}
+                      className="input-field"
+                    >
+                      {accounts.map((acc) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.name} ({acc.currency})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                    {t('finances.txAmountLabel')}
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    required
+                    placeholder="0.00"
+                    value={txAmount}
+                    onChange={(e) => setTxAmount(e.target.value)}
+                    className="input-field"
+                  />
+                </div>
+                {txKind !== 'transfer' && (
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                      {t('finances.txCategoryLabel')}
+                    </label>
+                    <input
+                      type="text"
+                      placeholder={t('finances.txCategoryPlaceholder')}
+                      value={txCategory}
+                      onChange={(e) => setTxCategory(e.target.value)}
+                      className="input-field"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                  {t('finances.txDescLabel')}
+                </label>
+                <input
+                  type="text"
+                  placeholder={t('finances.txDescPlaceholder')}
+                  value={txDescription}
+                  onChange={(e) => setTxDescription(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
                 <button
                   type="button"
-                  onClick={() => {
-                    setEditingAccount(null);
-                    setIsCreatingAccount(false);
-                  }}
+                  onClick={() => setShowTxModal(false)}
                   className="btn-secondary"
                   style={{ padding: '8px 14px', fontSize: 13 }}
                 >
@@ -1330,12 +1861,111 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSavingAccount}
+                  disabled={isSavingTx || !txAmount.trim()}
                   className="btn-primary"
                   style={{ padding: '8px 18px', fontSize: 13 }}
                 >
-                  {isSavingAccount ? t('common.saving') : editingAccount ? t('common.save') : t('finances.createAccountBtn')}
+                  {isSavingTx ? t('common.saving') : t('common.save')}
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Liability Bottom-Sheet Modal */}
+      {editingLiability && (
+        <div
+          className="sheet-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setEditingLiability(null);
+          }}
+        >
+          <div className="sheet-panel">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 14.5, fontWeight: 600 }}>
+                {editingLiability.name}
+              </span>
+              <button
+                type="button"
+                className="btn-link"
+                aria-label={t('common.close')}
+                onClick={() => setEditingLiability(null)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={handleSaveLiabilityForm} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                    {t('finances.liabMonthlyLabel')} ({editingLiability.currency})
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={liabMonthlyInput}
+                    onChange={(e) => setLiabMonthlyInput(e.target.value)}
+                    className="input-field"
+                  />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                    {t('finances.liabDayLabel')}
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="31"
+                    value={liabDayInput}
+                    onChange={(e) => setLiabDayInput(e.target.value)}
+                    className="input-field"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                  {t('finances.liabNotesLabel')}
+                </label>
+                <textarea
+                  rows={2}
+                  value={liabNotesInput}
+                  onChange={(e) => setLiabNotesInput(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                <button
+                  type="button"
+                  disabled={isSavingLiability}
+                  onClick={() => void handleDeleteLiabilityItem()}
+                  className="btn-link"
+                  style={{ color: '#ef4444', fontSize: 12.5, padding: '6px 4px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                >
+                  <Trash2 size={13} />
+                  <span>{t('common.delete')}</span>
+                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => setEditingLiability(null)}
+                    className="btn-secondary"
+                    style={{ padding: '8px 14px', fontSize: 13 }}
+                  >
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingLiability}
+                    className="btn-primary"
+                    style={{ padding: '8px 18px', fontSize: 13 }}
+                  >
+                    {isSavingLiability ? t('common.saving') : t('common.save')}
+                  </button>
+                </div>
               </div>
             </form>
           </div>

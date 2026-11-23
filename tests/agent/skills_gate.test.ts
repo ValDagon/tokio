@@ -159,7 +159,9 @@ describe('решение владельца', () => {
 
     // Повторная активация уже включённого — не ошибка состояния, а явный отказ
     expect((await activateSkill(USER, id)).ok).toBe(false);
-    // Отклонить включённый скилл нельзя
+    // Включённый скилл можно отключить (отклонить)
+    expect((await rejectSkill(USER, id)).ok).toBe(true);
+    // Повторно отклонить уже отклонённый — отказ
     expect((await rejectSkill(USER, id)).ok).toBe(false);
 
     const rejection = await makeSkill({ key: 'agent-other', originFailure: 'agent|none|step_limit|-' });

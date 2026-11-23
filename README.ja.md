@@ -8,7 +8,7 @@
 [![SQLite](https://img.shields.io/badge/SQLite-24%20Tables-003B57.svg)](src/lib/db/tables.ts)
 [![Mini App](https://img.shields.io/badge/Mini%20App-React%2019-61DAFB.svg)](miniapp/)
 [![Locales](https://img.shields.io/badge/i18n-EN%20%7C%20RU%20%7C%20SR%20%7C%20JA-informational.svg)](locales/)
-[![Tests](https://img.shields.io/badge/tests-1912%20%2B%2036%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-2113%20%2B%2052%20passed-brightgreen.svg)](tests/)
 
 **Tokio** は、**Telegram Serverless**（`tgcloud.ai`）向けにネイティブ設計されたオープンソースのパーソナル AI アシスタントコアです。24 テーブルの組み込み SQLite を備えた V8 アイソレート上で動作し、5 タブ構成の **React 19 Telegram Mini App** と**標準 4 言語**（`EN`、`RU`、`SR-Latn`、`JA`）に対応し、**宣言的 Level 1 オーバーレイ**によって共通コアと個別設定を明確に分離します。
 
@@ -22,7 +22,7 @@
 ```mermaid
 flowchart LR
   TG["Telegram Bot & Mini App<br/>(React 19 + Vite SPA)"] -->|Webhook & POST /api/rpc| ISO["Telegram Serverless V8 アイソレート<br/>(tgcloud.ai, <= 100 モジュール)"]
-  ISO --> AGENT["エージェントエンジン (54 ツール)<br/>STT · Vision OCR · 収支パーサー"]
+  ISO --> AGENT["エージェントエンジン (60 ツール)<br/>STT · Vision OCR · 収支パーサー"]
   ISO --> OVERLAY["コンパイル済みオーバーレイ & i18n<br/>(EN · RU · SR-Latn · JA)"]
   ISO --> CRYPTO["Pure-TS 暗号化<br/>ChaCha20-Poly1305 BYOK"]
   AGENT --> DAL["ユーザー分離型 DAL<br/>(user_id スコープ強制)"]
@@ -36,9 +36,9 @@ flowchart LR
 ## 主な特徴
 
 - **単一ソースの SQLite スキーマ（`24` テーブル）**：[`src/lib/db/tables.ts`](src/lib/db/tables.ts) で一元定義し、`tgcloud migrate` 用のプラットフォーム DSL（`src/schema.ts`）と Vitest ローカルテスト用の SQL DDL（`src/lib/db/ddl.ts`）の双方へ出力します。
-- **宣言的 Level 1 オーバーレイ**：プロンプト、口調スタイル、口座エイリアス、機能フラグ、Mini App テーマを `.gitignore` 対象の `overlay/` または `OVERLAY_DIR` に分離して管理できます。詳細は [`example/README.ja.md`](example/README.ja.md) をご参照ください。
+- **宣言的 Level 1 オーバーレイとランタイムスキル**：プロンプト、口調スタイル、手順書 `skills/*.md`、口座エイリアス、機能フラグ、Mini App テーマを `.gitignore` 対象の `overlay/` または `OVERLAY_DIR` に分離して管理できます。詳細は [`example/README.ja.md`](example/README.ja.md) をご参照ください。
 - **4 言語サポート（`EN`、`RU`、`SR-Latn`、`JA`）**：ボット応答、キーボード、オンボーディングウィザード、プロンプト、Mini App UI、初期デモデータ（`locales/*.json` + `miniapp/src/i18n/`）をすべて 4 言語で提供します。
-- **54 種類のネイティブエージェントツール**：タスクとカレンダー予定（`item_type: 'task' | 'event'`）、多通貨家計簿と債務管理、メモとナレッジグラフ、服薬管理、ランウェイ予測、インボックストリアージ、日記、ゴミ箱復元を網羅しています。
+- **60 種類のネイティブエージェントツール**：タスクとカレンダー予定（`item_type: 'task' | 'event'`）、多通貨家計簿と債務管理、メモとナレッジグラフ、服薬管理、ランウェイ予測、インボックストリアージ、日記、スキル管理（`list_skills`・`read_skill`・`draft_skill`）、ゴミ箱復元を網羅しています。
 - **決定論的収支パーサーと即時取り消し**：テキスト、音声（STT）、レシート・残高スクリーンショットから支出・収入・振替・残高を解析し、ワンタップまたは `/undo` で即座に取り消せます。
 - **Pure-TS ChaCha20-Poly1305 BYOK 暗号化**：ネイティブ C++ 依存ゼロで動作し、暗号化されたユーザー自身の Gemini API キー登録（BYOK）や利用上限・アクセス制御モードに対応します。
 - **3 層の情報漏洩防止**：`overlay/` と `.forbidden-strings.local` を `.gitignore` で除外し、`.githooks/pre-push` と `scripts/check-leaks.mjs` がファイルと git 履歴を検査し、CI が全プッシュ・PR で `gitleaks` と漏洩チェックを実行します。

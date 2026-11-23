@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Trash2,
   SlidersHorizontal,
+  Pencil,
 } from 'lucide-react';
 import type { Task, Category } from '../types';
 import {
@@ -81,6 +82,16 @@ export interface TasksTabProps {
   newTaskItemType?: 'task' | 'event';
   setNewTaskItemType?: (type: 'task' | 'event') => void;
   handleToggleItemType?: (task: Task) => void;
+  onUpdateTask?: (
+    taskId: string,
+    updates: {
+      title?: string;
+      notes?: string;
+      category_id?: string;
+      due_at?: string | null;
+      item_type?: 'task' | 'event';
+    }
+  ) => Promise<void>;
 }
 
 export const TasksTab: React.FC<TasksTabProps> = ({
@@ -136,12 +147,52 @@ export const TasksTab: React.FC<TasksTabProps> = ({
   newTaskItemType,
   setNewTaskItemType,
   handleToggleItemType,
+  onUpdateTask,
 }) => {
   const { locale, t } = useI18n();
   const [showFilterPopover, setShowFilterPopover] = useState(false);
   const [isOverdueExpanded, setIsOverdueExpanded] = useState(false);
   const [isDistantExpanded, setIsDistantExpanded] = useState(false);
   const [referenceNow] = useState(() => Date.now());
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [editCategoryId, setEditCategoryId] = useState('');
+  const [editDueDate, setEditDueDate] = useState('');
+  const [editItemType, setEditItemType] = useState<'task' | 'event'>('task');
+  const [isSavingTaskEdit, setIsSavingTaskEdit] = useState(false);
+
+  const openEditTaskModal = (task: Task) => {
+    triggerHaptic('light');
+    setEditingTask(task);
+    setEditTitle(task.title);
+    setEditNotes(task.notes || '');
+    setEditCategoryId(task.category_id || '');
+    setEditDueDate(task.due_at ? task.due_at.slice(0, 10) : '');
+    setEditItemType(task.item_type === 'event' ? 'event' : 'task');
+  };
+
+  const handleSaveTaskEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTask || !onUpdateTask) return;
+    const cleanTitle = editTitle.trim();
+    if (!cleanTitle || isSavingTaskEdit) return;
+    try {
+      setIsSavingTaskEdit(true);
+      triggerHaptic('medium');
+      await onUpdateTask(editingTask.id, {
+        title: cleanTitle,
+        notes: editNotes.trim() || undefined,
+        category_id: editCategoryId || undefined,
+        due_at: editDueDate.trim() ? `${editDueDate.trim()}T12:00:00.000Z` : null,
+        item_type: editItemType,
+      });
+      triggerHaptic('success');
+      setEditingTask(null);
+    } finally {
+      setIsSavingTaskEdit(false);
+    }
+  };
 
   // Separate overdue and distant groups from regular groups
   const overdueGroup = taskDayGroups.find((g) => g.id === 'overdue');
@@ -325,6 +376,22 @@ export const TasksTab: React.FC<TasksTabProps> = ({
               >
                 <CalendarCheck size={13} strokeWidth={1.75} />
                 <span>{t('tasks.rescheduleToday')}</span>
+              </button>
+            )}
+
+            {onUpdateTask && (
+              <button
+                type="button"
+                className="btn-link"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openEditTaskModal(task);
+                }}
+                style={{ padding: 6, opacity: 0.7 }}
+                title={t('tasks.editTask')}
+                aria-label={t('tasks.editTask')}
+              >
+                <Pencil size={14} strokeWidth={1.75} />
               </button>
             )}
 
@@ -1136,6 +1203,116 @@ export const TasksTab: React.FC<TasksTabProps> = ({
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Edit Task Bottom-Sheet Modal */}
+        {editingTask && (
+          <div
+            className="sheet-overlay"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setEditingTask(null);
+            }}
+          >
+            <div className="sheet-panel">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 14.5, fontWeight: 600 }}>{t('tasks.editTaskTitle')}</span>
+                <button
+                  type="button"
+                  className="btn-link"
+                  aria-label={t('common.close')}
+                  onClick={() => setEditingTask(null)}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <form onSubmit={handleSaveTaskEdit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                    {t('tasks.titleLabel')}
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    className="input-field"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                      {t('tasks.dueDateLabel')}
+                    </label>
+                    <input
+                      type="date"
+                      className="input-field"
+                      value={editDueDate}
+                      onChange={(e) => setEditDueDate(e.target.value)}
+                    />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                      {t('tasks.typeLabel')}
+                    </label>
+                    <select
+                      className="input-field"
+                      value={editItemType}
+                      onChange={(e) => setEditItemType(e.target.value === 'event' ? 'event' : 'task')}
+                    >
+                      <option value="task">{t('tasks.typeTask')}</option>
+                      <option value="event">{t('tasks.typeEvent')}</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                    {t('tasks.categoryLabel')}
+                  </label>
+                  <select
+                    className="input-field"
+                    value={editCategoryId}
+                    onChange={(e) => setEditCategoryId(e.target.value)}
+                  >
+                    <option value="">{t('common.none')}</option>
+                    {categories.map((cat) => (
+                      <option key={cat.id} value={cat.id}>
+                        {cat.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                    {t('tasks.notesLabel')}
+                  </label>
+                  <textarea
+                    rows={3}
+                    className="input-field"
+                    value={editNotes}
+                    onChange={(e) => setEditNotes(e.target.value)}
+                  />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ padding: '8px 14px', fontSize: 13 }}
+                    onClick={() => setEditingTask(null)}
+                  >
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingTaskEdit || !editTitle.trim()}
+                    className="btn-primary"
+                    style={{ padding: '8px 18px', fontSize: 13 }}
+                  >
+                    {isSavingTaskEdit ? t('common.saving') : t('common.save')}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
       </div>

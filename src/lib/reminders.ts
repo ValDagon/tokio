@@ -705,7 +705,7 @@ export const MORNING_DIGEST_WINDOW_MINUTES = 720;
  * модулем, и `lib/` не может импортировать оттуда в рантайме (см. `build.mjs`).
  */
 const BACKUP_INLINE_KEYBOARD = {
-  inline_keyboard: [[{ text: '📥 Скачать бэкап .zip', callback_data: 'backup:download' }]],
+  inline_keyboard: [[{ text: '📥 Скачать бэкап .json', callback_data: 'backup:download' }]],
 };
 
 export interface MorningDigestResult {

@@ -31,6 +31,7 @@ import {
   deleteLiability,
   deleteTransaction,
   getAccount,
+  getLiability,
   listAccounts,
   listLiabilities,
   listTransactions,
@@ -43,17 +44,22 @@ import {
   updateLiability,
 } from '../lib/dal/finances.js';
 import { calculateRunway } from '../lib/runway.js';
-import { getRates } from '../lib/dal/fx.js';
+import { getLatestRate, getRates, setRates, todayIso, toRateTable } from '../lib/dal/fx.js';
 import financesAccounts, { balanceEurCents } from './finances_accounts.js';
 import financesRunway from './finances_runway.js';
 import financesSummary from './finances_summary.js';
 import financesTransactions, { toTransactionItems } from './finances_transactions.js';
 import type { TransactionItemResponse } from './finances_transactions.js';
-import financesLiabilities from './finances_liabilities.js';
-import { createNote, deleteNote, listNotes, updateNote } from '../lib/dal/notes.js';
+import financesLiabilities, { liabilityEurFields } from './finances_liabilities.js';
+import userLifeContext from './user_life_context.js';
+import docsSearch from './docs_search.js';
+import systemUsage from './system_usage.js';
+import { createNote, deleteNote, listNotes, updateNote, type NotePatch } from '../lib/dal/notes.js';
+import { clearThread, getAgentState } from '../lib/dal/agentState.js';
 import { FEEDBACK_KINDS, createFeedback, listAllFeedback, listFeedback, type FeedbackKind } from '../lib/dal/misc.js';
 import { runDueJobs } from '../lib/dal/due_jobs.js';
 import {
+  clockHeartbeatKey,
   ensureJobHandlers,
   runReminderClock,
   type ReminderClockKindOutcome,
@@ -79,18 +85,30 @@ import {
   kvSetJson,
   listTrash,
   purgeTrashItem,
+  readLastModelFailure,
+  readTurnTrace,
   restoreTrashItem,
   type TrashItemType,
 } from '../lib/dal/misc.js';
 import { getChapter, listChapters } from '../lib/dal/docs.js';
 import { seedDocs, toChapterView } from '../lib/systemDocs.js';
 import { hasSecureRandom, randomBytes, sealByok } from '../lib/crypto.js';
-import { PROVIDER_IDS, parseProviderId } from '../lib/provider/index.js';
+import { PROVIDER_IDS, parseProviderId, type ProviderId } from '../lib/provider/index.js';
 import { exportUserData, importBackup, type BackupMode } from '../lib/backup.js';
 import { normalizeLocale } from '../lib/i18n.js';
-import { getOverlay } from '../lib/overlay.js';
+import { getOverlay, getOverlaySkills } from '../lib/overlay.js';
+import { CUSTOM_INSTRUCTIONS_SLUG } from '../lib/agent/constants.js';
+import { saveDirectives, splitDirectives } from '../lib/learning.js';
+import {
+  activateSkill,
+  listAllUserSkills,
+  listItems,
+  rejectSkill,
+  resolveItem,
+} from '../lib/evolution.js';
+import { diagnosticsReply } from '../lib/summary.js';
 import { formatCents } from '../lib/utils.js';
-import type { MedicationLogRow, TaskItemType, TaskRow, TaskStatus } from '../types.js';
+import type { MedicationLogRow, NoteColumn, TaskItemType, TaskRow, TaskStatus } from '../types.js';
 
 export interface RpcPayload {
   path: string;
@@ -300,6 +318,52 @@ async function writeTransaction(
   };
 }
 
+export type RpcNoteColumn = 'raw' | 'todo' | 'note' | 'idea' | 'archive';
+
+const NOTE_COLUMN_ALIASES: Readonly<Record<string, RpcNoteColumn>> = {
+  inbox: 'raw',
+  raw: 'raw',
+  possible_tasks: 'todo',
+  todo: 'todo',
+  self: 'note',
+  useful: 'note',
+  note: 'note',
+  ideas: 'idea',
+  idea: 'idea',
+  archive: 'archive',
+  trash: 'archive',
+};
+
+function normalizeNoteColumn(raw: unknown): RpcNoteColumn | undefined {
+  if (typeof raw !== 'string') return undefined;
+  return NOTE_COLUMN_ALIASES[raw.trim().toLowerCase()];
+}
+
+const SUMMARY_TIME_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+function parseSummaryTime(raw: unknown): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string') {
+    badRequest('summary_time: ожидается строка ЧЧ:ММ');
+  }
+  const trimmed = raw.trim();
+  if (!SUMMARY_TIME_RE.test(trimmed)) {
+    badRequest('summary_time: ожидается время в формате ЧЧ:ММ (00:00–23:59)');
+  }
+  return trimmed;
+}
+
+async function loadUserDirectives(
+  userId: number,
+): Promise<{ instructions: string; style: string }> {
+  const chapter = await getChapter(userId, CUSTOM_INSTRUCTIONS_SLUG);
+  const parsed = splitDirectives(chapter?.content ?? '');
+  return {
+    instructions: parsed.instructions,
+    style: parsed.style ?? 'mentor',
+  };
+}
+
 /**
  * Пути-константы, которые роутер гарантированно обслуживает.
  *
@@ -331,6 +395,8 @@ const KNOWN_CONSTANT_PATHS: ReadonlySet<string> = new Set([
   '/api/finances/budgets',
   '/api/finances/liabilities',
   '/finances/liabilities',
+  '/api/finances/fx',
+  '/finances/fx',
   '/api/finances/undo',
   '/api/finances/reset',
   '/api/notes',
@@ -347,8 +413,13 @@ const KNOWN_CONSTANT_PATHS: ReadonlySet<string> = new Set([
   '/api/trash/empty',
   '/api/docs',
   '/api/docs/chapters',
+  '/api/docs/search',
+  '/api/skills',
+  '/api/backlog',
   '/api/system/access',
   '/api/system/byok',
+  '/api/system/diagnostics',
+  '/api/system/session/reset',
   '/api/system/backup/json',
   '/api/system/backup/export',
   '/api/system/backup/restore',
@@ -884,24 +955,70 @@ export default async function (
 
   if (liabilityMatch && (method === 'PATCH' || method === 'PUT')) {
     const liabilityId = Number(liabilityMatch[1]);
-    const updated = await updateLiability(effectiveUserId, liabilityId, {
-      accountId: body.account_id !== undefined ? (body.account_id ? Number(body.account_id) : null) : undefined,
-      notes: body.notes,
-      monthlyPaymentCents:
-        body.monthly_payment !== undefined
-          ? Math.round(Number(body.monthly_payment) * 100)
-          : undefined,
-      paymentDay: body.payment_day,
-      isActive: body.is_active !== undefined ? Boolean(body.is_active) : undefined,
-    });
+    const existing = await getLiability(effectiveUserId, liabilityId);
+    if (!existing) {
+      throw new EndpointError('Обязательство не найдено', { status: 404, code: 'NOT_FOUND' });
+    }
+
+    let accountIdPatch: number | null | undefined = undefined;
+    if (body.account_id !== undefined) {
+      if (body.account_id === null || body.account_id === '') {
+        accountIdPatch = null;
+      } else {
+        const parsedAccId = Number(body.account_id);
+        if (!Number.isInteger(parsedAccId) || parsedAccId <= 0) {
+          badRequest('account_id: ожидается положительный идентификатор счёта');
+        }
+        accountIdPatch = parsedAccId;
+      }
+    }
+
+    let monthlyPaymentCentsPatch: number | undefined = undefined;
+    if (body.monthly_payment !== undefined) {
+      if (body.monthly_payment === null || body.monthly_payment === '') {
+        monthlyPaymentCentsPatch = 0;
+      } else {
+        const parsedMonthly = Number(body.monthly_payment);
+        if (!Number.isFinite(parsedMonthly) || parsedMonthly < 0) {
+          badRequest('monthly_payment: ожидается неотрицательное число');
+        }
+        monthlyPaymentCentsPatch = Math.round(parsedMonthly * 100);
+      }
+    }
+
+    let paymentDayPatch: number | null | undefined = undefined;
+    if (body.payment_day !== undefined) {
+      if (body.payment_day === null || body.payment_day === '') {
+        paymentDayPatch = null;
+      } else {
+        const parsedDay = Number(body.payment_day);
+        if (!Number.isInteger(parsedDay) || parsedDay < 1 || parsedDay > 31) {
+          badRequest('payment_day: ожидается целое число от 1 до 31');
+        }
+        paymentDayPatch = parsedDay;
+      }
+    }
+
+    const updated = await asBadRequest(() =>
+      updateLiability(effectiveUserId, liabilityId, {
+        accountId: accountIdPatch,
+        notes: body.notes,
+        monthlyPaymentCents: monthlyPaymentCentsPatch,
+        paymentDay: paymentDayPatch,
+        isActive: body.is_active !== undefined ? Boolean(body.is_active) : undefined,
+      }),
+    );
+    const rates = await getRates();
+    const eur = liabilityEurFields(updated, rates);
     return {
       id: String(updated.id),
       name: updated.name,
       queue: updated.queue,
       amount: updated.amountCents / 100,
       currency: updated.currency,
-      amount_eur: updated.amountEurCents / 100,
-      monthly_payment: updated.monthlyPaymentCents / 100,
+      amount_eur: eur.amount_eur,
+      monthly_payment: eur.monthly_payment,
+      monthly_payment_eur: eur.monthly_payment_eur,
       payment_day: updated.paymentDay,
       notes: updated.notes,
       is_active: updated.isActive,
@@ -910,6 +1027,50 @@ export default async function (
 
   if (cleanPath === '/api/finances/liabilities' || cleanPath === '/finances/liabilities') {
     return await financesLiabilities({ userId: effectiveUserId }, ctx);
+  }
+
+  if (
+    (cleanPath === '/api/finances/fx' || cleanPath === '/finances/fx') &&
+    (method === 'GET' || method === 'POST')
+  ) {
+    const base = optionalCurrency(queryParams.base ?? body.base, 'base') ?? 'EUR';
+    if (method === 'GET') {
+      const latest = await getLatestRate(base);
+      return {
+        date: latest?.date ?? null,
+        base: latest?.base ?? base,
+        rates: latest?.rates ?? {},
+        updated_at: latest?.updatedAt ?? null,
+      };
+    }
+    const config = await getConfig();
+    if (!config.adminIds.includes(effectiveUserId)) {
+      throw new EndpointError('Admin only', { status: 403, code: 'FORBIDDEN' });
+    }
+    const parsedRates = toRateTable(body.rates);
+    if (Object.keys(parsedRates).length === 0) {
+      badRequest('rates: нужен хотя бы один положительный курс валюты');
+    }
+    const prev = body.merge === false ? null : await getLatestRate(base);
+    const mergedRates: Record<string, number> = {
+      ...(prev?.rates ?? {}),
+      ...parsedRates,
+    };
+    let day = todayIso();
+    if (body.date !== undefined && body.date !== null && String(body.date).trim() !== '') {
+      const rawDate = String(body.date).trim();
+      if (!/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
+        badRequest('date: ожидается формат YYYY-MM-DD');
+      }
+      day = rawDate.slice(0, 10);
+    }
+    const saved = await setRates(day, mergedRates, base);
+    return {
+      date: saved.date,
+      base: saved.base,
+      rates: saved.rates,
+      updated_at: saved.updatedAt ?? null,
+    };
   }
 
   if (cleanPath === '/api/finances/undo' && method === 'POST') {
@@ -940,10 +1101,21 @@ export default async function (
   if (noteMatch) {
     const noteId = Number(noteMatch[1]);
     if (method === 'PATCH' || method === 'PUT') {
-      const updated = await updateNote(effectiveUserId, noteId, {
-        cleanText: body.clean_text,
-        column: body.column,
-      });
+      const patch: NotePatch = {};
+      if (Object.hasOwn(body, 'raw_text') && body.raw_text !== undefined) {
+        patch.rawText = String(body.raw_text);
+      }
+      if (Object.hasOwn(body, 'clean_text') && body.clean_text !== undefined) {
+        patch.cleanText = body.clean_text === null ? null : String(body.clean_text);
+      }
+      if (Object.hasOwn(body, 'column') && body.column !== undefined) {
+        const normalizedCol = normalizeNoteColumn(body.column);
+        if (!normalizedCol) {
+          badRequest(`Недопустимая колонка заметки: ${String(body.column)}`);
+        }
+        patch.column = normalizedCol as NoteColumn;
+      }
+      const updated = await updateNote(effectiveUserId, noteId, patch);
       if (!updated) {
         throw new EndpointError('Note not found', { code: 'NOT_FOUND' });
       }
@@ -951,7 +1123,7 @@ export default async function (
         id: String(updated.id),
         raw_text: updated.rawText,
         clean_text: updated.cleanText ?? updated.rawText,
-        column: updated.column,
+        column: normalizeNoteColumn(updated.column) ?? 'raw',
         created_at: updated.createdAt ?? '',
         updated_at: updated.createdAt ?? '',
       };
@@ -964,27 +1136,41 @@ export default async function (
 
   if (cleanPath === '/api/notes' || cleanPath === '/notes') {
     if (method === 'GET') {
-      const column = queryParams.column as any;
-      const notes = await listNotes(effectiveUserId, { column, limit: 100 });
-      return notes.map((n) => ({
+      const rawCol = queryParams.column?.trim();
+      const hasColFilter = Boolean(rawCol);
+      const normalizedFilter = hasColFilter ? normalizeNoteColumn(rawCol) : undefined;
+      if (hasColFilter && !normalizedFilter) {
+        return [];
+      }
+      const notes = await listNotes(effectiveUserId, {
+        limit: hasColFilter ? 500 : 100,
+      });
+      const filtered = hasColFilter
+        ? notes
+            .filter((n) => (normalizeNoteColumn(n.column) ?? 'raw') === normalizedFilter)
+            .slice(0, 100)
+        : notes;
+      return filtered.map((n) => ({
         id: String(n.id),
         raw_text: n.rawText,
         text: n.rawText,
         clean_text: n.cleanText ?? n.rawText,
-        column: n.column,
+        column: normalizeNoteColumn(n.column) ?? 'raw',
         created_at: n.createdAt,
         updated_at: n.createdAt,
       }));
     }
 
     if (method === 'POST') {
-      const created = await createNote(effectiveUserId, body.text || '', { column: body.column });
+      const col = (normalizeNoteColumn(body.column) ?? 'raw') as NoteColumn;
+      const text = String(body.text ?? body.raw_text ?? '');
+      const created = await createNote(effectiveUserId, text, { column: col });
       return {
         id: String(created.id),
         raw_text: created.rawText,
         text: created.rawText,
         clean_text: created.cleanText ?? created.rawText,
-        column: created.column,
+        column: normalizeNoteColumn(created.column) ?? 'raw',
         created_at: created.createdAt,
         updated_at: created.createdAt,
       };
@@ -1128,6 +1314,10 @@ export default async function (
       baseCurrency: body.base_currency,
       timezone: body.timezone,
     });
+    if (typeof body.persona_style === 'string' && body.persona_style.trim()) {
+      const prevDirectives = await loadUserDirectives(effectiveUserId);
+      await saveDirectives(effectiveUserId, prevDirectives.instructions, body.persona_style.trim());
+    }
     if (Array.isArray(body.starter_accounts)) {
       const cur = body.base_currency || 'EUR';
       for (const acc of body.starter_accounts) {
@@ -1139,7 +1329,10 @@ export default async function (
         }).catch(() => {});
       }
     }
-    const user = await getUser(effectiveUserId);
+    const [user, directives] = await Promise.all([
+      getUser(effectiveUserId),
+      loadUserDirectives(effectiveUserId),
+    ]);
     return {
       name: user?.name,
       language: user?.language ?? 'ru',
@@ -1147,6 +1340,8 @@ export default async function (
       timezone: user?.timezone ?? 'UTC',
       summary_time: user?.summaryTime ?? '07:00',
       low_stimulation_mode: user?.lowStimulationMode ?? false,
+      custom_instructions: directives.instructions,
+      persona_style: directives.style,
       role: 'admin',
       onboarded: true,
       has_byok_key: Boolean(user?.byok?.ciphertext),
@@ -1154,8 +1349,15 @@ export default async function (
     };
   }
 
-  if (cleanPath === '/api/user/life-context') {
-    return { context: '' };
+  if (cleanPath === '/api/user/life-context' && method === 'GET') {
+    const topic = queryParams.topic ?? body.topic;
+    return await userLifeContext(
+      {
+        userId: effectiveUserId,
+        ...(topic !== undefined ? { topic } : {}),
+      },
+      ctx,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1193,7 +1395,10 @@ export default async function (
 
   if (cleanPath === '/api/settings' || cleanPath === '/api/user/settings') {
     if (method === 'GET') {
-      const user = await getUser(effectiveUserId);
+      const [user, directives] = await Promise.all([
+        getUser(effectiveUserId),
+        loadUserDirectives(effectiveUserId),
+      ]);
       return {
         name: user?.name,
         language: user?.language ?? 'ru',
@@ -1201,6 +1406,8 @@ export default async function (
         timezone: user?.timezone ?? 'UTC',
         summary_time: user?.summaryTime ?? '07:00',
         low_stimulation_mode: user?.lowStimulationMode ?? false,
+        custom_instructions: directives.instructions,
+        persona_style: directives.style,
         role: 'admin',
         onboarded: true,
         has_byok_key: Boolean(user?.byok?.ciphertext),
@@ -1208,21 +1415,52 @@ export default async function (
       };
     }
     if (method === 'PATCH' || method === 'PUT') {
+      const summaryTime = parseSummaryTime(body.summary_time);
+      let nextProvider: ProviderId | undefined;
+      if (body.model_provider !== undefined && body.model_provider !== null && String(body.model_provider).trim() !== '') {
+        const parsedProvider = parseProviderId(body.model_provider);
+        if (parsedProvider === null) {
+          badRequest(`Unknown model provider. Supported: ${PROVIDER_IDS.join(', ')}`);
+        }
+        nextProvider = parsedProvider;
+      }
+
       const updated = await updateUser(effectiveUserId, {
         name: body.name,
         language: body.language !== undefined ? normalizeLocale(body.language) : undefined,
         baseCurrency: body.base_currency,
         timezone: body.timezone,
-        summaryTime: body.summary_time,
+        summaryTime,
         lowStimulationMode: body.low_stimulation_mode,
+        ...(nextProvider !== undefined ? { modelProvider: nextProvider } : {}),
       });
+
+      const hasInstructions =
+        Object.hasOwn(body, 'custom_instructions') && body.custom_instructions !== undefined;
+      const hasStyle = Object.hasOwn(body, 'persona_style') && body.persona_style !== undefined;
+      let directives = await loadUserDirectives(effectiveUserId);
+      if (hasInstructions || hasStyle) {
+        const nextInstructions = hasInstructions
+          ? String(body.custom_instructions ?? '')
+          : directives.instructions;
+        const nextStyle = hasStyle
+          ? (typeof body.persona_style === 'string' && body.persona_style.trim()
+              ? body.persona_style.trim()
+              : null)
+          : directives.style;
+        const saved = await saveDirectives(effectiveUserId, nextInstructions, nextStyle);
+        directives = { instructions: saved.instructions, style: saved.style ?? 'mentor' };
+      }
+
       return {
         name: updated?.name,
         language: updated?.language ?? 'ru',
         base_currency: updated?.baseCurrency,
         timezone: updated?.timezone,
-        summary_time: updated?.summaryTime,
+        summary_time: updated?.summaryTime ?? '07:00',
         low_stimulation_mode: updated?.lowStimulationMode,
+        custom_instructions: directives.instructions,
+        persona_style: directives.style,
         role: 'admin',
         onboarded: true,
         has_byok_key: Boolean(updated?.byok?.ciphertext),
@@ -1291,8 +1529,21 @@ export default async function (
   }
 
   // -------------------------------------------------------------------------
-  // 9. Docs Chapters (/api/docs/chapters/*)
+  // 9. Docs Chapters (/api/docs/chapters/* & /api/docs/search)
   // -------------------------------------------------------------------------
+  if (cleanPath === '/api/docs/search' && method === 'GET') {
+    const q = queryParams.q ?? queryParams.query ?? body.q ?? body.query;
+    const topic = queryParams.topic ?? body.topic;
+    return await docsSearch(
+      {
+        userId: effectiveUserId,
+        ...(q !== undefined ? { q } : {}),
+        ...(topic !== undefined ? { topic } : {}),
+      },
+      ctx,
+    );
+  }
+
   const chapterDetailMatch = cleanPath.match(/^\/(?:api\/)?docs\/chapters\/([^/]+)$/);
   if (chapterDetailMatch && method === 'GET') {
     const slug = decodeURIComponent(chapterDetailMatch[1]);
@@ -1340,8 +1591,131 @@ export default async function (
   }
 
   // -------------------------------------------------------------------------
-  // 10. System, BYOK & Backup (/api/system/*)
+  // 10. Skills & Backlog (/api/skills*, /api/backlog*)
   // -------------------------------------------------------------------------
+  if (cleanPath === '/api/skills' && method === 'GET') {
+    const [builtinRaw, userRaw] = await Promise.all([
+      Promise.resolve(getOverlaySkills()),
+      listAllUserSkills(effectiveUserId),
+    ]);
+    return {
+      builtin: builtinRaw.map((s) => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        triggers: [...(s.triggers ?? [])],
+        body: s.body,
+      })),
+      user: userRaw.map(({ row, spec, usage }) => ({
+        id: String(row.id),
+        key: spec?.key ?? `#${row.id}`,
+        title: row.title,
+        status: row.status,
+        version: spec?.version ?? 1,
+        body: spec?.body ?? row.rawInput,
+        origin_failure: spec?.originFailure ?? null,
+        supersedes: spec?.supersedes ?? null,
+        runs: usage.uses,
+        views: usage.views,
+        created_at: row.createdAt,
+        updated_at: row.updatedAt,
+      })),
+    };
+  }
+
+  const skillActivateMatch = cleanPath.match(/^\/(?:api\/)?skills\/(\d+)\/activate$/);
+  if (skillActivateMatch && method === 'POST') {
+    const skillId = Number(skillActivateMatch[1]);
+    const res = await activateSkill(effectiveUserId, skillId);
+    if (!res.ok) {
+      throw new EndpointError(res.error, { status: 400, code: 'BAD_REQUEST' });
+    }
+    return { ok: true, id: String(skillId), status: res.item.status };
+  }
+
+  const skillRejectMatch = cleanPath.match(/^\/(?:api\/)?skills\/(\d+)\/reject$/);
+  if (skillRejectMatch && method === 'POST') {
+    const skillId = Number(skillRejectMatch[1]);
+    const res = await rejectSkill(effectiveUserId, skillId);
+    if (!res.ok) {
+      throw new EndpointError(res.error, { status: 400, code: 'BAD_REQUEST' });
+    }
+    return { ok: true, id: String(skillId), status: res.item.status };
+  }
+
+  if (cleanPath === '/api/backlog' && method === 'GET') {
+    const items = await listItems(effectiveUserId, { limit: 100 });
+    return {
+      items: items
+        .filter((i) => i.category !== 'skill')
+        .map((i) => ({
+          id: String(i.id),
+          category: i.category,
+          title: i.title,
+          raw_input: i.rawInput,
+          status: i.status,
+          created_at: i.createdAt,
+        })),
+    };
+  }
+
+  const backlogResolveMatch = cleanPath.match(/^\/(?:api\/)?backlog\/(\d+)\/resolve$/);
+  if (backlogResolveMatch && method === 'POST') {
+    const itemId = Number(backlogResolveMatch[1]);
+    const rawStatus = typeof body.status === 'string' && body.status ? body.status : 'shipped';
+    const nextStatus =
+      rawStatus === 'done' || rawStatus === 'shipped'
+        ? 'shipped'
+        : rawStatus === 'rejected'
+          ? 'rejected'
+          : rawStatus === 'pending'
+            ? 'pending'
+            : null;
+    if (!nextStatus) {
+      badRequest('status: ожидается shipped, done, rejected или pending');
+    }
+    const resolved = await resolveItem(effectiveUserId, itemId, nextStatus);
+    if (!resolved) {
+      throw new EndpointError('Элемент бэклога не найден', { code: 'NOT_FOUND' });
+    }
+    return { ok: true, id: String(itemId), status: nextStatus };
+  }
+
+  // -------------------------------------------------------------------------
+  // 11. System, BYOK, Diagnostics & Backup (/api/system/*)
+  // -------------------------------------------------------------------------
+  if (cleanPath === '/api/system/diagnostics' && method === 'GET') {
+    const [summaryText, turnData, lastFailure, clock, agentState, usage, user] =
+      await Promise.all([
+        diagnosticsReply(effectiveUserId),
+        readTurnTrace(effectiveUserId),
+        readLastModelFailure(effectiveUserId),
+        kvGetJson<Record<string, unknown> | null>(clockHeartbeatKey(effectiveUserId), null),
+        getAgentState(effectiveUserId),
+        systemUsage({ userId: effectiveUserId }, ctx),
+        getUser(effectiveUserId),
+      ]);
+    return {
+      summary_text: summaryText,
+      last_failure: lastFailure,
+      turn_trace: turnData.trace,
+      turn_stats: turnData.stats,
+      clock,
+      thread: {
+        count: agentState?.thread.length ?? 0,
+        updated_at: agentState?.updatedAt ?? null,
+      },
+      usage,
+      model_provider: user?.modelProvider ?? 'gemini',
+      has_byok_key: Boolean(user?.byok?.ciphertext),
+    };
+  }
+
+  if (cleanPath === '/api/system/session/reset' && method === 'POST') {
+    await clearThread(effectiveUserId);
+    return { ok: true, status: 'reset' };
+  }
+
   const accessDeleteMatch = cleanPath.match(/^\/(?:api\/)?system\/access\/([^/]+)$/);
   if (accessDeleteMatch && method === 'DELETE') {
     const accessId = decodeURIComponent(accessDeleteMatch[1]);
@@ -1445,6 +1819,9 @@ export default async function (
     medMatch,
     trashItemMatch,
     chapterDetailMatch,
+    skillActivateMatch,
+    skillRejectMatch,
+    backlogResolveMatch,
     accessDeleteMatch,
   ].some((match) => match !== null);
 

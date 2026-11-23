@@ -9,8 +9,8 @@
  *   - `src/lib/i18n.generated.ts`
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -108,8 +108,128 @@ function writeIfChanged(filePath, content) {
   return true;
 }
 
+function stripQuotes(value) {
+  const s = value.trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    return s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+function parseTriggersValue(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  const inner = trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1) : trimmed;
+  return inner
+    .split(',')
+    .map((item) => stripQuotes(item))
+    .filter(Boolean);
+}
+
 /**
- * Compiles overlay manifest + prompts + demo seed and locale JSON catalogs into
+ * Minimal pure-JS YAML frontmatter parser for `overlay/skills/*.md`.
+ * Supports `name`, `description` (single-line or `>`/`>-`/`|` folded block),
+ * and `triggers` (`[a, b]`, comma-separated, or YAML `- item` list).
+ */
+function parseSkillMarkdown(rawContent, filePath) {
+  const normalized = String(rawContent ?? '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+  const match = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(normalized);
+  if (!match) {
+    throw new Error(`compile-runtime-assets: missing YAML frontmatter in skill ${filePath}`);
+  }
+  const frontmatter = match[1] ?? '';
+  const body = (match[2] ?? '').trim();
+
+  const meta = {};
+  const lines = frontmatter.split('\n');
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const keyMatch = /^([A-Za-z0-9_]+):\s*(.*)$/.exec(line);
+    if (!keyMatch) {
+      i += 1;
+      continue;
+    }
+    const key = keyMatch[1];
+    const rest = (keyMatch[2] ?? '').trim();
+    if (rest === '>' || rest === '>-' || rest === '|' || rest === '|-') {
+      const folded = [];
+      i += 1;
+      while (i < lines.length && (lines[i].trim() === '' || /^[ \t]+/.test(lines[i]))) {
+        folded.push(lines[i].trim());
+        i += 1;
+      }
+      const joined = rest.startsWith('|')
+        ? folded.join('\n').trim()
+        : folded.filter(Boolean).join(' ').trim();
+      meta[key] = key === 'triggers' ? parseTriggersValue(joined) : joined;
+      continue;
+    }
+    if (rest === '' && key === 'triggers') {
+      const list = [];
+      i += 1;
+      while (i < lines.length && /^[ \t]*-\s+/.test(lines[i])) {
+        list.push(stripQuotes(lines[i].replace(/^[ \t]*-\s+/, '')));
+        i += 1;
+      }
+      meta[key] = list.filter(Boolean);
+      continue;
+    }
+    meta[key] = key === 'triggers' ? parseTriggersValue(rest) : stripQuotes(rest);
+    i += 1;
+  }
+
+  const name = typeof meta.name === 'string' ? meta.name.trim() : '';
+  const description = typeof meta.description === 'string' ? meta.description.trim() : '';
+  if (!name) {
+    throw new Error(`compile-runtime-assets: skill frontmatter requires non-empty "name" in ${filePath}`);
+  }
+  if (!description) {
+    throw new Error(`compile-runtime-assets: skill frontmatter requires non-empty "description" in ${filePath}`);
+  }
+  if (!body) {
+    throw new Error(`compile-runtime-assets: skill body cannot be empty in ${filePath}`);
+  }
+
+  const id = basename(filePath, '.md')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!id) {
+    throw new Error(`compile-runtime-assets: invalid skill filename ${filePath}`);
+  }
+
+  const triggers = Array.isArray(meta.triggers) ? meta.triggers : [];
+  return triggers.length > 0
+    ? { id, name, description, triggers, body }
+    : { id, name, description, body };
+}
+
+function loadOverlaySkills(overlayDir) {
+  const skillsDir = resolve(overlayDir, 'skills');
+  if (!existsSync(skillsDir)) return [];
+  const entries = readdirSync(skillsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b));
+
+  const seenIds = new Set();
+  const skills = [];
+  for (const filename of entries) {
+    const filePath = resolve(skillsDir, filename);
+    const skill = parseSkillMarkdown(readFileSync(filePath, 'utf8'), filePath);
+    if (seenIds.has(skill.id)) {
+      throw new Error(`compile-runtime-assets: duplicate skill id "${skill.id}" in ${filePath}`);
+    }
+    seenIds.add(skill.id);
+    skills.push(skill);
+  }
+  return skills;
+}
+
+/**
+ * Compiles overlay manifest + prompts + skills + demo seed and locale JSON catalogs into
  * generated TypeScript modules inside `src/lib/`.
  *
  * @param {{ rootDir?: string; overlayDir?: string; write?: boolean }} [options]
@@ -138,12 +258,15 @@ export async function compileRuntimeAssets(options = {}) {
     }
   }
 
+  const skills = loadOverlaySkills(overlayDir);
+
   const demoSeedPath = resolve(rootDir, 'example/seed/demo.json');
   const demoSeed = readJson(demoSeedPath, 'demo seed');
 
   const compiledOverlay = {
     manifest,
     prompts,
+    skills,
   };
 
   const relOverlay = relative(rootDir, overlayDir).replace(/\\/g, '/');

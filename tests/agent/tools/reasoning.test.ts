@@ -30,6 +30,7 @@ import { addRelation, upsertEntity } from '../../../src/lib/dal/misc';
 import { createNote } from '../../../src/lib/dal/notes';
 import { createTask, ensureSystemCategories, findCategoryByName } from '../../../src/lib/dal/tasks';
 import { ensureUser, updateUser } from '../../../src/lib/dal/users';
+import { addItem, buildSkillSpec, getItem, skillUsage } from '../../../src/lib/evolution';
 import { formatMoney } from '../../../src/lib/utils';
 
 const USER_A = 1;
@@ -723,5 +724,92 @@ describe('get_custom_directives', () => {
       'Персональных директив пока не задано. Действуют стандартные настройки заботливого когнитивного ментора (ADHD-friendly).',
     );
     expect((outcome.data as DirectivesData).instructions).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// list_skills / read_skill / draft_skill
+// ---------------------------------------------------------------------------
+
+describe('list_skills, read_skill, draft_skill', () => {
+  it('list_skills возвращает встроенные .md-скиллы и пользовательские скиллы SQLite', async () => {
+    const spec = buildSkillSpec({
+      key: 'custom-sql-skill',
+      version: 1,
+      originFailure: null,
+      supersedes: null,
+      body: '## When to Use\nКогда надо.\n\n## Procedure\n1. Шаг.\n\n## Pitfalls\n- Нет.\n\n## Verification\n- Проверка.',
+    });
+    await addItem(USER_A, { rawInput: 'test', category: 'skill', title: 'Custom SQL', spec });
+
+    const outcome = await run('list_skills', {});
+    expect(outcome.ok).toBe(true);
+    expect(outcome.content).toContain('inbox-triage');
+    expect(outcome.content).toContain('custom-sql-skill');
+    const data = outcome.data as {
+      builtin_skills: Array<{ id: string }>;
+      user_skills: Array<{ key: string; status: string }>;
+    };
+    expect(data.builtin_skills.some((s) => s.id === 'inbox-triage')).toBe(true);
+    expect(data.user_skills.some((s) => s.key === 'custom-sql-skill' && s.status === 'pending')).toBe(true);
+  });
+
+  it('read_skill читает .md-скилл оверлея и SQLite-скилл (с инкрементом views)', async () => {
+    const builtin = await run('read_skill', { name_or_id: 'inbox-triage' });
+    expect(builtin.ok).toBe(true);
+    expect(builtin.data).toMatchObject({ source: 'overlay', id: 'inbox-triage', status: 'active' });
+    expect(builtin.content).toContain('get_inbox_digest');
+
+    const spec = buildSkillSpec({
+      key: 'my-proc',
+      version: 1,
+      originFailure: null,
+      supersedes: null,
+      body: '## When to Use\nВсегда.\n\n## Procedure\n1. Действуй.\n\n## Pitfalls\n- Не спеши.\n\n## Verification\n- Проверить list_tasks.',
+    });
+    const item = await addItem(USER_A, { rawInput: 'x', category: 'skill', title: 'My Proc', spec });
+
+    const byId = await run('read_skill', { name_or_id: String(item.id) });
+    expect(byId.ok).toBe(true);
+    expect(byId.data).toMatchObject({ source: 'sqlite', id: item.id, name: 'my-proc' });
+    expect(byId.content).toContain('Проверить list_tasks');
+    expect((await skillUsage(USER_A, item.id)).views).toBe(1);
+
+    const missing = await run('read_skill', { name_or_id: 'no-such-skill-xyz' });
+    expect(missing.ok).toBe(false);
+  });
+
+  it('draft_skill всегда создаёт pending-черновик и никогда не активирует сам', async () => {
+    const bad = await run('draft_skill', { key: 'x', title: 'X' });
+    expect(bad.ok).toBe(false);
+
+    const created = await run('draft_skill', {
+      key: 'Weekly Review',
+      title: 'Еженедельный разбор',
+      when_to_use: 'Каждое воскресенье вечером',
+      procedure: '1. Открыть задачи.\n2. Разобрать инбокс.',
+      verification: 'Проверить list_tasks.',
+    });
+    expect(created.ok).toBe(true);
+    const data = created.data as { skill_id: number; key: string; status: string; requires_approval: boolean };
+    expect(data.key).toBe('weekly-review');
+    expect(data.status).toBe('pending');
+    expect(data.requires_approval).toBe(true);
+
+    const row = await getItem(USER_A, data.skill_id);
+    expect(row?.status).toBe('pending');
+    expect(row?.category).toBe('skill');
+
+    const updated = await run('draft_skill', {
+      key: 'weekly-review',
+      title: 'Еженедельный разбор v2',
+      when_to_use: 'В воскресенье в 19:00',
+      procedure: '1. Проверить долги.\n2. Открыть задачи.',
+      verification: 'Проверить list_tasks и get_finances.',
+    });
+    expect(updated.ok).toBe(true);
+    const updatedData = updated.data as { skill_id: number; status: string };
+    expect(updatedData.skill_id).toBe(data.skill_id);
+    expect(updatedData.status).toBe('pending');
   });
 });

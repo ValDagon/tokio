@@ -12,6 +12,7 @@ export interface DeepLinkTarget {
   noteCol?: Note['column'];
   noteId?: Note['id'];
   openDossier?: boolean;
+  systemSection?: 'directives' | 'skills' | 'diagnostics' | 'docs' | 'trash';
 }
 
 const QUEUE_PARAM_MAP: Record<string, LiabilityQueueKey> = {
@@ -76,6 +77,14 @@ export function parseStartParam(raw: string | null | undefined): DeepLinkTarget 
     const noteId = trimmed.slice('note_'.length);
     if (!/^\d+$/.test(noteId)) return null;
     return { tab: 'notes', noteId };
+  }
+
+  if (lower === 'skills' || lower === 'backlog') {
+    return { tab: 'assistant', systemSection: 'skills' };
+  }
+
+  if (lower === 'diagnostics') {
+    return { tab: 'assistant', systemSection: 'diagnostics' };
   }
 
   if (lower === 'system' || lower === 'assistant' || lower === 'meds' || lower === 'docs') {

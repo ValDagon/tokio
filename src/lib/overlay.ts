@@ -118,9 +118,18 @@ export interface OverlayManifest {
 
 export type OverlayPromptSections = Record<OverlayPromptSection, string>;
 
+export interface OverlaySkill {
+  id: string;
+  name: string;
+  description: string;
+  triggers?: string[];
+  body: string;
+}
+
 export interface CompiledOverlay {
   manifest: OverlayManifest;
   prompts: Record<OverlayLocaleCode, OverlayPromptSections>;
+  skills?: OverlaySkill[];
 }
 
 export interface DemoSeedAccount {
@@ -284,6 +293,24 @@ export function getPersonaStyleText(
   const loc = locale ?? defaultLoc;
   const text = entry[loc] ?? entry[defaultLoc] ?? entry.ru ?? entry.en;
   return typeof text === 'string' && text.trim().length > 0 ? text.trim() : null;
+}
+
+/** Returns all built-in Markdown skills compiled from the active overlay. */
+export function getOverlaySkills(): readonly OverlaySkill[] {
+  const skills = getOverlay().skills;
+  return Array.isArray(skills) ? skills : [];
+}
+
+/** Finds a built-in Markdown skill by id or name (case-insensitive). */
+export function findOverlaySkill(idOrName: string): OverlaySkill | null {
+  const needle = typeof idOrName === 'string' ? idOrName.trim().toLowerCase() : '';
+  if (!needle) return null;
+  for (const skill of getOverlaySkills()) {
+    if (skill.id.toLowerCase() === needle || skill.name.trim().toLowerCase() === needle) {
+      return skill;
+    }
+  }
+  return null;
 }
 
 /** Returns the localized demo seed dataset (accounts, liabilities, tasks, notes). */

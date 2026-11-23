@@ -241,11 +241,13 @@ describe('/lang command and multi-locale reply keyboard routing', () => {
       const sends = callsOf('sendMessage');
       expect(sends.length).toBeGreaterThanOrEqual(1);
       const firstBtn = getMainKeyboard(loc).keyboard[0]![0]!.text;
-      expect(firstBtn).toBe(t(loc, 'keyboards.status'));
+      expect(firstBtn).toBe(t(loc, 'keyboards.newSession'));
 
-      // Reply keyboard button in new locale routes to status handler
+      // Reply keyboard button in new locale routes cleanly (e.g. status at [0][2])
+      const statusBtn = getMainKeyboard(loc).keyboard[0]![2]!.text;
+      expect(statusBtn).toBe(t(loc, 'keyboards.status'));
       resetApi();
-      await routeMessage(msg(firstBtn));
+      await routeMessage(msg(statusBtn));
       expect(callsOf('sendMessage').length).toBeGreaterThanOrEqual(1);
     }
   });

@@ -76,6 +76,15 @@ export const KEYBOARD_DIGEST = '☀️ Дайджест';
 export const KEYBOARD_INBOX = '📥 Инбокс';
 export const KEYBOARD_NEW = '🧹 Новая сессия';
 export const KEYBOARD_HELP = 'ℹ️ Помощь';
+export const KEYBOARD_SKILLS = '🧩 Скиллы';
+export const KEYBOARD_DIAGNOSTICS = '🩺 Диагностика';
+export const KEYBOARD_TRIAGE = '🧠 Разобрать';
+export const KEYBOARD_COMMANDS = '⌨️ Команды ›';
+export const KEYBOARD_BACKLOG = '📋 Бэклог';
+export const KEYBOARD_BACKUP = '📥 Бэкап';
+export const KEYBOARD_BYOK = '🔑 Ключ';
+export const KEYBOARD_LANG = '🌐 Язык';
+export const KEYBOARD_BACK = '← Назад';
 
 /** Подпись кнопки запуска дашборда. */
 export const OPEN_APP_LABEL = '🚀 Открыть';
@@ -167,6 +176,50 @@ function isPositiveInt(val: unknown): val is number {
   return typeof val === 'number' && Number.isInteger(val) && val > 0;
 }
 
+type StepClassification =
+  | { kind: 'draft'; skillId: number }
+  | { kind: 'deepLink'; startParam: string };
+
+function classifyAgentStep(step: AgentStepLike | undefined): StepClassification | null {
+  if (!step || !step.ok || !step.action) return null;
+  const name = step.action.name;
+  const data =
+    step.data && typeof step.data === 'object'
+      ? (step.data as Record<string, unknown>)
+      : undefined;
+
+  if (name === 'draft_skill') {
+    return isPositiveInt(data?.skill_id) ? { kind: 'draft', skillId: data.skill_id } : null;
+  }
+  if (name === 'add_task' || name === 'update_task' || name === 'complete_task') {
+    return isPositiveInt(data?.task_id) ? { kind: 'deepLink', startParam: `task_${data.task_id}` } : null;
+  }
+  if (name === 'add_note' || name === 'edit_note' || name === 'move_note') {
+    return isPositiveInt(data?.note_id) ? { kind: 'deepLink', startParam: `note_${data.note_id}` } : null;
+  }
+  if (
+    name === 'mark_liability_paid' ||
+    name === 'link_liability_account' ||
+    name === 'add_liability' ||
+    name === 'update_liability' ||
+    name === 'delete_liability'
+  ) {
+    return { kind: 'deepLink', startParam: 'debts' };
+  }
+  if (FINANCE_DEEP_LINK_TOOLS.has(name)) {
+    return { kind: 'deepLink', startParam: 'finances' };
+  }
+  return null;
+}
+
+function findLastClassifiedStep(steps: ReadonlyArray<AgentStepLike>): StepClassification | null {
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    const classified = classifyAgentStep(steps[i]);
+    if (classified) return classified;
+  }
+  return null;
+}
+
 /**
  * Определяет `startapp`-параметр deep-link для последнего успешного мутирующего шага агента
  * (или `can_i_afford`). Read-only запросы возвращают `null`.
@@ -174,45 +227,39 @@ function isPositiveInt(val: unknown): val is number {
 export function resolveAgentStartAppParam(
   steps: ReadonlyArray<AgentStepLike>,
 ): string | null {
-  for (let i = steps.length - 1; i >= 0; i -= 1) {
-    const step = steps[i];
-    if (!step || !step.ok || !step.action) continue;
-
-    const name = step.action.name;
-    const data =
-      step.data && typeof step.data === 'object'
-        ? (step.data as Record<string, unknown>)
-        : undefined;
-
-    if (name === 'add_task' || name === 'update_task' || name === 'complete_task') {
-      if (isPositiveInt(data?.task_id)) return `task_${data.task_id}`;
-    } else if (name === 'add_note' || name === 'edit_note' || name === 'move_note') {
-      if (isPositiveInt(data?.note_id)) return `note_${data.note_id}`;
-    } else if (
-      name === 'mark_liability_paid' ||
-      name === 'link_liability_account' ||
-      name === 'add_liability' ||
-      name === 'update_liability' ||
-      name === 'delete_liability'
-    ) {
-      return 'debts';
-    } else if (FINANCE_DEEP_LINK_TOOLS.has(name)) {
-      return 'finances';
-    }
-  }
-  return null;
+  const last = findLastClassifiedStep(steps);
+  if (!last) return null;
+  return last.kind === 'draft' ? 'skills' : last.startParam;
 }
 
 /**
- * Строит однорядную inline-клавиатуру с кнопкой открытия Mini App на целевом разделе/записи,
- * либо `undefined`, если шаги не требуют deep-link или URL не сконфигурирован.
+ * Строит inline-клавиатуру для ответа агента:
+ *  - если последний мутирующий шаг — `draft_skill`, возвращает кнопки
+ *    подтверждения `[✅ Включить #id | 🚫 Отклонить]` (+ `[📱 В приложении]`);
+ *  - иначе однорядную кнопку deep-link на целевой раздел/запись Mini App.
  */
 export function buildAgentDeepLinkKeyboard(
   steps: ReadonlyArray<AgentStepLike>,
+  locale: LocaleCode = 'ru',
 ): InlineKeyboardMarkup | undefined {
-  const startParam = resolveAgentStartAppParam(steps);
-  if (!startParam) return undefined;
-  const btn = buildOpenAppButton(startParam);
+  const last = findLastClassifiedStep(steps);
+  if (!last) return undefined;
+  if (last.kind === 'draft') {
+    const rows: InlineKeyboardButton[][] = [
+      [
+        {
+          text: t(locale, 'skills.btnActivate', { id: last.skillId }),
+          callback_data: `skills:activate:${last.skillId}`,
+        },
+        { text: t(locale, 'skills.btnReject'), callback_data: `skills:reject:${last.skillId}` },
+      ],
+    ];
+    const appBtn = buildOpenAppButton('skills', undefined, locale);
+    if (appBtn) rows.push([appBtn]);
+    return { inline_keyboard: rows };
+  }
+
+  const btn = buildOpenAppButton(last.startParam, undefined, locale);
   if (!btn) return undefined;
   return { inline_keyboard: [[btn]] };
 }
@@ -222,26 +269,61 @@ export function buildAgentDeepLinkKeyboard(
 // ---------------------------------------------------------------------------
 
 /**
- * Основная reply-клавиатура 4×2.
+ * Слой 1: компактный «Главный экран» (2×3).
  *
- * Mini App открывается нативной кнопкой меню рядом с полем ввода, поэтому
- * отдельной кнопки «Открыть» здесь нет.
- *
- * `one_time_keyboard` вместо `is_persistent`: сетка нужна на один шаг и не
- * должна занимать пол-чата. Показывает её только `/start` и `/menu`; обычный
- * ответ сворачивает её (см. `resolveReplyMarkup` в `formatting.ts`).
+ * `one_time_keyboard: true` (без `is_persistent`): после нажатия клавиатура
+ * сворачивается до иконки `⊞` в поле ввода и в любой момент раскрывается в 1 клик.
  */
 export function getMainKeyboard(locale: LocaleCode = 'ru'): ReplyKeyboardMarkup {
   return {
     keyboard: [
-      [{ text: t(locale, 'keyboards.status') }, { text: t(locale, 'keyboards.balance') }],
-      [{ text: t(locale, 'keyboards.debts') }, { text: t(locale, 'keyboards.tasks') }],
-      [{ text: t(locale, 'keyboards.meds') }, { text: t(locale, 'keyboards.digest') }],
-      [{ text: t(locale, 'keyboards.inbox') }, { text: t(locale, 'keyboards.help') }],
+      [
+        { text: t(locale, 'keyboards.newSession') },
+        { text: t(locale, 'keyboards.skills') },
+        { text: t(locale, 'keyboards.status') },
+      ],
+      [
+        { text: t(locale, 'keyboards.diagnostics') },
+        { text: t(locale, 'keyboards.triage') },
+        { text: t(locale, 'keyboards.commands') },
+      ],
     ],
     resize_keyboard: true,
     one_time_keyboard: true,
-    input_field_placeholder: 'Надиктуй мысль, расход, идею или нажми сводку 📥',
+    input_field_placeholder: t(locale, 'keyboards.mainPlaceholder'),
+  };
+}
+
+/**
+ * Слой 2: «Клавиатура команд» (4×3) — все разделы и системные утилиты + `← Назад`.
+ */
+export function getCommandsKeyboard(locale: LocaleCode = 'ru'): ReplyKeyboardMarkup {
+  return {
+    keyboard: [
+      [
+        { text: t(locale, 'keyboards.balance') },
+        { text: t(locale, 'keyboards.debts') },
+        { text: t(locale, 'keyboards.tasks') },
+      ],
+      [
+        { text: t(locale, 'keyboards.inbox') },
+        { text: t(locale, 'keyboards.digest') },
+        { text: t(locale, 'keyboards.meds') },
+      ],
+      [
+        { text: t(locale, 'keyboards.backlog') },
+        { text: t(locale, 'keyboards.backup') },
+        { text: t(locale, 'keyboards.byok') },
+      ],
+      [
+        { text: t(locale, 'keyboards.lang') },
+        { text: t(locale, 'keyboards.help') },
+        { text: t(locale, 'keyboards.back') },
+      ],
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: true,
+    input_field_placeholder: t(locale, 'keyboards.commandsPlaceholder'),
   };
 }
 
@@ -381,10 +463,31 @@ export function getInboxItemKeyboard(noteId: string): InlineKeyboardMarkup {
 }
 
 /** Одна inline-кнопка скачивания бэкапа (под дайджестом и в дашборде). */
-export function getBackupInlineKeyboard(): InlineKeyboardMarkup {
+export function getBackupInlineKeyboard(locale: LocaleCode = 'ru'): InlineKeyboardMarkup {
   return {
-    inline_keyboard: [[{ text: '📥 Скачать бэкап .zip', callback_data: 'backup:download' }]],
+    inline_keyboard: [[{ text: t(locale, 'keyboards.backupDownload'), callback_data: 'backup:download' }]],
   };
+}
+
+/**
+ * Inline-кнопки экрана скиллов: только для ожидающих решения черновиков (`pending`, до 5 шт.)
+ * + опциональная кнопка перехода в Mini App (`startapp=skills`).
+ */
+export function buildSkillsInlineKeyboard(
+  pendingSkillIds: readonly number[],
+  locale: LocaleCode = 'ru',
+): InlineKeyboardMarkup | undefined {
+  const rows: InlineKeyboardButton[][] = [];
+  for (const id of pendingSkillIds.slice(0, 5)) {
+    rows.push([
+      { text: t(locale, 'skills.btnShow', { id }), callback_data: `skills:show:${id}` },
+      { text: t(locale, 'skills.btnActivate', { id }), callback_data: `skills:activate:${id}` },
+      { text: t(locale, 'skills.btnReject'), callback_data: `skills:reject:${id}` },
+    ]);
+  }
+  const appBtn = buildOpenAppButton('skills', undefined, locale);
+  if (appBtn) rows.push([appBtn]);
+  return rows.length > 0 ? { inline_keyboard: rows } : undefined;
 }
 
 /** Одна inline-кнопка запуска разбора инбокса (под списком входящих). */

@@ -9,6 +9,10 @@ import { setRates } from '../../src/lib/dal/fx';
 import { financeTools } from '../../src/lib/agent/tools/finances';
 import { ensureUser, getUser } from '../../src/lib/dal/users';
 import { setConfigOverrides } from '../../src/lib/config';
+import { getAgentState, saveThread } from '../../src/lib/dal/agentState';
+import { addItem, buildSkillSpec } from '../../src/lib/evolution';
+import { createNote, getNote } from '../../src/lib/dal/notes';
+import { createTask } from '../../src/lib/dal/tasks';
 
 import type { ToolContext, ToolOutcome } from '../../src/lib/agent/registry';
 import type { LiabilityQueue } from '../../src/lib/types';
@@ -382,7 +386,7 @@ describe('Standalone Serverless Endpoints (rpc & fastState)', () => {
     expect(removed.id).toBe(String(liability.id));
   });
 
-  it('управляет заметками: POST, GET, PATCH, DELETE /api/notes', async () => {
+  it('управляет заметками: POST, GET, PATCH (raw_text и канонические колонки), DELETE /api/notes', async () => {
     const createdNote = await rpcEndpoint(
       {
         path: '/api/notes',
@@ -392,9 +396,9 @@ describe('Standalone Serverless Endpoints (rpc & fastState)', () => {
       mockCtx,
     );
     expect(createdNote.raw_text).toBe('Моя первая мысль');
-    expect(createdNote.column).toBe('ideas');
+    expect(createdNote.column).toBe('idea');
 
-    const patchedNote = await rpcEndpoint(
+    const patchedClean = await rpcEndpoint(
       {
         path: `/api/notes/${createdNote.id}`,
         method: 'PATCH',
@@ -402,8 +406,33 @@ describe('Standalone Serverless Endpoints (rpc & fastState)', () => {
       },
       mockCtx,
     );
-    expect(patchedNote.clean_text).toBe('Отредактированная мысль');
-    expect(patchedNote.column).toBe('self');
+    expect(patchedClean.clean_text).toBe('Отредактированная мысль');
+    expect(patchedClean.raw_text).toBe('Моя первая мысль');
+    expect(patchedClean.column).toBe('note');
+
+    // Правка только raw_text не затирает clean_text и column.
+    const patchedRaw = await rpcEndpoint(
+      {
+        path: `/api/notes/${createdNote.id}`,
+        method: 'PATCH',
+        body: { raw_text: 'Обновлённый исходник' },
+      },
+      mockCtx,
+    );
+    expect(patchedRaw.raw_text).toBe('Обновлённый исходник');
+    expect(patchedRaw.clean_text).toBe('Отредактированная мысль');
+    expect(patchedRaw.column).toBe('note');
+
+    // Недеструктивное чтение legacy-строки 'inbox' как 'raw' без мутации SQLite.
+    const legacyNote = await createNote(TEST_USER, 'Легаси инбокс', {
+      column: 'inbox' as unknown as 'raw',
+    });
+    const rawList = (await rpcEndpoint(
+      { path: '/api/notes?column=raw', method: 'GET' },
+      mockCtx,
+    )) as Array<{ id: string; column: string }>;
+    expect(rawList.some((n) => n.id === String(legacyNote.id) && n.column === 'raw')).toBe(true);
+    expect((await getNote(TEST_USER, legacyNote.id))?.column).toBe('inbox');
 
     const delRes = await rpcEndpoint(
       {
@@ -1191,5 +1220,275 @@ describe('RPC: неизвестные маршруты вместо фиктив
       codes.add(item.code);
     }
     expect(codes.size).toBe(100);
+  });
+
+  it('GET /api/user/life-context возвращает реальное досье по данным SQLite', async () => {
+    await ensureUser(TEST_USER, 'Тест');
+    await createTask(TEST_USER, { title: 'Оплатить аренду квартиры' });
+    await createNote(TEST_USER, 'Ключевой принцип фокуса', { column: 'note' });
+
+    const res = (await rpcEndpoint(
+      { path: '/api/user/life-context', method: 'GET' },
+      mockCtx,
+    )) as { context: string };
+
+    expect(res.context).toContain('Оплатить аренду квартиры');
+    expect(res.context).toContain('Ключевой принцип фокуса');
+  });
+
+  it('GET/PATCH /api/settings и /api/user/settings сохраняют директивы, стиль и summary_time без затирания', async () => {
+    await ensureUser(TEST_USER, 'Тест');
+
+    const patch1 = (await rpcEndpoint(
+      {
+        path: '/api/settings',
+        method: 'PATCH',
+        body: {
+          custom_instructions: '- Отвечай кратко и без воды',
+          persona_style: 'strategist',
+          summary_time: '08:30',
+          model_provider: 'openai',
+        },
+      },
+      mockCtx,
+    )) as Record<string, unknown>;
+    expect(patch1.custom_instructions).toBe('- Отвечай кратко и без воды');
+    expect(patch1.persona_style).toBe('strategist');
+    expect(patch1.summary_time).toBe('08:30');
+    expect(patch1.model_provider).toBe('openai');
+
+    // Смена только persona_style не затирает custom_instructions!
+    const patch2 = (await rpcEndpoint(
+      {
+        path: '/api/user/settings',
+        method: 'PATCH',
+        body: { persona_style: 'calm_partner' },
+      },
+      mockCtx,
+    )) as Record<string, unknown>;
+    expect(patch2.persona_style).toBe('calm_partner');
+    expect(patch2.custom_instructions).toBe('- Отвечай кратко и без воды');
+
+    const getRes = (await rpcEndpoint(
+      { path: '/api/user/settings', method: 'GET' },
+      mockCtx,
+    )) as Record<string, unknown>;
+    expect(getRes.custom_instructions).toBe('- Отвечай кратко и без воды');
+    expect(getRes.persona_style).toBe('calm_partner');
+    expect(getRes.summary_time).toBe('08:30');
+    expect(getRes.model_provider).toBe('openai');
+
+    const invalidTime = await catchEndpointError(
+      rpcEndpoint(
+        { path: '/api/settings', method: 'PATCH', body: { summary_time: '25:99' } },
+        mockCtx,
+      ),
+    );
+    expect(invalidTime.parameters).toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('GET /api/docs/search ищет по главам документации', async () => {
+    const res = (await rpcEndpoint(
+      { path: '/api/docs/search?q=finances', method: 'GET' },
+      mockCtx,
+    )) as { query: string; result: string };
+    expect(res.query).toBe('finances');
+    expect(res.result.length).toBeGreaterThan(20);
+  });
+
+  it('управляет скиллами и бэклогом через /api/skills* и /api/backlog*', async () => {
+    const spec = buildSkillSpec({
+      key: 'rpc-test-skill',
+      version: 1,
+      originFailure: null,
+      supersedes: null,
+      body: '## When to Use\nВсегда.\n\n## Procedure\n1. Сделай.\n\n## Pitfalls\n- Нет.\n\n## Verification\n- Ок.',
+    });
+    const skillRow = await addItem(TEST_USER, {
+      rawInput: 'skill',
+      category: 'skill',
+      title: 'Тестовый скилл',
+      spec,
+    });
+    const backlogRow = await addItem(TEST_USER, {
+      rawInput: 'Починить экспорт',
+      category: 'feature',
+      title: 'Починить экспорт',
+    });
+
+    const skillsRes = (await rpcEndpoint({ path: '/api/skills', method: 'GET' }, mockCtx)) as {
+      builtin: Array<{ id: string }>;
+      user: Array<{ id: string; key: string; status: string }>;
+    };
+    expect(skillsRes.builtin.length).toBeGreaterThan(0);
+    expect(skillsRes.user.some((s) => s.id === String(skillRow.id) && s.status === 'pending')).toBe(true);
+
+    const activated = (await rpcEndpoint(
+      { path: `/api/skills/${skillRow.id}/activate`, method: 'POST' },
+      mockCtx,
+    )) as { ok: boolean; status: string };
+    expect(activated).toEqual({ ok: true, id: String(skillRow.id), status: 'active' });
+
+    const rejected = (await rpcEndpoint(
+      { path: `/api/skills/${skillRow.id}/reject`, method: 'POST' },
+      mockCtx,
+    )) as { ok: boolean; status: string };
+    expect(rejected).toEqual({ ok: true, id: String(skillRow.id), status: 'rejected' });
+
+    const backlogRes = (await rpcEndpoint({ path: '/api/backlog', method: 'GET' }, mockCtx)) as {
+      items: Array<{ id: string; category: string }>;
+    };
+    expect(backlogRes.items.some((i) => i.category === 'skill')).toBe(false);
+    expect(backlogRes.items.some((i) => i.id === String(backlogRow.id))).toBe(true);
+
+    const resolved = (await rpcEndpoint(
+      { path: `/api/backlog/${backlogRow.id}/resolve`, method: 'POST', body: { status: 'done' } },
+      mockCtx,
+    )) as { ok: boolean; status: string };
+    expect(resolved).toEqual({ ok: true, id: String(backlogRow.id), status: 'shipped' });
+  });
+
+  it('GET /api/system/diagnostics и POST /api/system/session/reset сбрасывают тред', async () => {
+    await ensureUser(TEST_USER, 'Тест');
+    await saveThread(TEST_USER, [{ role: 'user', content: 'привет' }]);
+
+    const diag = (await rpcEndpoint(
+      { path: '/api/system/diagnostics', method: 'GET' },
+      mockCtx,
+    )) as { summary_text: string; thread: { count: number }; model_provider: string };
+    expect(diag.summary_text.length).toBeGreaterThan(0);
+    expect(diag.thread.count).toBe(1);
+    expect(diag.model_provider).toBe('gemini');
+
+    const reset = (await rpcEndpoint(
+      { path: '/api/system/session/reset', method: 'POST' },
+      mockCtx,
+    )) as { ok: boolean; status: string };
+    expect(reset).toEqual({ ok: true, status: 'reset' });
+
+    const state = await getAgentState(TEST_USER);
+    expect(state?.thread.length).toBe(0);
+  });
+
+  it('GET/POST /api/finances/fx читает и мерджит курсы валют (POST только для adminIds)', async () => {
+    await setRates('2026-11-20', { USD: 1.1, RUB: 105 }, 'EUR');
+
+    const readBefore = (await rpcEndpoint(
+      { path: '/api/finances/fx', method: 'GET' },
+      mockCtx,
+    )) as { date: string; rates: Record<string, number> };
+    expect(readBefore.rates.USD).toBe(1.1);
+
+    const forbidden = await catchEndpointError(
+      rpcEndpoint(
+        {
+          path: '/api/finances/fx',
+          method: 'POST',
+          body: { rates: { rsd: 117 }, date: '2026-11-23' },
+        },
+        mockCtx,
+      ),
+    );
+    expect(forbidden.parameters).toMatchObject({ code: 'FORBIDDEN', status: 403 });
+
+    setConfigOverrides({
+      masterKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      adminIds: [TEST_USER],
+    });
+
+    const updated = (await rpcEndpoint(
+      {
+        path: '/api/finances/fx',
+        method: 'POST',
+        body: { rates: { rsd: 117 }, date: '2026-11-23' },
+      },
+      mockCtx,
+    )) as { date: string; base: string; rates: Record<string, number> };
+    expect(updated.date).toBe('2026-11-23');
+    expect(updated.base).toBe('EUR');
+    expect(updated.rates).toMatchObject({ USD: 1.1, RUB: 105, RSD: 117 });
+
+    const fetched = (await rpcEndpoint(
+      { path: '/api/finances/fx', method: 'GET' },
+      mockCtx,
+    )) as { date: string; rates: Record<string, number> };
+    expect(fetched.date).toBe('2026-11-23');
+    expect(fetched.rates.RSD).toBe(117);
+
+    const invalid = await catchEndpointError(
+      rpcEndpoint({ path: '/api/finances/fx', method: 'POST', body: { rates: {} } }, mockCtx),
+    );
+    expect(invalid.parameters).toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('PATCH /api/finances/liabilities/:id валидирует параметры (400/404) и сбрасывает monthly_payment в null', async () => {
+    await ensureUser(TEST_USER, 'Тест');
+    const missing = await catchEndpointError(
+      rpcEndpoint(
+        { path: '/api/finances/liabilities/999999', method: 'PATCH', body: { monthly_payment: 100 } },
+        mockCtx,
+      ),
+    );
+    expect(missing.parameters).toMatchObject({ code: 'NOT_FOUND', status: 404 });
+
+    const liab = await createLiability(TEST_USER, {
+      name: 'Credit Card',
+      queue: 'queue_1',
+      currency: 'EUR',
+      amountCents: 100000,
+      monthlyPaymentCents: 10000,
+      paymentDay: 15,
+    });
+
+    const invalidMonthly = await catchEndpointError(
+      rpcEndpoint(
+        { path: `/api/finances/liabilities/${liab.id}`, method: 'PATCH', body: { monthly_payment: -50 } },
+        mockCtx,
+      ),
+    );
+    expect(invalidMonthly.parameters).toMatchObject({ code: 'BAD_REQUEST' });
+
+    for (const badDay of [0, 32, 'abc']) {
+      const invalidDay = await catchEndpointError(
+        rpcEndpoint(
+          { path: `/api/finances/liabilities/${liab.id}`, method: 'PATCH', body: { payment_day: badDay } },
+          mockCtx,
+        ),
+      );
+      expect(invalidDay.parameters, `payment_day=${String(badDay)}`).toMatchObject({ code: 'BAD_REQUEST' });
+    }
+
+    const cleared = (await rpcEndpoint(
+      {
+        path: `/api/finances/liabilities/${liab.id}`,
+        method: 'PATCH',
+        body: { monthly_payment: null, payment_day: null },
+      },
+      mockCtx,
+    )) as { monthly_payment: number | null; monthly_payment_eur: number | null; payment_day: number | null };
+    expect(cleared.monthly_payment).toBeNull();
+    expect(cleared.monthly_payment_eur).toBeNull();
+    expect(cleared.payment_day).toBeNull();
+  });
+
+  it('новые ручки возвращают 405 METHOD_NOT_ALLOWED на неподдерживаемые методы', async () => {
+    const checks: Array<{ path: string; method: string }> = [
+      { path: '/api/skills', method: 'POST' },
+      { path: '/api/skills/1/activate', method: 'GET' },
+      { path: '/api/skills/1/reject', method: 'GET' },
+      { path: '/api/backlog', method: 'POST' },
+      { path: '/api/backlog/1/resolve', method: 'GET' },
+      { path: '/api/system/diagnostics', method: 'POST' },
+      { path: '/api/system/session/reset', method: 'GET' },
+      { path: '/api/finances/fx', method: 'DELETE' },
+      { path: '/api/docs/search', method: 'POST' },
+    ];
+    for (const req of checks) {
+      const err = await catchEndpointError(rpcEndpoint(req, mockCtx));
+      expect(err.parameters, `${req.method} ${req.path}`).toMatchObject({
+        code: 'METHOD_NOT_ALLOWED',
+        status: 405,
+      });
+    }
   });
 });

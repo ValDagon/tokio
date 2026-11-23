@@ -13,22 +13,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildAgentDeepLinkKeyboard,
   buildOpenAppButton,
+  buildSkillsInlineKeyboard,
   buildUndoWithAppKeyboard,
   getActionKeyboard,
   getBackupInlineKeyboard,
+  getCommandsKeyboard,
   getDashboardInlineKeyboard,
   getInboxItemKeyboard,
   getMainKeyboard,
   getOpenAppInlineKeyboard,
   getTriageInlineKeyboard,
+  KEYBOARD_BACK,
+  KEYBOARD_BACKLOG,
+  KEYBOARD_BACKUP,
   KEYBOARD_BALANCE,
+  KEYBOARD_BYOK,
+  KEYBOARD_COMMANDS,
   KEYBOARD_DEBTS,
+  KEYBOARD_DIAGNOSTICS,
   KEYBOARD_DIGEST,
   KEYBOARD_HELP,
   KEYBOARD_INBOX,
+  KEYBOARD_LANG,
   KEYBOARD_MEDS,
+  KEYBOARD_NEW,
+  KEYBOARD_SKILLS,
   KEYBOARD_STATUS,
   KEYBOARD_TASKS,
+  KEYBOARD_TRIAGE,
   OPEN_APP_LABEL,
   resolveAgentStartAppParam,
   webAppDeepLinkUrl,
@@ -64,23 +76,32 @@ describe('webAppUrl', () => {
   });
 });
 
-describe('getMainKeyboard', () => {
-  it('4×2 быстрые разделы: не persistent, сворачивается после одного нажатия', () => {
+describe('getMainKeyboard & getCommandsKeyboard', () => {
+  it('Главный экран 2×3: не persistent, сворачивается после одного нажатия', () => {
     const markup = getMainKeyboard();
     expect(markup.keyboard).toEqual([
-      [{ text: KEYBOARD_STATUS }, { text: KEYBOARD_BALANCE }],
-      [{ text: KEYBOARD_DEBTS }, { text: KEYBOARD_TASKS }],
-      [{ text: KEYBOARD_MEDS }, { text: KEYBOARD_DIGEST }],
-      [{ text: KEYBOARD_INBOX }, { text: KEYBOARD_HELP }],
+      [{ text: KEYBOARD_NEW }, { text: KEYBOARD_SKILLS }, { text: KEYBOARD_STATUS }],
+      [{ text: KEYBOARD_DIAGNOSTICS }, { text: KEYBOARD_TRIAGE }, { text: KEYBOARD_COMMANDS }],
     ]);
     expect(markup.resize_keyboard).toBe(true);
     expect(markup.one_time_keyboard).toBe(true);
-    // `is_persistent` держал сетку на экране постоянно — владелец попросил
-    // сворачивать её, поэтому флага больше нет.
     expect(markup).not.toHaveProperty('is_persistent');
     expect(markup.input_field_placeholder).toBe(
-      'Надиктуй мысль, расход, идею или нажми сводку 📥',
+      'Надиктуй мысль, расход, идею или открой команды 📥',
     );
+  });
+
+  it('Клавиатура команд 4×3: разделы, утилиты и ← Назад', () => {
+    const markup = getCommandsKeyboard();
+    expect(markup.keyboard).toEqual([
+      [{ text: KEYBOARD_BALANCE }, { text: KEYBOARD_DEBTS }, { text: KEYBOARD_TASKS }],
+      [{ text: KEYBOARD_INBOX }, { text: KEYBOARD_DIGEST }, { text: KEYBOARD_MEDS }],
+      [{ text: KEYBOARD_BACKLOG }, { text: KEYBOARD_BACKUP }, { text: KEYBOARD_BYOK }],
+      [{ text: KEYBOARD_LANG }, { text: KEYBOARD_HELP }, { text: KEYBOARD_BACK }],
+    ]);
+    expect(markup.resize_keyboard).toBe(true);
+    expect(markup.one_time_keyboard).toBe(true);
+    expect(markup).not.toHaveProperty('is_persistent');
   });
 });
 
@@ -317,6 +338,51 @@ describe('deep-link хелперы Mini App', () => {
       buildAgentDeepLinkKeyboard([{ ok: true, action: { name: 'list_tasks' } }]),
     ).toBeUndefined();
   });
+
+  it('buildAgentDeepLinkKeyboard для draft_skill всегда даёт кнопки подтверждения и отклонения', () => {
+    expect(
+      buildAgentDeepLinkKeyboard([
+        { ok: true, action: { name: 'draft_skill' }, data: { skill_id: 77 } },
+      ]),
+    ).toEqual({
+      inline_keyboard: [
+        [
+          { text: '✅ Включить #77', callback_data: 'skills:activate:77' },
+          { text: '🚫 Отклонить', callback_data: 'skills:reject:77' },
+        ],
+      ],
+    });
+
+    vi.stubEnv('WEBAPP_URL', WEBAPP);
+    expect(
+      buildAgentDeepLinkKeyboard([
+        { ok: true, action: { name: 'draft_skill' }, data: { skill_id: 77 } },
+      ]),
+    ).toEqual({
+      inline_keyboard: [
+        [
+          { text: '✅ Включить #77', callback_data: 'skills:activate:77' },
+          { text: '🚫 Отклонить', callback_data: 'skills:reject:77' },
+        ],
+        [{ text: '📱 В приложении', web_app: { url: `${WEBAPP}?startapp=skills` } }],
+      ],
+    });
+  });
+
+  it('buildSkillsInlineKeyboard строит кнопки только для pending-черновиков и приложения', () => {
+    expect(buildSkillsInlineKeyboard([])).toBeUndefined();
+    vi.stubEnv('WEBAPP_URL', WEBAPP);
+    expect(buildSkillsInlineKeyboard([11])).toEqual({
+      inline_keyboard: [
+        [
+          { text: '👁 #11', callback_data: 'skills:show:11' },
+          { text: '✅ Включить #11', callback_data: 'skills:activate:11' },
+          { text: '🚫 Отклонить', callback_data: 'skills:reject:11' },
+        ],
+        [{ text: '📱 В приложении', web_app: { url: `${WEBAPP}?startapp=skills` } }],
+      ],
+    });
+  });
 });
 
 describe('клавиатуры заметок и разбора', () => {
@@ -334,7 +400,7 @@ describe('клавиатуры заметок и разбора', () => {
 
   it('бэкап и разбор — по одной кнопке', () => {
     expect(getBackupInlineKeyboard()).toEqual({
-      inline_keyboard: [[{ text: '📥 Скачать бэкап .zip', callback_data: 'backup:download' }]],
+      inline_keyboard: [[{ text: '📥 Скачать бэкап .json', callback_data: 'backup:download' }]],
     });
     expect(getTriageInlineKeyboard()).toEqual({
       inline_keyboard: [

@@ -18,7 +18,7 @@ import { createLiability, getLiability } from '../../src/lib/dal/finances';
 import { kvGet, liabilityReviewKey } from '../../src/lib/dal/misc';
 import { ensureUser, getUser, updateUser } from '../../src/lib/dal/users';
 import { monthKey } from '../../src/lib/utils';
-import { addItem, buildSkillSpec, recordFailure } from '../../src/lib/evolution';
+import { addItem, buildSkillSpec, getItem, recordFailure } from '../../src/lib/evolution';
 import { helpText } from '../../src/lib/summary';
 
 import { MAX_REPLY_CONTEXT_CHARS } from '../../src/lib/agent/constants';
@@ -59,6 +59,7 @@ import {
 } from '../../src/handlers/onboarding';
 import {
   getBackupInlineKeyboard,
+  getCommandsKeyboard,
   getMainKeyboard,
   getOpenAppInlineKeyboard,
   getTriageInlineKeyboard,
@@ -133,7 +134,7 @@ describe('routeMessage: доступ', () => {
     expect(sentTexts()).toHaveLength(1);
     expect(sentTexts()[0]).toBe(ACCESS_DENIED_MESSAGE);
     expect(ACCESS_DENIED_MESSAGE).toBe('⛔ Доступ закрыт (приватный инстанс).');
-    expect(callsOf('sendMessage')[0]?.params.reply_markup).toEqual(REMOVE_KEYBOARD);
+    expect(callsOf('sendMessage')[0]?.params.reply_markup).toBeUndefined();
 
     // Не создаёт пользователя в users
     expect(await getUser(STRANGER)).toBeNull();
@@ -193,7 +194,7 @@ describe('routeMessage: инбокс', () => {
   it('свободный текст без шва — честная заглушка', async () => {
     await routeMessage(msg('  мысль про отпуск  '));
     expect(sentTexts()).toEqual([INGEST_UNAVAILABLE_TEXT]);
-    expect(callsOf('sendMessage')[0]?.params.reply_markup).toEqual(REMOVE_KEYBOARD);
+    expect(callsOf('sendMessage')[0]?.params.reply_markup).toBeUndefined();
   });
 
   it('шов получает обрезанный текст, чат и message_id', async () => {
@@ -243,7 +244,8 @@ describe('routeMessage: команды', () => {
         [{ text: '🚀 Пройти знакомство заново', callback_data: 'onboard:restart' }],
       ],
     });
-    expect(helpText()).toContain('/diary');
+    expect(helpText()).not.toContain('/diary');
+    expect(helpText()).toContain('/skills');
   });
 
   it('неизвестная слэш-команда — подсказка', async () => {
@@ -324,7 +326,7 @@ describe('routeMessage: команды', () => {
       expect(text).toContain('Диагностика');
       expect(text).toContain('stt · voice · transcription_failed');
     }
-    expect(callsOf('sendMessage')[0]?.params.reply_markup).toEqual(REMOVE_KEYBOARD);
+    expect(callsOf('sendMessage')[0]?.params.reply_markup).toEqual(getMainKeyboard());
   });
 
   it('/diagnostics при пустом журнале говорит «сбоев не записано»', async () => {
@@ -340,13 +342,25 @@ describe('routeMessage: команды', () => {
     for (const text of sentTexts()) expect(text).toContain('Контекст беседы сброшен');
   });
 
-  it('типовая сводка/баланс/долги/задачи/аптечка сворачивают клавиатуру', async () => {
-    for (const text of ['/status', '/balance', '/debts', '/tasks', '/meds']) {
+  it('типовая сводка/баланс/долги/задачи оставляют клавиатуру свёрнутой, а /meds возвращает Главный экран', async () => {
+    for (const text of ['/status', '/balance', '/debts', '/tasks']) {
       resetApi();
       await routeMessage(msg(text));
       const [call] = callsOf('sendMessage');
-      expect(call?.params.reply_markup).toEqual(REMOVE_KEYBOARD);
+      expect(call?.params.reply_markup).toBeUndefined();
     }
+    resetApi();
+    await routeMessage(msg('/meds'));
+    expect(callsOf('sendMessage')[0]?.params.reply_markup).toEqual(getMainKeyboard());
+  });
+
+  it('двухслойное переключение: ⌨️ Команды › и ← Назад', async () => {
+    await routeMessage(msg('⌨️ Команды ›'));
+    expect(callsOf('sendMessage')[0]?.params.reply_markup).toEqual(getCommandsKeyboard());
+
+    resetApi();
+    await routeMessage(msg('← Назад'));
+    expect(callsOf('sendMessage')[0]?.params.reply_markup).toEqual(getMainKeyboard());
   });
 
   it('/digest прикладывает кнопку бэкапа', async () => {
@@ -393,9 +407,30 @@ describe('routeMessage: бэклог эволюции', () => {
 // ---------------------------------------------------------------------------
 
 describe('routeMessage: /triage', () => {
-  it('без шва — «пока недоступно»', async () => {
+  it('без шва при пустом инбоксе — сразу «Инбокс пуст!» без вызова агента', async () => {
+    let agentCalls = 0;
+    setAgentRunner(async () => {
+      agentCalls += 1;
+      return 'should not run';
+    });
     await routeMessage(msg('/triage'));
-    expect(sentTexts()).toEqual([TRIAGE_UNAVAILABLE_TEXT]);
+    expect(sentTexts()).toEqual([TRIAGE_STATUS_TEXT]);
+    expect(editedTexts()[0]).toContain('Инбокс пуст');
+    expect(agentCalls).toBe(0);
+  });
+
+  it('без шва при наличии сырых заметок — вызывает агента со скиллом inbox-triage', async () => {
+    await createNote(USER, 'Позвонить в банк завтра', { column: 'raw' });
+    const seenPrompts: string[] = [];
+    setAgentRunner(async (ctx) => {
+      seenPrompts.push(ctx.text);
+      return '**Разобрана 1 заметка** в задачи.';
+    });
+    await routeMessage(msg('/triage'));
+
+    expect(seenPrompts).toHaveLength(1);
+    expect(seenPrompts[0]).toContain('read_skill("inbox-triage")');
+    expect(editedTexts()[0]).toContain('<b>Разобрана 1 заметка</b>');
   });
 
   it('с пустым инбоксом — «всё разобрано»', async () => {
@@ -702,14 +737,23 @@ describe('routeCallback', () => {
     expect(answers()[1]?.show_alert).toBe(true);
   });
 
-  it('разбор по кнопке: нет шва, пусто, результат', async () => {
+  it('разбор по кнопке: дефолтный пустой инбокс, явный null шва и результат', async () => {
+    // Без шва и с пустым инбоксом: сразу обновляет сообщение, не тратя токены.
     await routeCallback(cb('triage:inbox'));
-    expect(answers()[0]).toEqual({
-      callback_query_id: 'cb-1',
-      text: TRIAGE_UNAVAILABLE_TEXT,
-      show_alert: true,
-    });
+    expect(editedTexts()[0]).toContain('Инбокс пуст');
 
+    resetApi();
+    setTriageHandler(async () => null);
+    await routeCallback(cb('triage:inbox'));
+    expect(answers()).toEqual([
+      {
+        callback_query_id: 'cb-1',
+        text: TRIAGE_UNAVAILABLE_TEXT,
+        show_alert: true,
+      },
+    ]);
+
+    resetApi();
     setTriageHandler(async () => ({ count: 0, text: 'x' }));
     await routeCallback(cb('triage:inbox'));
     expect(editedTexts()[0]).toContain('Инбокс пуст');
@@ -990,24 +1034,37 @@ async function seedSkill(version = 1): Promise<number> {
 }
 
 describe('routeMessage: /skills', () => {
-  it('пустой список объясняет, откуда возьмётся черновик', async () => {
+  it('пустой список показывает встроенные .md-скиллы, стиль и подсказку про SQLite-процедуры', async () => {
     await routeMessage(msg('/skills'));
-    expect(sentTexts()[0]).toContain('Скиллов пока нет');
-    expect(callsOf('sendMessage')[0]?.params.reply_markup).toEqual(REMOVE_KEYBOARD);
+    const text = sentTexts()[0] ?? '';
+    expect(text).toContain('Скиллы и поведение');
+    expect(text).toContain('inbox-triage');
+    expect(text).toContain('daily-focus');
+    expect(text).toContain('черновиков и активных процедур пока нет');
+    expect(callsOf('sendMessage')[0]?.params.reply_markup).toBeUndefined();
   });
 
-  it('список печатает номер, версию, статус и числа с оговоркой', async () => {
+  it('список печатает номер, версию, статус, числа с оговоркой и inline-кнопки для pending', async () => {
     const id = await seedSkill();
     await routeMessage(msg('/skills'));
 
     const text = sentTexts()[0] ?? '';
     expect(text).toContain(`#${id}`);
-    expect(text).toContain('agent-tool-error-search-notes v1');
+    expect(text).toContain('agent-tool-error-search-notes');
+    expect(text).toContain('v1');
     expect(text).toContain('ожидает решения');
-    expect(text).toContain('применений: 0');
-    expect(text).toContain('просмотров: 0');
+    expect(text).toContain('применений: 0, просмотров: 0');
     expect(text).toContain('совместную встречаемость');
     expect(text).not.toMatch(/качеств|улучшил/i);
+
+    const markup = callsOf('sendMessage')[0]?.params.reply_markup as {
+      inline_keyboard: Array<Array<{ callback_data?: string }>>;
+    };
+    expect(markup.inline_keyboard[0]?.map((b) => b.callback_data)).toEqual([
+      `skills:show:${id}`,
+      `skills:activate:${id}`,
+      `skills:reject:${id}`,
+    ]);
   });
 
   it('/skills show печатает полный текст и растит только счётчик просмотров', async () => {
@@ -1043,6 +1100,48 @@ describe('routeMessage: /skills', () => {
     expect(sentTexts()[0]).toContain('отклонён');
     await routeMessage(msg('/skills'));
     expect(sentTexts()[1]).toContain('отклонён');
+  });
+
+  it('inline-колбэки skills:show / skills:activate / skills:reject / skills:home работают без ручного ввода ID', async () => {
+    const id = await seedSkill();
+
+    await routeCallback(cb(`skills:show:${id}`));
+    expect(editedTexts()[0]).toContain('When to Use');
+    const detailMarkup = callsOf('editMessageText')[0]?.params.reply_markup as {
+      inline_keyboard: Array<Array<{ callback_data?: string }>>;
+    };
+    expect(detailMarkup.inline_keyboard.flat().map((b) => b.callback_data)).toEqual([
+      `skills:activate:${id}`,
+      `skills:reject:${id}`,
+      'skills:home',
+    ]);
+
+    resetApi();
+    await routeCallback(cb(`skills:activate:${id}`, {
+      message: {
+        message_id: 77,
+        chat: { id: CHAT },
+        text: 'card',
+        reply_markup: { inline_keyboard: [[{ text: 'back', callback_data: 'skills:home' }]] },
+      },
+    }));
+    expect((await getItem(USER, id))?.status).toBe('active');
+    expect(editedTexts()[0]).toContain('включён');
+
+    resetApi();
+    await routeCallback(cb('skills:home'));
+    expect(editedTexts()[0]).toContain('Скиллы и поведение');
+
+    resetApi();
+    await routeCallback(cb(`skills:reject:${id}`, {
+      message: {
+        message_id: 77,
+        chat: { id: CHAT },
+        text: 'draft created',
+      },
+    }));
+    expect((await getItem(USER, id))?.status).toBe('rejected');
+    expect(editedTexts()[0]).toContain(`🚫 Скилл #${id} отклонён.`);
   });
 
   it('чужая строка и неизвестная подкоманда не включают ничего', async () => {

@@ -126,31 +126,30 @@ function isEntityParseFailure(error: BotApiErrorLike): boolean {
 }
 
 /**
- * Политика reply-клавиатуры — единственное место, где решается, показывать
- * сетку разделов или сворачивать её.
+ * Политика reply-клавиатуры — единственное место, где решается, передавать ли
+ * reply-клавиатуру в `reply_markup`.
  *
- * Платформа: отсутствие `reply_markup` клавиатуру НЕ убирает, клиент держит
- * последнюю. Убирает только `remove_keyboard: true`.
+ * `one_time_keyboard: true` на обеих клавиатурах сам сворачивает сетку в иконку `⊞`
+ * после нажатия, поэтому принудительно слать `remove_keyboard: true` на каждый
+ * обычный ответ больше не нужно (иначе иконка `⊞` исчезает). Явно переданный
+ * `ReplyKeyboardRemove` уважается без изменений.
  */
 export interface ReplyMarkupPolicy {
-  /** `true` — оставить reply-клавиатуру как есть (только `/start` и `/menu`). */
+  /** `true` — оставить reply-клавиатуру (`getMainKeyboard` / `getCommandsKeyboard`). */
   keepReplyKeyboard?: boolean;
-  /**
-   * `false` — не добавлять `remove_keyboard` (правка сообщения: Bot API ждёт
-   * там только inline-клавиатуру). По умолчанию `true`.
-   */
+  /** Игнорируется (оставлено для обратной совместимости сигнатуры). */
   collapse?: boolean;
 }
 
-/** Свести любую разметку к политике: inline не трогаем, reply сворачиваем. */
+/** Свести любую разметку к политике: inline и явный `remove_keyboard` не трогаем, reply — только при `keepReplyKeyboard`. */
 export function resolveReplyMarkup(
   markup: ReplyMarkup | null | undefined,
   options: ReplyMarkupPolicy = {},
 ): ReplyMarkup | null {
   if (markup && 'inline_keyboard' in markup) return markup;
+  if (markup && 'remove_keyboard' in markup) return markup;
   if (options.keepReplyKeyboard === true) return markup ?? null;
-  if (options.collapse === false) return null;
-  return { remove_keyboard: true };
+  return null;
 }
 
 function withMarkup(

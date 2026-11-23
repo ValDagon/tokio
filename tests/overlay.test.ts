@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -15,9 +15,11 @@ import { listTasks } from '../src/lib/dal/tasks';
 import { ensureUser } from '../src/lib/dal/users';
 import { matchExplicitAccount } from '../src/lib/financial-parser';
 import {
+  findOverlaySkill,
   getAssistantName,
   getOverlay,
   getOverlayPrompt,
+  getOverlaySkills,
   getOverlaySource,
   isPublicOpenAccessEnabled,
   resetOverlayOverride,
@@ -89,6 +91,46 @@ describe('overlay system', () => {
       expect(compiled.compiledOverlay.prompts.en.identity).toBe(
         'You are {{assistantName}}, a custom test assistant.',
       );
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('compiles skills/*.md frontmatter and exposes getOverlaySkills() / findOverlaySkill()', async () => {
+    // Example overlay ships neutral sample skills
+    expect(getOverlaySkills().length).toBeGreaterThanOrEqual(2);
+    expect(findOverlaySkill('inbox-triage')?.id).toBe('inbox-triage');
+    expect(findOverlaySkill('INBOX-TRIAGE')?.body).toContain('get_inbox_digest');
+
+    const tmpRoot = mkdtempSync(join(tmpdir(), 'tokio-overlay-skills-'));
+    try {
+      cpSync(resolve(__dirname, '..', 'example', 'overlay'), tmpRoot, { recursive: true });
+      mkdirSync(join(tmpRoot, 'skills'), { recursive: true });
+      writeFileSync(
+        join(tmpRoot, 'skills', 'weekly-reset.md'),
+        [
+          '---',
+          'name: Weekly Reset',
+          'description: >-',
+          '  Calm weekly review across tasks and inbox.',
+          'triggers: [weekly, sunday reset]',
+          '---',
+          '',
+          '# Weekly Reset',
+          '1. Review inbox.',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const compiled = await compileRuntimeAssets({ overlayDir: tmpRoot, write: false });
+      const skill = compiled.compiledOverlay.skills.find((s: { id: string }) => s.id === 'weekly-reset');
+      expect(skill).toEqual({
+        id: 'weekly-reset',
+        name: 'Weekly Reset',
+        description: 'Calm weekly review across tasks and inbox.',
+        triggers: ['weekly', 'sunday reset'],
+        body: '# Weekly Reset\n1. Review inbox.',
+      });
     } finally {
       rmSync(tmpRoot, { recursive: true, force: true });
     }

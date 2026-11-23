@@ -33,7 +33,7 @@ Tokio is an open-source personal AI assistant core built for **Telegram Serverle
 
 ## 3. Agent Runtime & Core Engines
 
-- **ReAct Engine (`src/lib/agent/engine.ts`)**: Native tool-calling loop with **54 registered tools** (`src/lib/agent/tools/index.ts` across `tasks`, `finances`, `notes`, `medications`, `runway`, `triage`, `diary`, `reasoning`, `systemDocs`, `trash`) and persistent checkpoints in `agent_state`.
+- **ReAct Engine (`src/lib/agent/engine.ts`)**: Native tool-calling loop with **60 registered tools** (`src/lib/agent/tools/index.ts` across `tasks`, `finances`, `notes`, `medications`, `runway`, `triage`, `diary`, `reasoning`, `systemDocs`, `trash`, and runtime `skills`) and persistent checkpoints in `agent_state`.
 - **Pure-TS BYOK Crypto (`src/lib/crypto.ts`, `src/lib/vendor/crypto.ts`)**: RFC 8439 ChaCha20-Poly1305 encryption and HMAC-SHA256 key handling for user-provided Gemini API keys (`/key` when enabled).
 - **Multimodal Processing**: Voice STT (`src/lib/stt.ts`) and receipt/balance screenshot OCR (`src/lib/vision.ts`).
 - **Deterministic Financial Parser (`src/lib/financial-parser.ts`)**: Parses expenses, income, transfers, and balances with instant rollback (`/undo` and inline callback buttons).

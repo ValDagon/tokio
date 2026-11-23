@@ -6,7 +6,7 @@
 
 ## 1. Design Principles (Level 1 Declarative Overlay)
 
-1. **Zero Executable Code**: An overlay contains **only** declarative data (`manifest.json` + Markdown prompt files). It never ships `.ts` or `.js` files, hooks, or custom SQL.
+1. **Zero Executable Code**: An overlay contains **only** declarative data (`manifest.json`, Markdown prompt files, and optional procedural `skills/*.md` files). It never ships `.ts` or `.js` files, hooks, or custom SQL.
 2. **Build-Time Compilation (Zero `node:fs` in Runtime)**: Telegram Serverless (`tgcloud.ai`) executes inside a V8 isolate with no filesystem access and a strict **100-module cap** (`MODULE_CAP = 100`). `scripts/compile-runtime-assets.mjs` compiles the active overlay at build time into `src/lib/overlay.generated.ts`, and `build.mjs` bundles `src/lib/overlay.ts` + `src/lib/overlay.generated.ts` into a **single** deployed module: `tgcloud/lib/overlay.js`.
 3. **Automatic Fallback (Decision 13)**: A fresh clone of the repository builds, passes tests, and deploys immediately with zero manual setup. When `/overlay/manifest.json` does not exist, the compiler automatically falls back to `example/overlay/`.
 4. **Private Overlay Isolation**: `/overlay/` and `src/lib/overlay.generated.ts` are listed in `.gitignore`. Personal branding, bank names, custom personas, and private support links stay strictly outside git history.
@@ -37,6 +37,9 @@ OVERLAY_DIR=../my-private-overlay npm run build
 ```text
 overlay/                              # (or example/overlay/)
 ├── manifest.json                     # Schema v1 declarative configuration
+├── skills/                           # Optional procedural Markdown skills
+│   ├── daily-focus.md                # YAML frontmatter (name, description, triggers) + steps
+│   └── inbox-triage.md
 └── prompts/
     ├── ru/
     │   ├── identity.md
@@ -136,6 +139,13 @@ Prompt Markdown files support `{{var}}` interpolation via `getOverlayPrompt(loca
 - `{{assistantName}}` — automatically populated from `getAssistantName(locale)`.
 - `{{currencies}}` — passed by the inbox classifier from `manifest.defaults.inboxCurrencies`.
 
+### Runtime Markdown Skills (`skills/*.md`)
+
+Overlays may provide an optional `skills/` directory containing procedural Markdown playbooks (`*.md`). At build time, `scripts/compile-runtime-assets.mjs` parses YAML frontmatter (`name`, `description`, optional `triggers`) and the Markdown body into `COMPILED_OVERLAY.skills` (`OverlaySkill[]`):
+
+- Each skill's `id` is derived from its kebab-case filename (without `.md`) and must be unique.
+- The agent system prompt receives only a compact progressive-disclosure index (`id` + `description`); full instructions are loaded on demand via `read_skill` (alongside user-drafted skills stored in SQLite `evolution_items`).
+
 ---
 
 ## 5. Feature Flags (Replacing `[public-only]` / `[edition-specific]`)
@@ -190,6 +200,8 @@ is the single, explicit way to open it:
 - `getAssistantName(locale?: OverlayLocaleCode): string` — returns localized or default assistant name.
 - `getOverlayPrompt(locale, section, vars?): string` — returns interpolated prompt Markdown.
 - `getPersonaStyleText(style, locale?): string | null` — resolves a persona style key (`mentor`, `strategist`, `calm_partner`, `concise`) or returns `null` for free-text styles.
+- `getOverlaySkills(): readonly OverlaySkill[]` — returns built-in Markdown skills compiled from `overlay/skills/*.md`.
+- `findOverlaySkill(idOrName: string): OverlaySkill | null` — resolves a built-in skill by kebab-case `id` or `name` (case-insensitive).
 - `getDemoSeed(locale?: OverlayLocaleCode): DemoSeedLocale` — returns localized demo seed data compiled from `example/seed/demo.json`.
 
 ---

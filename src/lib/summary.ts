@@ -1202,7 +1202,6 @@ export function helpText(locale: LocaleCode = 'ru'): string {
     t(locale, 'help.cmdDebts'),
     t(locale, 'help.cmdTasks'),
     t(locale, 'help.cmdMeds'),
-    t(locale, 'help.cmdDiary'),
     t(locale, 'help.cmdInbox'),
     t(locale, 'help.cmdDigest'),
     t(locale, 'help.cmdDiagnostics'),

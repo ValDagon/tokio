@@ -18,6 +18,8 @@ import {
   Square,
   Trash2,
   Type,
+  Wrench,
+  Ban,
   X,
   AlertTriangle,
 } from 'lucide-react';
@@ -26,6 +28,7 @@ import type {
   DocChapterSummary,
   Note,
   ReaderFontScale,
+  ReaderSkillData,
 } from '../types';
 import {
   extractNoteTitleAndBody,
@@ -610,7 +613,7 @@ export const RichMarkdown: React.FC<RichMarkdownProps> = ({
 };
 
 export interface ReaderSheetProps {
-  mode: 'note' | 'doc' | 'dossier';
+  mode: 'note' | 'doc' | 'dossier' | 'skill';
   onClose: () => void;
   triggerHaptic: (type?: 'light' | 'medium' | 'success') => void;
 
@@ -642,6 +645,11 @@ export interface ReaderSheetProps {
   dossierContent?: string;
   onRefreshDossier?: () => void;
   loadingDossier?: boolean;
+
+  // Skill mode props
+  skill?: ReaderSkillData | null;
+  onActivateSkill?: (skillId: string) => Promise<void>;
+  onRejectSkill?: (skillId: string) => Promise<boolean | void>;
 }
 
 const FONT_SCALE_ORDER: readonly ReaderFontScale[] = ['normal', 'large', 'xlarge'];
@@ -676,6 +684,9 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
   dossierContent = '',
   onRefreshDossier,
   loadingDossier,
+  skill,
+  onActivateSkill,
+  onRejectSkill,
 }) => {
   const { locale, t, formatDate } = useI18n();
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -683,6 +694,7 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedAll, setCopiedAll] = useState(false);
   const [showTocList, setShowTocList] = useState(false);
+  const [skillBusy, setSkillBusy] = useState(false);
 
   // Note editing state (keyed by note.id so switching notes automatically exits edit mode)
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
@@ -697,6 +709,8 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
       ? note?.id
       : mode === 'doc'
       ? docChapter?.slug
+      : mode === 'skill'
+      ? `skill-${skill?.source}-${skill?.id}`
       : 'dossier';
 
   useEffect(() => {
@@ -727,8 +741,11 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
     if (mode === 'dossier') {
       return dossierContent || '';
     }
+    if (mode === 'skill' && skill) {
+      return skill.body || '';
+    }
     return '';
-  }, [mode, note, docChapter, dossierContent]);
+  }, [mode, note, docChapter, dossierContent, skill]);
 
   const tocHeadings = useMemo(() => {
     const all = extractTocHeadings(fullMarkdown);
@@ -807,6 +824,10 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
       ? noteColumns.find((c) => c.id === note.column)?.name || note.column
       : mode === 'doc'
       ? t('reader.docsBadge')
+      : mode === 'skill' && skill
+      ? skill.source === 'builtin'
+        ? t('skills.builtinBadge')
+        : skill.status || t('skills.userBadge')
       : t('reader.dossierBadge');
 
   const headerTitle =
@@ -814,6 +835,8 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
       ? getNoteSummary(fullMarkdown, locale)
       : mode === 'doc' && docChapter
       ? docChapter.title
+      : mode === 'skill' && skill
+      ? skill.title
       : t('reader.dossierTitle');
 
   const [hasTgBack, setHasTgBack] = useState(() => {
@@ -1023,6 +1046,21 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
                 <BookOpen size={12} />
                 <span>{docChapter?.filename || 'docs/system'}</span>
               </span>
+            ) : mode === 'skill' && skill ? (
+              <>
+                <span className="reader-source-badge">
+                  <Wrench size={12} />
+                  <span>{skill.subtitle || skill.id}</span>
+                </span>
+                {skill.status && (
+                  <span className="reader-source-badge">{skill.status}</span>
+                )}
+                {(skill.runs !== undefined || skill.views !== undefined) && (
+                  <span className="note-date tabular-nums">
+                    {t('skills.telemetry', { runs: skill.runs ?? 0, views: skill.views ?? 0 })}
+                  </span>
+                )}
+              </>
             ) : (
               <span className="reader-source-badge">
                 <Database size={12} />
@@ -1053,6 +1091,16 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
             </button>
           )}
         </div>
+
+        {mode === 'skill' && skill && skill.triggers && skill.triggers.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+            {skill.triggers.map((trig) => (
+              <span key={trig} className="category-chip" style={{ fontSize: 11.5, padding: '2px 8px' }}>
+                {trig}
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* Horizontal Quick Section Chips for Docs */}
         {!showTocList && tocHeadings.length > 1 && !isEditingNote && (
@@ -1188,6 +1236,59 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
                 >
                   <Trash2 size={14} />
                   <span>{t('reader.toTrashBtn')}</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* User Skill Approval / Toggle Controls inside Reader */}
+        {mode === 'skill' && skill && skill.source === 'user' && (onActivateSkill || onRejectSkill) && (
+          <div className="reader-note-triage-panel">
+            <div className="reader-note-bottom-actions">
+              {onActivateSkill && skill.status !== 'active' && (
+                <button
+                  type="button"
+                  className="btn-note-to-task"
+                  disabled={skillBusy}
+                  onClick={async () => {
+                    try {
+                      setSkillBusy(true);
+                      triggerHaptic('medium');
+                      await onActivateSkill(skill.id);
+                      onClose();
+                    } finally {
+                      setSkillBusy(false);
+                    }
+                  }}
+                >
+                  <Check size={14} />
+                  <span>{t('skills.activateBtn')}</span>
+                </button>
+              )}
+
+              {onRejectSkill && (skill.status === 'pending' || skill.status === 'active') && (
+                <button
+                  type="button"
+                  className="reader-delete-note-btn"
+                  disabled={skillBusy}
+                  onClick={async () => {
+                    try {
+                      setSkillBusy(true);
+                      triggerHaptic('light');
+                      const ok = await onRejectSkill(skill.id);
+                      if (ok !== false) {
+                        onClose();
+                      }
+                    } finally {
+                      setSkillBusy(false);
+                    }
+                  }}
+                >
+                  <Ban size={14} />
+                  <span>
+                    {skill.status === 'active' ? t('skills.disableBtn') : t('skills.rejectBtn')}
+                  </span>
                 </button>
               )}
             </div>
