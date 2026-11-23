@@ -447,6 +447,32 @@ describe('diagnosticsReply', () => {
     expect(text).toContain('стоп &lt;b&gt;final&lt;/b&gt;');
   });
 
+  it('не падает, если причина остановки в крошке не строка', async () => {
+    await ensureUser(USER);
+    // Битая запись в `kv`: число или объект в поле раньше давали TypeError
+    // внутри `escapeHtml` и роняли весь разбор `/diagnostics`.
+    const baseTrace = {
+      startedAt: '2026-11-22T10:00:00.000Z',
+      updatedAt: '2026-11-22T10:00:05.000Z',
+      stage: 'send',
+      modelCalls: 1,
+      models: [],
+      tools: [],
+      deadlineAt: null,
+      deadlineCause: null,
+      indicator: 'none',
+    };
+
+    await kvSetJson('turn_trace:v1:1', { ...baseTrace, stopReason: 42 });
+    const numberText = await diagnosticsReply(USER);
+    expect(numberText).toContain('стоп 42');
+
+    await kvSetJson('turn_trace:v1:1', { ...baseTrace, stopReason: { code: 'budget' } });
+    const objectText = await diagnosticsReply(USER);
+    expect(objectText).toContain('⏱ <b>Ходы:</b>');
+    expect(objectText).toContain('стоп [object Object]');
+  });
+
   it('показывает кластеры с количеством и временем, а не сырые тексты', async () => {
     await ensureUser(USER);
     await db.run(sql`
