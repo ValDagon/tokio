@@ -319,6 +319,114 @@ export async function patchTurnTrace(userId: number, patch: TurnTracePatch): Pro
 }
 
 // ---------------------------------------------------------------------------
+// Последний отказ модели: причина, по которой ход ответил «модель недоступна»
+// ---------------------------------------------------------------------------
+
+/**
+ * Отказ модели хранится **на пользователя**.
+ *
+ * До 23.11.2026 ключ был один на инстанс (`llm_last_failure`), поэтому в
+ * публичном ядре с несколькими арендаторами `/diagnostics` и ответ «модель
+ * сейчас недоступна» показывали отказ чужого аккаунта. Пишем только в свой
+ * ключ; старый глобальный читается как есть, пока по пользователю записи нет,
+ * — иначе уже записанные отказы исчезли бы из ответа сразу после выката.
+ * Двойной записи нет намеренно: глобальный ключ больше не обновляется и читается
+ * только как короткий фолбэк по `at` (`LEGACY_LLM_FAILURE_MAX_AGE_MS`) — иначе
+ * он жил бы вечно и показывал новому арендатору чужой отказ.
+ */
+export const LLM_FAILURE_KEY_PREFIX = 'llm_last_failure:';
+
+/** Ключ, которым отказ модели писался до появления персонального (23.11.2026). */
+export const LEGACY_LLM_FAILURE_KEY = 'llm_last_failure';
+
+/**
+ * Сколько старый глобальный ключ остаётся фолбэком.
+ *
+ * Он больше не обновляется, поэтому без срока жизни жил бы вечно: новый
+ * арендатор публичного ядра, у которого своих отказов ещё не было, видел бы в
+ * `/diagnostics` и в ответе «модель недоступна» отказ предыдущего владельца
+ * инстанса — включая сырое тело ответа провайдера. Час — это «тот же разговор»:
+ * столько запись остаётся ответом на «почему ты молчишь сейчас», и дальше
+ * молчит, как и положено отсутствию данных.
+ */
+export const LEGACY_LLM_FAILURE_MAX_AGE_MS = 60 * 60 * 1000;
+
+const llmFailureKey = (userId: number): string => `${LLM_FAILURE_KEY_PREFIX}${Number(userId)}`;
+
+/** Тело отказа провайдера: поля аддитивные, поэтому все опциональны. */
+export interface LastModelFailure {
+  status?: number;
+  at?: string;
+  detail?: string;
+  providerBody?: string | null;
+}
+
+/**
+ * Запись из `kv` как отказ; скаляр, массив и `null` — «записи нет».
+ * `kv` отдаёт JSON, поэтому форму проверяем здесь, а не у читателей.
+ * Статус нормализуется здесь же: `{status:'abc'}` не должен превращаться в
+ * «провайдер ответил NaN», а запись без статуса, времени и текста — в ложное
+ * «провайдер не ответил».
+ */
+function parseLastModelFailure(raw: unknown): LastModelFailure | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const status = Number(record.status);
+  const at = typeof record.at === 'string' && record.at.trim() ? record.at.trim() : undefined;
+  const detail = typeof record.detail === 'string' && record.detail.trim() ? record.detail : undefined;
+  const providerBody =
+    typeof record.providerBody === 'string' && record.providerBody.trim()
+      ? record.providerBody
+      : record.providerBody === null
+        ? null
+        : undefined;
+  const hasStatus = typeof record.status !== 'undefined' && Number.isFinite(status);
+  if (!hasStatus && !at && !detail) return null;
+  return {
+    ...(hasStatus ? { status: Math.trunc(status) } : {}),
+    ...(at ? { at } : {}),
+    ...(detail ? { detail } : {}),
+    ...(typeof providerBody === 'string' || providerBody === null ? { providerBody } : {}),
+  };
+}
+
+/** Запись ещё говорит о «сейчас»: `at` разбирается, не из будущего и не старше окна. */
+function isRecentFailure(record: LastModelFailure, nowMs: number): boolean {
+  const at = typeof record.at === 'string' ? Date.parse(record.at) : Number.NaN;
+  if (!Number.isFinite(at)) return false;
+  const age = nowMs - at;
+  return age >= 0 && age <= LEGACY_LLM_FAILURE_MAX_AGE_MS;
+}
+
+/** Записывает отказ модели этому пользователю (прошлый затирается). */
+export async function writeLastModelFailure(
+  userId: number,
+  record: LastModelFailure,
+): Promise<void> {
+  await kvSetJson(llmFailureKey(userId), record);
+}
+
+/**
+ * Последний отказ модели: свой ключ, а если его нет — старый глобальный.
+ *
+ * Фолбэк работает только при **отсутствии** персонального ключа и только для
+ * свежей записи (`isRecentFailure`): испорченный свой ключ означает, что
+ * пользователь уже живёт по новой схеме, и старый чужой отказ ему не ответ.
+ * Ошибка хранилища читается как «отказов нет»: журнал — украшение диагностики,
+ * его сбой не повод ронять ответ.
+ */
+export async function readLastModelFailure(userId: number): Promise<LastModelFailure | null> {
+  try {
+    const own = await kvGetJson<unknown>(llmFailureKey(userId), null);
+    if (own !== null) return parseLastModelFailure(own);
+    const legacy = parseLastModelFailure(await kvGetJson<unknown>(LEGACY_LLM_FAILURE_KEY, null));
+    return legacy && isRecentFailure(legacy, Date.now()) ? legacy : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Состояние хода агента: граница треда и действие, ждущее подтверждения
 // ---------------------------------------------------------------------------
 

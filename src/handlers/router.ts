@@ -796,7 +796,8 @@ async function handleMenu(userId: number, chatId: number): Promise<void> {
 
 /**
  * `/diagnostics` — что сломалось и сколько раз. Читает нормализованный журнал
- * (MU-3) и старый ключ последнего отказа модели; ничего не пишет.
+ * (MU-3) и последний отказ модели по пользователю (`llm_last_failure:<uid>`,
+ * старый глобальный ключ — только как короткий фолбэк); ничего не пишет.
  */
 async function handleDiagnostics(userId: number, chatId: number): Promise<void> {
   await sendTyping(chatId);

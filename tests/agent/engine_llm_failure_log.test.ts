@@ -46,7 +46,7 @@ describe('журнал отказов модели', () => {
     });
 
     expect(result.stopReason).toBe('llm_error');
-    const failure = await kvGetJson<FailureRecord | null>('llm_last_failure', null);
+    const failure = await kvGetJson<FailureRecord | null>(`llm_last_failure:${USER}`, null);
     expect(failure?.status).toBe(429);
     expect(failure?.detail).toContain('quota exceeded');
   });
@@ -65,7 +65,7 @@ describe('журнал отказов модели', () => {
     const result = await runAgent({ userId: USER, text: 'привет', tools: [], chatFn, now: NOW });
 
     expect(result.stopReason).toBe('llm_error');
-    const failure = await kvGetJson<FailureRecord | null>('llm_last_failure', null);
+    const failure = await kvGetJson<FailureRecord | null>(`llm_last_failure:${USER}`, null);
     expect(failure?.status).toBe(400);
     expect(failure?.providerBody).toBe(body);
   });
@@ -77,20 +77,22 @@ describe('журнал отказов модели', () => {
 
     await runAgent({ userId: USER, text: 'привет', tools: [], chatFn, now: NOW });
 
-    const failure = await kvGetJson<FailureRecord | null>('llm_last_failure', null);
+    const failure = await kvGetJson<FailureRecord | null>(`llm_last_failure:${USER}`, null);
     expect(failure?.status).toBe(400);
     expect(failure?.providerBody).toBeNull();
   });
 
-  it('старый ключ остаётся, а рядом появляется нормализованная сигнатура', async () => {
+  it('пишет ключ пользователя, а не глобальный, и кладёт нормализованную сигнатуру', async () => {
     const chatFn: AgentChatFn = async () => {
       throw Object.assign(new Error('gemini: model-a answered 503: upstream down'), { status: 503 });
     };
 
     await runAgent({ userId: USER, text: 'привет', tools: [], chatFn, now: NOW });
 
-    // Совместимость: по этому ключу работает ответ при недоступной модели.
-    expect(await kvGetJson<FailureRecord | null>('llm_last_failure', null)).not.toBeNull();
+    // Ответ при недоступной модели и `/diagnostics` читают этот же ключ.
+    expect(await kvGetJson<FailureRecord | null>(`llm_last_failure:${USER}`, null)).not.toBeNull();
+    // Глобальный ключ больше не пишется: он остался только фолбэком на чтение.
+    expect(await kvGetJson<FailureRecord | null>('llm_last_failure', null)).toBeNull();
 
     const [aggregate] = await listFailureAggregates(USER);
     expect(aggregate).toMatchObject({

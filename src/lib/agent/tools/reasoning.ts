@@ -34,11 +34,14 @@ import {
   listEntityRelationsBidirectional,
   matchesEntityQuery,
   normalizeEntityName,
+  readLastModelFailure,
+  readTurnTrace,
 } from '../../dal/misc';
 import { listNotes } from '../../dal/notes';
 import { listCategories, listTasks } from '../../dal/tasks';
 import { getUser } from '../../dal/users';
 import { dateKey, formatMoney, sumCents } from '../../utils';
+import { turnTraceView, type TurnTraceView } from '../../summary';
 import {
   CUSTOM_INSTRUCTIONS_SLUG,
   computeWorkloadMetrics,
@@ -422,6 +425,197 @@ async function getCustomDirectives(_args: ToolArgs, ctx: ToolContext): Promise<T
 }
 
 // ---------------------------------------------------------------------------
+// read_turn_log — агент читает собственный журнал хода
+// ---------------------------------------------------------------------------
+
+/**
+ * Ключи и токены в тексте отказа.
+ *
+ * `detail` движок пишет из `error.message` провайдера, а туда попадают эхо
+ * запроса, URL с `?key=…` и заголовки. Наблюдение инструмента уходит модели,
+ * поэтому значения ключей вычищаются до ответа: владелец читает этот текст
+ * глазами, и секрет не должен ни разу попасть в контекст модели.
+ */
+const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  // Ключи провайдеров: `sk-…`, `gsk_…`.
+  [/\b(?:sk|pk|rk|gsk)[-_][A-Za-z0-9_-]{8,}/g, '[ключ скрыт]'],
+  // Google/Gemini: `AIza…`.
+  [/\bAIza[0-9A-Za-z_-]{10,}/g, '[ключ скрыт]'],
+  // Токен Telegram-бота: `<id>:<секрет>`.
+  [/\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g, '[токен скрыт]'],
+  // `Authorization: Bearer <секрет>`.
+  [/\bBearer\s+[A-Za-z0-9._~+/-]{8,}/gi, 'Bearer [секрет скрыт]'],
+  // `?key=…`, `&api_key=…` в URL провайдера.
+  [/([?&](?:key|api_key|apikey|token|access_token)=)[^&\s]+/gi, '$1[секрет скрыт]'],
+  // `api_key=…`, `token: …`, `authorization=…`.
+  [
+    /\b(?:api[_-]?key|apikey|access[_-]?token|token|authorization)\b\s*[:=]\s*\S{6,}/gi,
+    '[секрет скрыт]',
+  ],
+];
+
+/** Вырезает из текста значения ключей; сам текст остаётся читаемым. */
+function redactSecrets(text: string): string {
+  let redacted = text;
+  for (const [pattern, replacement] of SECRET_PATTERNS) redacted = redacted.replace(pattern, replacement);
+  return redacted;
+}
+
+/** Последний отказ модели из `kv` — без сырого тела провайдера. */
+interface TurnLogFailure {
+  status: number;
+  at: string | null;
+  detail: string | null;
+}
+
+/** Счётчики ходов: сколько всего и сколько упёрлось в дедлайн. */
+interface TurnLogStats {
+  turns: number;
+  deadlineTurns: number;
+  updatedAt: string | null;
+}
+
+/**
+ * Отказ модели в виде, пригодном модели-читателю. Движок кладёт в запись ещё и
+ * `providerBody` — сырое тело ответа провайдера; в наблюдение оно не едет,
+ * потому что там бывает эхо запроса. `detail` уже обрезан движком и
+ * дополнительно вычищается здесь. Само чтение — по пользователю, из DAL:
+ * ключ и фолбэк на старый глобальный живут в одном месте.
+ */
+async function readLastModelFailureView(userId: number): Promise<TurnLogFailure | null> {
+  try {
+    const raw = await readLastModelFailure(userId);
+    if (!raw) return null;
+    const record = raw as Record<string, unknown>;
+
+    const status = Number(record.status);
+    const at = typeof record.at === 'string' && record.at.trim() ? record.at.trim() : null;
+    const detailText = typeof record.detail === 'string' ? record.detail : '';
+    const detail = detailText.trim()
+      ? redactSecrets(detailText.replace(/\s+/g, ' ').trim()).slice(0, 200)
+      : null;
+
+    const hasStatus = Number.isFinite(status);
+    if (!hasStatus && !at && !detail) return null;
+    return { status: hasStatus ? Math.trunc(status) : 0, at, detail };
+  } catch {
+    // журнал отказов — украшение диагностики: его сбой не повод падать
+    return null;
+  }
+}
+
+/** Счётчики ходов в проверенном виде; отсутствующая запись — `null`. */
+function turnStatsView(
+  stats: Awaited<ReturnType<typeof readTurnTrace>>['stats'],
+): TurnLogStats | null {
+  if (!stats) return null;
+  return {
+    turns: Math.max(0, Math.trunc(Number(stats.turns)) || 0),
+    deadlineTurns: Math.max(0, Math.trunc(Number(stats.deadlineTurns)) || 0),
+    updatedAt:
+      typeof stats.updatedAt === 'string' && stats.updatedAt.trim()
+        ? stats.updatedAt.trim()
+        : null,
+  };
+}
+
+/** Длительность хода по меткам крошки; нечитаемые метки — `null`. */
+function traceDurationMs(trace: TurnTraceView): number | null {
+  const startedAt = Date.parse(trace.startedAt);
+  const updatedAt = Date.parse(trace.updatedAt);
+  if (!Number.isFinite(startedAt) || !Number.isFinite(updatedAt) || updatedAt < startedAt) return null;
+  return updatedAt - startedAt;
+}
+
+/**
+ * `read_turn_log`: последний ход пользователя из его крошки.
+ *
+ * Зачем: 23.11.2026 владелец спросил «а почему ты не можешь сам читать логи
+ * сессий моих в боте?» — ни один из 56 инструментов не читал собственный
+ * журнал, поэтому на «почему ты молчал» агент отвечал догадками, а разбирать
+ * причину приходилось снаружи, руками читая `kv`. Инструмент только
+ * читает `turn_trace:v1` / `turn_stats:v1` и последний отказ модели по
+ * пользователю (`llm_last_failure:<uid>`, старый глобальный ключ — короткий
+ * фолбэк) и ничего не пишет; пустой или битый журнал — честный ответ
+ * «читать нечего», а не ошибка.
+ */
+async function readTurnLog(_args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
+  // Владелец — только из контекста: аргумент `user_id` модель может подставить
+  // любой, и тогда чужой журнал стал бы доступен. Аргументы игнорируются.
+  try {
+    const [{ trace: rawTrace, stats: rawStats }, lastFailure] = await Promise.all([
+      readTurnTrace(ctx.userId),
+      readLastModelFailureView(ctx.userId),
+    ]);
+    const view = turnTraceView(rawTrace);
+    // Скаляр в `kv` (`turn_trace:v1` = 42) `normalizeTrace` разворачивает в
+    // пустой объект: формально запись есть, фактически — ни одного поля хода.
+    // Без этой проверки инструмент печатал бы «журнал из прочерков» вместо
+    // честного «читать нечего».
+    const trace = view && (view.startedAt || view.updatedAt || view.stage) ? view : null;
+    const stats = turnStatsView(rawStats);
+    const data = { userId: ctx.userId, trace, stats, lastFailure };
+
+    // Отказ модели — единственный факт, который переживает отсутствие крошки:
+    // ход мог умереть до первой записи, и тогда именно он и есть ответ на
+    // «почему ты молчал». Поэтому строка строится до раннего выхода.
+    const failureLine = lastFailure
+      ? `⚠️ Последний отказ модели: статус ${lastFailure.status}` +
+        (lastFailure.at ? ` в ${lastFailure.at}` : '') +
+        (lastFailure.detail ? ` — ${lastFailure.detail}` : '')
+      : null;
+
+    if (!trace && !stats) {
+      return {
+        ok: true,
+        content: [
+          '📭 Журнала ходов нет: бот ещё не записал ни одного хода этого пользователя (ключи turn_trace:v1 и turn_stats:v1 пусты). Читать нечего — это не ошибка.',
+          ...(failureLine ? [failureLine] : []),
+        ].join('\n'),
+        data,
+      };
+    }
+
+    const lines: string[] = ['🧾 Журнал последнего хода:'];
+    if (trace) {
+      const duration = traceDurationMs(trace);
+      lines.push(`• Начат: ${trace.startedAt || '—'}`);
+      lines.push(
+        `• Обновлён: ${trace.updatedAt || '—'}` +
+          (duration === null ? '' : ` (длительность ${Math.round(duration / 100) / 10} с)`),
+      );
+      lines.push(`• Стадия: ${trace.stage || '—'} · вызовов модели: ${trace.modelCalls}`);
+      lines.push(`• Модели: ${trace.models.length > 0 ? trace.models.join(', ') : '—'}`);
+      lines.push(`• Инструменты: ${trace.tools.length > 0 ? trace.tools.join(', ') : '—'}`);
+      lines.push(
+        `• Дедлайн: ${
+          trace.deadlineCause
+            ? `${trace.deadlineCause}${trace.deadlineAt ? ` (${trace.deadlineAt})` : ''}`
+            : 'нет'
+        }`,
+      );
+      lines.push(`• Индикатор «⏳ …»: ${trace.indicator}`);
+      lines.push(`• Причина остановки: ${trace.stopReason ?? '—'}`);
+    } else {
+      lines.push('• Крошки последнего хода нет (ключ turn_trace:v1 пуст).');
+    }
+
+    lines.push(
+      stats
+        ? `📊 Ходов всего: ${stats.turns} · из них по дедлайну: ${stats.deadlineTurns}`
+        : '📊 Счётчика ходов нет (ключ turn_stats:v1 пуст).',
+    );
+
+    if (failureLine) lines.push(failureLine);
+    else lines.push('⚠️ Отказов модели в журнале нет.');
+
+    return { ok: true, content: lines.join('\n'), data };
+  } catch (error) {
+    return fail(`Не удалось прочитать журнал хода: ${errorText(error)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Экспорт
 // ---------------------------------------------------------------------------
 
@@ -503,6 +697,14 @@ export const reasoningTools: Tool[] = [
       required: ['rule'],
     },
     run: rememberRuleTool,
+  },
+  {
+    name: 'read_turn_log',
+    effect: { kind: 'read' },
+    description:
+      'Показывает собственный журнал последнего хода: когда начался и закончился, до какой стадии дошёл, какие модели и инструменты вызывались, почему сработал дедлайн, что стало с индикатором «⏳ …» и почему ход остановился, плюс счётчики ходов и последний отказ модели. Вызывай, когда спрашивают «почему ты молчал», «почему так долго думал», «что с тобой было». Только чтение: ничего не пишет.',
+    schema: { type: 'object', properties: {}, required: [] },
+    run: readTurnLog,
   },
 ];
 

@@ -21,6 +21,7 @@
     "pretypecheck": "node scripts/ensure-secrets-stub.mjs && node scripts/compile-runtime-assets.mjs",
     "pretest": "node scripts/ensure-secrets-stub.mjs && node scripts/compile-runtime-assets.mjs",
     "check:leaks": "node scripts/check-leaks.mjs",
+    "check-bundle-graph": "node scripts/check_bundle_graph.mjs tgcloud",
     "check:leaks:history": "node scripts/check-leaks.mjs --git-history"
   },
   "devDependencies": {
