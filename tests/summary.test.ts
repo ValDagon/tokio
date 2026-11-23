@@ -473,6 +473,39 @@ describe('diagnosticsReply', () => {
     expect(objectText).toContain('стоп [object Object]');
   });
 
+  it('не падает, если стадия хода в крошке не строка', async () => {
+    await ensureUser(USER);
+    // Та же битая запись `kv`, что и у `stopReason`: стадия приходит числом
+    // или объектом и уходит в шаблон «стадия {{stage}}».
+    const baseTrace = {
+      startedAt: '2026-11-22T10:00:00.000Z',
+      updatedAt: '2026-11-22T10:00:05.000Z',
+      modelCalls: 1,
+      models: [],
+      tools: [],
+      deadlineAt: null,
+      deadlineCause: null,
+      indicator: 'none',
+      stopReason: null,
+    };
+
+    await kvSetJson('turn_trace:v1:1', { ...baseTrace, stage: 42 });
+    const numberText = await diagnosticsReply(USER);
+    expect(numberText).toContain('стадия 42');
+
+    await kvSetJson('turn_trace:v1:1', { ...baseTrace, stage: { code: 'send' } });
+    const objectText = await diagnosticsReply(USER);
+    expect(objectText).toContain('⏱ <b>Ходы:</b>');
+    expect(objectText).toContain('стадия [object Object]');
+
+    // Собственно исправление — экранирование: стадия из `kv` это данные, а не
+    // разметка, и HTML в ней не должен становиться тегом в ответе `/diagnostics`.
+    await kvSetJson('turn_trace:v1:1', { ...baseTrace, stage: '<b>x</b>' });
+    const htmlText = await diagnosticsReply(USER);
+    expect(htmlText).toContain('стадия &lt;b&gt;x&lt;/b&gt;');
+    expect(htmlText).not.toContain('стадия <b>x</b>');
+  });
+
   it('показывает кластеры с количеством и временем, а не сырые тексты', async () => {
     await ensureUser(USER);
     await db.run(sql`

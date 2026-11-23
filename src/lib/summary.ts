@@ -413,7 +413,10 @@ function turnTraceLine(
           })}`
         : shownTools.join(', ');
     const details = [
-      t(locale, 'diagnostics.stage', { stage: trace.stage }),
+      // Поле приходит из `kv` строкой JSON: битая запись может положить сюда
+      // число или объект. `String` + `escapeHtml` — тот же приём, что у
+      // `stopReason` ниже: значение уходит в HTML-ответ `/diagnostics`.
+      t(locale, 'diagnostics.stage', { stage: escapeHtml(String(trace.stage)) }),
       ...(cause ? [t(locale, 'diagnostics.deadline', { cause })] : []),
       t(locale, 'diagnostics.indicator', { state: indicator }),
       ...(models.length > 0

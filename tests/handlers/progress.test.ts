@@ -148,9 +148,9 @@ describe('живая индикация хода агента', () => {
     // «Печатает…» — первый вызов хода, до обращения к модели.
     expect(apiCalls[0]?.method).toBe('sendChatAction');
     expect(apiCalls[0]?.params).toMatchObject({ chat_id: CHAT, action: 'typing' });
-    // Старт хода и первая стадия модели: строки ещё нет. Как только строка
-    // открыта, повторная стадия модели второго «печатает…» уже не шлёт.
-    expect(typingCalls()).toHaveLength(2);
+    // Старт хода и первая стадия модели — один сигнал: стадия пришла в ту же
+    // секунду, порог `TYPING_REFRESH_MS` второй `sendChatAction` не пускает.
+    expect(typingCalls()).toHaveLength(1);
 
     // Одна эфемерная строка: появляется на медленной стадии с подписью инструмента.
     const [indicator] = ephemeralSends();
@@ -177,6 +177,18 @@ describe('живая индикация хода агента', () => {
     expect(tail).toEqual(['sendMessage', 'deleteMessage']);
   });
 
+  it('begin() и первая стадия модели дают одно «печатает…»', async () => {
+    scriptTurn([{ afterMs: 300, stage: 'model' }], FINAL_RUN);
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
+
+    // Порог `TYPING_REFRESH_MS` (5 с): стадия модели через 0,3 с после старта —
+    // тот же сигнал, что уже ушёл из `begin()`, второго вызова в узком месте нет.
+    expect(typingCalls()).toHaveLength(1);
+    // Строки прогресса не было: ход быстрый, показывать нечего.
+    expect(ephemeralSends()).toHaveLength(0);
+  });
+
   it('повторная стадия модели при открытой строке не шлёт второе «печатает…»', async () => {
     scriptTurn(
       [
@@ -189,8 +201,9 @@ describe('живая индикация хода агента', () => {
 
     await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
 
-    // «Печатает…» — старт хода и первая стадия модели, когда строки ещё нет.
-    expect(typingCalls()).toHaveLength(2);
+    // «Печатает…» — только старт хода: первая стадия модели попадает в порог
+    // `TYPING_REFRESH_MS`, а когда строка открыта, её продлевает правка.
+    expect(typingCalls()).toHaveLength(1);
     // Строка открыта: повтор стадии модели продлевает её правкой, а не вторым
     // sendChatAction в узком месте перед отправкой ответа.
     expect(ephemeralSends()).toHaveLength(1);
@@ -198,6 +211,33 @@ describe('живая индикация хода агента', () => {
       chat_id: CHAT,
       text: '⏳ Думаю…',
     });
+  });
+
+  it('отказ правки строки возвращает «печатает…», не сбрасывая строку', async () => {
+    let editAttempts = 0;
+    (api as Record<string, unknown>).editMessageText = async () => {
+      editAttempts += 1;
+      throw new BotApiError('editMessageText', 500, 'Internal Server Error');
+    };
+    scriptTurn(
+      [
+        { afterMs: 0, stage: 'model' },
+        { afterMs: 9_000, stage: 'tool', tool: 'add_expense' },
+        { afterMs: 11_000, stage: 'model' },
+      ],
+      FINAL_RUN,
+    );
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
+
+    // Правка отказала — вместо тишины до конца хода пользователь получает
+    // продление «печатает…» (старт хода + отказ правки).
+    expect(editAttempts).toBe(1);
+    expect(typingCalls()).toHaveLength(2);
+    expect(typingCalls().at(-1)?.params).toMatchObject({ chat_id: CHAT, action: 'typing' });
+    // Строку не бросили: в конце хода она погашена, ответ ушёл обычным текстом.
+    expect(callsOf('deleteMessage')).toHaveLength(1);
+    expect(sentTexts().at(-1)).toBe('Готово: посчитал.');
   });
 
   it('предел хода: детерминированный ответ уходит, строка индикатора гаснет', async () => {
@@ -242,6 +282,10 @@ describe('живая индикация хода агента', () => {
     const [indicator] = ephemeralSends();
     expect(ephemeralSends()).toHaveLength(1);
     expect(String(indicator?.params.text)).toBe('⏳ Думаю…');
+    // Положительная ветка порога: строка открывается только на 14,5 с, поэтому
+    // стадия модели после 5 с обязана продлить индикатор ещё раз — иначе
+    // пользователь видит 9,5 с тишины.
+    expect(typingCalls()).toHaveLength(2);
     // Ответ ушёл обычным сообщением, строка погашена — ничего не висит.
     expect(sentTexts().at(-1)).toBe('Готово: посчитал.');
     expect(callsOf('deleteMessage')).toHaveLength(1);
