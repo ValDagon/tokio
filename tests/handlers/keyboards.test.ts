@@ -10,6 +10,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { getOverlay, resetOverlayOverride, setOverlayOverride } from '../../src/lib/overlay';
+
 import {
   buildAgentDeepLinkKeyboard,
   buildOpenAppButton,
@@ -56,6 +58,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  resetOverlayOverride();
 });
 
 describe('webAppUrl', () => {
@@ -73,6 +77,34 @@ describe('webAppUrl', () => {
     expect(webAppUrl()).toBeNull();
     vi.stubEnv('WEBAPP_URL', 'mini.example.com');
     expect(webAppUrl()).toBeNull();
+  });
+
+  it('при отсутствии WEBAPP_URL/MINIAPP_URL и в V8-изоляте (process=undefined) берёт brand.miniAppUrl из оверлея', () => {
+    const current = getOverlay();
+    setOverlayOverride({
+      ...current,
+      manifest: {
+        ...current.manifest,
+        brand: {
+          ...current.manifest.brand,
+          miniAppUrl: 'https://app.example.com/',
+        },
+      },
+    });
+    const prevWebapp = process.env.WEBAPP_URL;
+    const prevMiniapp = process.env.MINIAPP_URL;
+    delete process.env.WEBAPP_URL;
+    delete process.env.MINIAPP_URL;
+    try {
+      expect(webAppUrl()).toBe('https://app.example.com/');
+
+      vi.stubGlobal('process', undefined);
+      expect(webAppUrl()).toBe('https://app.example.com/');
+    } finally {
+      vi.unstubAllGlobals();
+      if (prevWebapp !== undefined) process.env.WEBAPP_URL = prevWebapp;
+      if (prevMiniapp !== undefined) process.env.MINIAPP_URL = prevMiniapp;
+    }
   });
 });
 

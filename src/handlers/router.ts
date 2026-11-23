@@ -806,6 +806,7 @@ async function handleByok(userId: number, chatId: number, keyArg?: string): Prom
  */
 async function handleMenu(userId: number, chatId: number): Promise<void> {
   const locale = await loadUserLocale(userId);
+  await applyMenuButton(chatId, locale);
   await safeAnswer(chatId, MENU_TEXT, {
     replyMarkup: getMainKeyboard(locale),
     keepReplyKeyboard: true,
