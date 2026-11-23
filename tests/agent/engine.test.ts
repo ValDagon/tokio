@@ -915,7 +915,7 @@ describe('runAgent: нативный function calling', () => {
   });
 
   it('параллельно запускает смежные read-only тулзы и сохраняет порядок декларации в steps и треде', async () => {
-    expect(READ_ONLY_TOOL_NAMES.size).toBe(17);
+    expect(READ_ONLY_TOOL_NAMES.size).toBe(18);
 
     const events: string[] = [];
     let releaseListTasks!: () => void;

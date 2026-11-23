@@ -56,7 +56,7 @@ describe('runAgent: read-only ход не выполняет write-тулзы', 
 
     const specs = requests[0]?.tools ?? [];
     const names = specs.map((spec) => spec.name);
-    expect(names.length).toBe(17);
+    expect(names.length).toBe(18);
     expect(names).not.toContain('delete_note');
     expect(names).not.toContain('add_task');
     expect(names).toContain('list_tasks');

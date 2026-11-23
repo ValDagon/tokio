@@ -130,7 +130,7 @@ beforeEach(async () => {
 
 describe('классификация эффектов', () => {
   it('у каждой тулзы валидный effect', () => {
-    expect(agentTools.length).toBe(56);
+    expect(agentTools.length).toBe(57);
     for (const tool of agentTools) {
       expect({ tool: tool.name, kind: tool.effect.kind }).toEqual({
         tool: tool.name,
@@ -177,7 +177,7 @@ describe('классификация эффектов', () => {
       .map((tool) => tool.name)
       .sort();
     expect(readNames).toEqual([...READ_ONLY_TOOL_NAMES].sort());
-    expect(readNames.length).toBe(17);
+    expect(readNames.length).toBe(18);
   });
 });
 

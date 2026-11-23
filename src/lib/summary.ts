@@ -18,7 +18,7 @@
 import { BASE_CURRENCY, type RateTable, convert, getRates, hasRate, toEurCents } from './dal/fx';
 import { listAccounts, listLiabilities, listTransactions } from './dal/finances';
 import { listDoses } from './dal/medications';
-import { kvGetJson, readTurnTrace } from './dal/misc';
+import { kvGetJson, readLastModelFailure, readTurnTrace, type TurnTrace } from './dal/misc';
 import {
   CLOCK_STALL_AFTER_MINUTES,
   clockHeartbeatKey,
@@ -299,13 +299,12 @@ function providerFailureText(
 /**
  * Причина последнего отказа модели — из `kv`, куда её пишет движок.
  * Нужна, чтобы вместо «попробуйте позже» сказать, что именно случилось.
+ * Отказ читается по пользователю (`readLastModelFailure`): в публичном ядре
+ * глобальный ключ показывал бы отказ чужого аккаунта, поэтому он остался
+ * только фолбэком на час после выката.
  */
-async function llmFailureReason(): Promise<string> {
-  const failure = await kvGetJson<{
-    status?: number;
-    detail?: string;
-    providerBody?: string | null;
-  } | null>('llm_last_failure', null);
+async function llmFailureReason(userId: number): Promise<string> {
+  const failure = await readLastModelFailure(userId);
   if (!failure) return 'нет ответа от провайдера';
   const status = Number(failure.status ?? 0);
   if (status === 429) return 'провайдер упёрся в лимит запросов';
@@ -326,7 +325,7 @@ async function llmFailureReason(): Promise<string> {
   opts: SummaryOptions = {},
 ): Promise<string> {
   const lower = text.toLowerCase();
-  const head = `⚠️ **Модель сейчас недоступна** — ${await llmFailureReason()}.`;
+  const head = `⚠️ **Модель сейчас недоступна** — ${await llmFailureReason(userId)}.`;
 
   const wantsMoney =
     /(деньг|денег|потрат|трат|расход|баланс|долг|кредит|счёт|счет|плат[её]ж|бюджет)/.test(lower);
@@ -364,6 +363,73 @@ function diagnosticsStamp(at: string | null, timeZone: string, locale: LocaleCod
   return formatDateTime(new Date(parsed), timeZone);
 }
 
+/** Причина дедлайна как токен: идентификатор для форензики, а не проза. */
+export type TurnDeadlineCauseToken = 'budget' | 'tools-skipped';
+
+/** Судьба живой строки «⏳ …» как токен. */
+export type TurnIndicatorToken = 'none' | 'shown' | 'unavailable';
+
+/**
+ * Крошка хода после проверки формы.
+ *
+ * `kv` отдаёт JSON строкой, поэтому любое поле может прийти числом, объектом,
+ * массивом мусора или отсутствовать. Разбор обязан это пережить: раньше число
+ * в `stopReason`/`stage` давало `TypeError` внутри `escapeHtml` и роняло ответ
+ * `/diagnostics` целиком. Токены стадий, причин дедлайна и индикатора остаются
+ * идентификаторами — их читают и локализованная строка диагностики, и
+ * инструмент агента `read_turn_log`, который пересказывает крошку модели.
+ */
+export interface TurnTraceView {
+  startedAt: string;
+  updatedAt: string;
+  stage: string;
+  modelCalls: number;
+  models: string[];
+  tools: string[];
+  deadlineAt: string | null;
+  deadlineCause: TurnDeadlineCauseToken | null;
+  indicator: TurnIndicatorToken;
+  stopReason: string | null;
+}
+
+/** Поле из `kv` как текст: `42` → `'42'`, объект → `'[object Object]'`, пусто → `''`. */
+function traceText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return typeof value === 'string' ? value : String(value);
+}
+
+/** Непустой текст поля или `null` — для меток времени и причины остановки. */
+function traceMaybeText(value: unknown): string | null {
+  const text = traceText(value).trim();
+  return text ? text : null;
+}
+
+/**
+ * Проверенная форма крошки; `null` — записи нет. Единственное место, где
+ * сырые поля из `kv` превращаются в значения: `/diagnostics` и инструмент
+ * агента читают один и тот же разбор, поэтому битая запись не может дать
+ * разные ответы в двух местах.
+ */
+export function turnTraceView(trace: TurnTrace | null): TurnTraceView | null {
+  if (!trace) return null;
+  return {
+    startedAt: traceText(trace.startedAt),
+    updatedAt: traceText(trace.updatedAt),
+    stage: traceText(trace.stage),
+    modelCalls: Math.max(0, Math.trunc(Number(trace.modelCalls)) || 0),
+    models: Array.isArray(trace.models) ? trace.models.filter((model) => typeof model === 'string') : [],
+    tools: Array.isArray(trace.tools) ? trace.tools.filter((name) => typeof name === 'string') : [],
+    deadlineAt: traceMaybeText(trace.deadlineAt),
+    deadlineCause:
+      trace.deadlineCause === 'budget' || trace.deadlineCause === 'tools-skipped'
+        ? trace.deadlineCause
+        : null,
+    indicator:
+      trace.indicator === 'shown' || trace.indicator === 'unavailable' ? trace.indicator : 'none',
+    stopReason: traceMaybeText(trace.stopReason),
+  };
+}
+
 /**
  * Строка крошки хода: сколько ходов было, сколько упёрлось в дедлайн, до какой
  * стадии дошёл последний, что стало с индикатором и какие тулзы он звал. Нужна,
@@ -375,11 +441,14 @@ function diagnosticsStamp(at: string | null, timeZone: string, locale: LocaleCod
  * нет: это идентификаторы для форензики, а не проза.
  */
 function turnTraceLine(
-  trace: Awaited<ReturnType<typeof readTurnTrace>>['trace'],
+  traceRaw: Awaited<ReturnType<typeof readTurnTrace>>['trace'],
   stats: Awaited<ReturnType<typeof readTurnTrace>>['stats'],
   timeZone: string,
   locale: LocaleCode,
 ): string | null {
+  // Форму значения проверяем в `turnTraceView`: крошка приходит из `kv` строкой
+  // JSON, а битая форма не должна ломать разбор всего `/diagnostics`.
+  const trace = turnTraceView(traceRaw);
   if (!trace && !stats) return null;
   const parts: string[] = [];
   if (stats && (stats.turns > 0 || stats.deadlineTurns > 0)) {
@@ -387,10 +456,6 @@ function turnTraceLine(
     parts.push(t(locale, 'diagnostics.deadlineTurns', { count: stats.deadlineTurns }));
   }
   if (trace) {
-    // Форму значения крошки проверяем здесь: она приходит из `kv` строкой JSON,
-    // а битая форма не должна ломать разбор всего `/diagnostics`.
-    const models = Array.isArray(trace.models) ? trace.models : [];
-    const tools = Array.isArray(trace.tools) ? trace.tools : [];
     const cause =
       trace.deadlineCause === 'tools-skipped'
         ? t(locale, 'diagnostics.causeToolsSkipped')
@@ -403,35 +468,35 @@ function turnTraceLine(
         : trace.indicator === 'unavailable'
           ? t(locale, 'diagnostics.indicatorUnavailable')
           : t(locale, 'diagnostics.indicatorNone');
-    const shownTools = tools
+    const shownTools = trace.tools
       .slice(0, DIAGNOSTICS_TOOL_LIMIT)
-      .map((name) => escapeHtml(String(name)));
+      .map((name) => escapeHtml(name));
     const toolsText =
-      tools.length > shownTools.length
+      trace.tools.length > shownTools.length
         ? `${shownTools.join(', ')}, ${t(locale, 'diagnostics.toolsMore', {
-            count: tools.length - shownTools.length,
+            count: trace.tools.length - shownTools.length,
           })}`
         : shownTools.join(', ');
     const details = [
-      // Поле приходит из `kv` строкой JSON: битая запись может положить сюда
-      // число или объект. `String` + `escapeHtml` — тот же приём, что у
-      // `stopReason` ниже: значение уходит в HTML-ответ `/diagnostics`.
-      t(locale, 'diagnostics.stage', { stage: escapeHtml(String(trace.stage)) }),
+      // Стадия приходит из `kv` строкой JSON: битая запись может положить сюда
+      // число или объект, поэтому текст уже приведён к строке в `turnTraceView`,
+      // а `escapeHtml` остаётся на месте — значение уходит в HTML-ответ.
+      t(locale, 'diagnostics.stage', { stage: escapeHtml(trace.stage) }),
       ...(cause ? [t(locale, 'diagnostics.deadline', { cause })] : []),
       t(locale, 'diagnostics.indicator', { state: indicator }),
-      ...(models.length > 0
+      ...(trace.models.length > 0
         ? [
             t(locale, 'diagnostics.models', {
-              models: models.map((model) => escapeHtml(String(model))).join(', '),
+              models: trace.models.map((model) => escapeHtml(model)).join(', '),
             }),
           ]
         : []),
       ...(shownTools.length > 0 ? [t(locale, 'diagnostics.tools', { tools: toolsText })] : []),
-      // Поле приходит из `kv` строкой JSON: старая или битая запись может
-      // положить сюда число или объект, и `replace` внутри `escapeHtml` упал бы
-      // с `TypeError` — приводим к строке до экранирования.
+      // Причина остановки тоже приходит из `kv`: битая запись может положить
+      // сюда число или объект, и `replace` внутри `escapeHtml` упал бы с
+      // `TypeError` — текст уже приведён к строке в `turnTraceView`.
       ...(trace.stopReason
-        ? [t(locale, 'diagnostics.stop', { reason: escapeHtml(String(trace.stopReason)) })]
+        ? [t(locale, 'diagnostics.stop', { reason: escapeHtml(trace.stopReason) })]
         : []),
     ];
     parts.push(`${diagnosticsStamp(trace.updatedAt, timeZone, locale)} · ${details.join(' · ')}`);
@@ -472,12 +537,7 @@ export async function diagnosticsReply(
   const limit = Math.max(1, Math.trunc(options.limit ?? DIAGNOSTICS_CLUSTER_LIMIT));
   const [clusters, lastFailure, user] = await Promise.all([
     listFailureAggregates(userId, { limit }),
-    kvGetJson<{
-      status?: number;
-      at?: string;
-      detail?: string;
-      providerBody?: string | null;
-    } | null>('llm_last_failure', null),
+    readLastModelFailure(userId),
     getUser(userId),
   ]);
   const timeZone = user?.timezone ?? 'UTC';

@@ -67,7 +67,7 @@ describe('сбой модели на вопросе', () => {
   });
 
   it('называет причину отказа, если она известна', async () => {
-    await kvSetJson('llm_last_failure', { status: 429, at: '2026-11-14T12:41:00.000Z' });
+    await kvSetJson('llm_last_failure', { status: 429, at: new Date().toISOString() });
 
     await smartIngest({ userId: USER, chatId: CHAT, text: 'Куда я потратил деньги?', forwarded: false });
 
@@ -77,7 +77,7 @@ describe('сбой модели на вопросе', () => {
   it('отдаёт слова провайдера, а не только код 400', async () => {
     await kvSetJson('llm_last_failure', {
       status: 400,
-      at: '2026-11-14T12:41:00.000Z',
+      at: new Date().toISOString(),
       detail: 'gemini: model-a answered 400',
       providerBody: '{"error":{"message":"Function call is missing a name"}}',
     });

@@ -540,7 +540,7 @@ describe('diagnosticsReply', () => {
     await ensureUser(USER);
     await kvSetJson('llm_last_failure', {
       status: 429,
-      at: '2026-11-14T12:41:00.000Z',
+      at: new Date().toISOString(),
       detail: 'quota exceeded',
     });
     await recordFailure(USER, { stage: 'agent', reason: 'llm_error', detail: 'quota' });
@@ -559,7 +559,7 @@ describe('diagnosticsReply', () => {
     await ensureUser(USER);
     await kvSetJson('llm_last_failure', {
       status: 400,
-      at: '2026-11-14T12:41:00.000Z',
+      at: new Date().toISOString(),
       detail: 'gemini: model-a answered 400',
       providerBody: '{"error":{"message":"Function call is missing a name"}}',
     });
@@ -574,7 +574,7 @@ describe('diagnosticsReply', () => {
     await ensureUser(USER);
     await kvSetJson('llm_last_failure', {
       status: 400,
-      at: '2026-11-14T12:41:00.000Z',
+      at: new Date().toISOString(),
       detail: 'gemini: model-a answered 400: Function call is missing a name',
     });
 
@@ -607,7 +607,7 @@ describe('diagnosticsReply', () => {
         tool: `tool_${i}`,
       });
     }
-    await kvSetJson('llm_last_failure', { status: 503, at: '2026-11-14T12:41:00.000Z' });
+    await kvSetJson('llm_last_failure', { status: 503, at: new Date().toISOString() });
 
     const text = await diagnosticsReply(USER);
 
@@ -711,7 +711,7 @@ describe('diagnosticsReply: локаль владельца', () => {
     await recordFailure(USER, { stage: 'agent', reason: 'llm_error' });
     await kvSetJson('llm_last_failure', {
       status: 429,
-      at: '2026-11-22T14:41:00.000Z',
+      at: new Date().toISOString(),
       detail: 'quota exceeded',
     });
     const filled = await diagnosticsReply(USER);

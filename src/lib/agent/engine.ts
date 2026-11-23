@@ -37,11 +37,11 @@ import { DEFAULT_BASE_CURRENCY, DEFAULT_TIMEZONE } from '../config.js';
 import { getChapter } from '../dal/docs.js';
 import { listDoses } from '../dal/medications.js';
 import {
-  kvSetJson,
   patchAgentTurnState,
   patchTurnTrace,
   readAgentTurnState,
   startTurnTrace,
+  writeLastModelFailure,
   type TurnDeadlineCause,
   type TurnTracePatch,
 } from '../dal/misc.js';
@@ -862,6 +862,7 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   'consult_system_docs',
   'synthesize_life_context',
   'get_custom_directives',
+  'read_turn_log',
 ]);
 
 /** Имя модели из ответа: строковый контракт модель не называет. */
@@ -1296,7 +1297,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           const rawBody = (error as { body?: unknown }).body;
           const providerBody =
             typeof rawBody === 'string' && rawBody.trim() ? rawBody.slice(0, 500) : null;
-          await kvSetJson('llm_last_failure', {
+          await writeLastModelFailure(userId, {
             status: Number.isFinite(status) ? status : 0,
             at: new Date().toISOString(),
             detail: message.slice(0, 200),
