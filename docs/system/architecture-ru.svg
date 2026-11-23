@@ -1,0 +1,299 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="960" viewBox="0 0 1600 960">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#090D16" />
+      <stop offset="50%" stop-color="#0D1322" />
+      <stop offset="100%" stop-color="#090E1A" />
+    </linearGradient>
+
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0E2A38" stop-opacity="0.92" />
+      <stop offset="100%" stop-color="#0B1926" stop-opacity="0.95" />
+    </linearGradient>
+
+    <linearGradient id="indigoGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#171E3B" stop-opacity="0.92" />
+      <stop offset="100%" stop-color="#0F1529" stop-opacity="0.95" />
+    </linearGradient>
+
+    <linearGradient id="amberGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#271D12" stop-opacity="0.90" />
+      <stop offset="100%" stop-color="#17131A" stop-opacity="0.95" />
+    </linearGradient>
+
+    <linearGradient id="emeraldGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0E2724" stop-opacity="0.92" />
+      <stop offset="100%" stop-color="#0B191C" stop-opacity="0.95" />
+    </linearGradient>
+
+    <pattern id="dotGrid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#1E293B" opacity="0.65" />
+    </pattern>
+
+    <marker id="arrowCyan" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#22D3EE" />
+    </marker>
+    <marker id="arrowIndigo" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#818CF8" />
+    </marker>
+    <marker id="arrowAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#FBBF24" />
+    </marker>
+    <marker id="arrowEmerald" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#34D399" />
+    </marker>
+    <marker id="arrowSlate" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#64748B" />
+    </marker>
+
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif; }
+      .mono { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1600" height="960" fill="url(#bgGrad)" />
+  <rect width="1600" height="960" fill="url(#dotGrid)" />
+
+  <!-- Header -->
+  <text x="46" y="54" class="sans" font-size="28" font-weight="700" fill="#F8FAFC">
+    Как устроен Tokio (ValDagon/tokio) — вся система на одном листе
+  </text>
+  <text x="46" y="84" class="sans" font-size="16" font-weight="400" fill="#94A3B8">
+    100% TypeScript + SQLite внутри одного серверлесс-изолята tgcloud.ai (отклик &lt; 50 мс)
+  </text>
+
+  <!-- Top-right badge -->
+  <rect x="1220" y="34" width="335" height="44" rx="22" fill="#0F172A" stroke="#22D3EE" stroke-width="1.5" />
+  <circle cx="1246" cy="56" r="6" fill="#22D3EE" />
+  <text x="1264" y="61" class="sans" font-size="15" font-weight="600" fill="#E0F2FE">
+    Публичный бот: @LifeOS_Public_bot
+  </text>
+
+  <!-- Outer V8 Isolate Container -->
+  <rect x="448" y="122" width="1107" height="688" rx="22" fill="#0F172A" fill-opacity="0.45" stroke="#6366F1" stroke-width="2" stroke-dasharray="10 7" />
+  <rect x="472" y="106" width="535" height="30" rx="15" fill="#1E1B4B" stroke="#818CF8" stroke-width="1.5" />
+  <text x="490" y="126" class="sans" font-size="14" font-weight="600" fill="#E0E7FF">
+    ⚡ Один V8-изолят tgcloud.ai — без Docker, VPS и отдельной БД
+  </text>
+
+  <!-- ==================== BLOCK 1: TELEGRAM UI ==================== -->
+  <rect x="45" y="138" width="365" height="668" rx="18" fill="url(#cyanGrad)" stroke="#06B6D4" stroke-width="1.8" />
+  <text x="65" y="175" class="sans" font-size="20" font-weight="700" fill="#67E8F9">
+    1. Интерфейсы в Telegram
+  </text>
+
+  <!-- Card 1A: Chat Bot -->
+  <rect x="63" y="196" width="329" height="278" rx="12" fill="#0B1322" fill-opacity="0.88" stroke="#164E63" stroke-width="1.4" />
+  <text x="80" y="226" class="sans" font-size="16" font-weight="700" fill="#F8FAFC">
+    💬 Чат-бот (@LifeOS_Public_bot)
+  </text>
+  <line x1="80" y1="239" x2="375" y2="239" stroke="#1E293B" stroke-width="1" />
+
+  <text x="80" y="264" class="sans" font-size="13.5" fill="#E2E8F0">• Текст, голосовые, фото чеков</text>
+  <text x="80" y="294" class="sans" font-size="13.5" fill="#E2E8F0">• Двухслойная клавиатура:</text>
+  <text x="93" y="316" class="sans" font-size="12.5" fill="#94A3B8">2×3 Главное меню ↔ 4×3 Команды</text>
+  <text x="80" y="346" class="sans" font-size="13.5" fill="#E2E8F0">• 19 слэш-команд:</text>
+  <text x="93" y="368" class="mono" font-size="12" fill="#67E8F9">/start /status /balance /tasks</text>
+  <text x="93" y="388" class="mono" font-size="12" fill="#67E8F9">/skills /learn /triage /digest</text>
+  <text x="80" y="418" class="sans" font-size="13.5" fill="#E2E8F0">• Живой статус «⏳ Думаю…»</text>
+  <text x="93" y="440" class="sans" font-size="12.5" fill="#94A3B8">и кнопка отмены операций</text>
+
+  <!-- Card 1B: Mini App -->
+  <rect x="63" y="492" width="329" height="294" rx="12" fill="#0B1322" fill-opacity="0.88" stroke="#164E63" stroke-width="1.4" />
+  <text x="80" y="522" class="sans" font-size="16" font-weight="700" fill="#F8FAFC">
+    📱 Telegram Mini App (React 19)
+  </text>
+  <line x1="80" y1="535" x2="375" y2="535" stroke="#1E293B" stroke-width="1" />
+
+  <text x="80" y="560" class="sans" font-size="13.5" fill="#E2E8F0">• Веб-интерфейс внутри Telegram</text>
+  <text x="80" y="590" class="sans" font-size="13.5" fill="#E2E8F0">• 5 вкладок приложения:</text>
+  <text x="93" y="613" class="sans" font-size="13" font-weight="600" fill="#67E8F9">Сегодня · Задачи · Финансы</text>
+  <text x="93" y="635" class="sans" font-size="13" font-weight="600" fill="#67E8F9">Заметки · Система</text>
+  <text x="80" y="665" class="sans" font-size="13.5" fill="#E2E8F0">• 4 языка: RU / EN / SR / JA</text>
+  <text x="80" y="695" class="sans" font-size="13.5" fill="#E2E8F0">• Ввод своих API-ключей (BYOK)</text>
+  <text x="80" y="725" class="sans" font-size="13.5" fill="#E2E8F0">• Скиллы, бэклог, диагностика</text>
+  <text x="93" y="748" class="sans" font-size="12.5" fill="#94A3B8">и спокойный режим (Calm UI)</text>
+
+  <!-- ==================== BLOCK 2: CORE IN ISOLATE ==================== -->
+  <rect x="470" y="152" width="435" height="638" rx="18" fill="url(#indigoGrad)" stroke="#818CF8" stroke-width="1.8" />
+  <text x="492" y="188" class="sans" font-size="20" font-weight="700" fill="#A5B4FC">
+    2. Ядро сервера (91 TS-модуль)
+  </text>
+
+  <!-- Card 2A: Routing & RPC -->
+  <rect x="488" y="208" width="399" height="248" rx="12" fill="#0B1120" fill-opacity="0.88" stroke="#312E81" stroke-width="1.4" />
+  <text x="506" y="238" class="sans" font-size="16" font-weight="700" fill="#F8FAFC">
+    🚪 Вход, роутинг и защита
+  </text>
+  <line x1="506" y1="251" x2="869" y2="251" stroke="#1E293B" stroke-width="1" />
+
+  <text x="506" y="276" class="sans" font-size="13.5" fill="#E2E8F0">• Webhook бота (<tspan class="mono" font-size="12.5" fill="#A5B4FC">message.ts / router.ts</tspan>)</text>
+  <text x="520" y="298" class="sans" font-size="12.5" fill="#94A3B8">Разбор сообщений и диспетчер 19 команд</text>
+
+  <text x="506" y="328" class="sans" font-size="13.5" fill="#E2E8F0">• Единый API: <tspan class="mono" font-size="12.5" fill="#A5B4FC">POST /api/rpc</tspan></text>
+  <text x="520" y="350" class="sans" font-size="12.5" fill="#94A3B8">Проверка подписи Telegram initData (HMAC)</text>
+
+  <text x="506" y="380" class="sans" font-size="13.5" fill="#E2E8F0">• Статика Mini App (<tspan class="mono" font-size="12.5" fill="#A5B4FC">miniapp-dist/</tspan>)</text>
+  <text x="520" y="402" class="sans" font-size="12.5" fill="#94A3B8">Отдаётся прямо из этого же изолята</text>
+
+  <text x="506" y="432" class="sans" font-size="13.5" fill="#E2E8F0">• Доступ и белый список (<tspan class="mono" font-size="12.5" fill="#A5B4FC">auth.ts</tspan>)</text>
+
+  <!-- Card 2B: Overlay Layer -->
+  <rect x="488" y="472" width="399" height="300" rx="12" fill="#0B1120" fill-opacity="0.88" stroke="#312E81" stroke-width="1.4" />
+  <text x="506" y="502" class="sans" font-size="16" font-weight="700" fill="#F8FAFC">
+    🧩 Слой оверлея (настройка бота)
+  </text>
+  <text x="506" y="526" class="sans" font-size="12.5" fill="#94A3B8">
+    Движок <tspan class="mono" fill="#C7D2FE">core/</tspan> общий, отличия лежат в одной папке:
+  </text>
+
+  <!-- Sub-box Public Overlay -->
+  <rect x="506" y="544" width="363" height="98" rx="10" fill="#062824" stroke="#10B981" stroke-width="1.3" />
+  <text x="520" y="568" class="sans" font-size="14" font-weight="700" fill="#34D399">
+    🌐 public-overlay/ (публичный Tokio)
+  </text>
+  <text x="520" y="592" class="sans" font-size="12.5" fill="#E2E8F0">• Бренд Tokio · URL &lt;app&gt;.tgcloud.ai</text>
+  <text x="520" y="614" class="sans" font-size="12.5" fill="#A7F3D0">• publicOpenAccess: true · пул $2 · скиллы</text>
+
+  <!-- Sub-box Personal Overlay -->
+  <rect x="506" y="654" width="363" height="98" rx="10" fill="#231B0E" stroke="#F59E0B" stroke-width="1.3" />
+  <text x="520" y="678" class="sans" font-size="14" font-weight="700" fill="#FBBF24">
+    🔒 overlay/ (личный приватный бот)
+  </text>
+  <text x="520" y="702" class="sans" font-size="12.5" fill="#E2E8F0">• Бренд LifeOS · личный URL · 1 владелец</text>
+  <text x="520" y="724" class="sans" font-size="12.5" fill="#FDE68A">• Личные промпты, счета и приватные скиллы</text>
+
+  <!-- ==================== BLOCK 3: AI AGENT & MEDIA ==================== -->
+  <rect x="952" y="152" width="582" height="334" rx="18" fill="url(#amberGrad)" stroke="#F59E0B" stroke-width="1.8" />
+  <text x="974" y="186" class="sans" font-size="20" font-weight="700" fill="#FCD34D">
+    3. ИИ-Агент и Медиа-конвейер
+  </text>
+
+  <!-- Row 3A: Agent Engine -->
+  <rect x="970" y="204" width="546" height="96" rx="10" fill="#0B1120" fill-opacity="0.90" stroke="#78350F" stroke-width="1.3" />
+  <text x="986" y="229" class="sans" font-size="15" font-weight="700" fill="#F8FAFC">
+    🤖 Движок агента (<tspan class="mono" font-size="13.5" fill="#FCD34D">runAgent</tspan>)
+  </text>
+  <text x="986" y="254" class="sans" font-size="13" fill="#E2E8F0">
+    60 инструментов + runtime .md-скиллы (list_skills / read_skill / draft_skill)
+  </text>
+  <text x="986" y="278" class="sans" font-size="12.5" fill="#94A3B8">
+    Мягкий дедлайн 26 с · Защита Write-Gate (подтверждение опасных действий в kv)
+  </text>
+
+  <!-- Row 3B: Media & Parsers -->
+  <rect x="970" y="308" width="546" height="72" rx="10" fill="#0B1120" fill-opacity="0.90" stroke="#78350F" stroke-width="1.3" />
+  <text x="986" y="332" class="sans" font-size="15" font-weight="700" fill="#F8FAFC">
+    🎙️ Медиа и финансовый парсер
+  </text>
+  <text x="986" y="357" class="sans" font-size="12.2" fill="#E2E8F0">
+    Голос → текст (stt.ts) · Фото/чеки → OCR (vision.ts) · Парсер трат + [Отменить]
+  </text>
+
+  <!-- Row 3C: LLM Providers -->
+  <rect x="970" y="390" width="546" height="82" rx="10" fill="#0B1120" fill-opacity="0.90" stroke="#78350F" stroke-width="1.3" />
+  <text x="986" y="414" class="sans" font-size="15" font-weight="700" fill="#F8FAFC">
+    🔑 Модели и ключи (внешние LLM API)
+  </text>
+  <text x="986" y="438" class="sans" font-size="12.5" fill="#E2E8F0">
+    Стартовый пул $2 из коробки  или  свой ключ BYOK (шифрование ChaCha20):
+  </text>
+  <text x="986" y="458" class="mono" font-size="12.2" font-weight="600" fill="#FDE68A">
+    Gemini · OpenAI · DeepSeek · Anthropic
+  </text>
+
+  <!-- ==================== BLOCK 4: EMBEDDED SQLITE ==================== -->
+  <rect x="952" y="506" width="582" height="284" rx="18" fill="url(#emeraldGrad)" stroke="#10B981" stroke-width="1.8" />
+  <text x="974" y="540" class="sans" font-size="18.5" font-weight="700" fill="#6EE7B7">
+    4. База SQLite (24 таблицы)
+  </text>
+
+  <!-- Isolation Badge -->
+  <rect x="1322" y="518" width="194" height="30" rx="15" fill="#064E3B" stroke="#34D399" stroke-width="1.2" />
+  <text x="1338" y="538" class="sans" font-size="12.5" font-weight="600" fill="#A7F3D0">
+    🔒 Изоляция по user_id
+  </text>
+
+  <!-- Grid 2x2 -->
+  <!-- SQLite 4A -->
+  <rect x="970" y="562" width="265" height="100" rx="10" fill="#0B1120" fill-opacity="0.90" stroke="#065F46" stroke-width="1.3" />
+  <text x="986" y="588" class="mono" font-size="14.5" font-weight="700" fill="#34D399">tasks</text>
+  <text x="986" y="613" class="sans" font-size="12.5" fill="#E2E8F0">Задачи, события, категории,</text>
+  <text x="986" y="635" class="sans" font-size="12.5" fill="#94A3B8">сферы жизни и микро-фокус дня</text>
+
+  <!-- SQLite 4B -->
+  <rect x="1251" y="562" width="265" height="100" rx="10" fill="#0B1120" fill-opacity="0.90" stroke="#065F46" stroke-width="1.3" />
+  <text x="1267" y="588" class="mono" font-size="13" font-weight="700" fill="#34D399">accounts · transactions · fx</text>
+  <text x="1267" y="613" class="sans" font-size="12.5" fill="#E2E8F0">Счета, траты, долги (liabilities),</text>
+  <text x="1267" y="635" class="sans" font-size="12.5" fill="#94A3B8">курсы валют и расчёт Runway</text>
+
+  <!-- SQLite 4C -->
+  <rect x="970" y="674" width="265" height="100" rx="10" fill="#0B1120" fill-opacity="0.90" stroke="#065F46" stroke-width="1.3" />
+  <text x="986" y="700" class="mono" font-size="14.5" font-weight="700" fill="#34D399">notes</text>
+  <text x="986" y="725" class="sans" font-size="12.5" fill="#E2E8F0">5 колонок Канбана: инбокс,</text>
+  <text x="986" y="747" class="sans" font-size="12.5" fill="#94A3B8">задачи, идеи, дневник, архив</text>
+
+  <!-- SQLite 4D -->
+  <rect x="1251" y="674" width="265" height="100" rx="10" fill="#0B1120" fill-opacity="0.90" stroke="#065F46" stroke-width="1.3" />
+  <text x="1267" y="700" class="mono" font-size="13.5" font-weight="700" fill="#34D399">users · kv · due_jobs</text>
+  <text x="1267" y="725" class="sans" font-size="12.5" fill="#E2E8F0">Настройки, шифр BYOK, трейс</text>
+  <text x="1267" y="747" class="sans" font-size="12.5" fill="#94A3B8">хода и ленивый крон (тик часов)</text>
+
+  <!-- ==================== ARROWS ==================== -->
+  <!-- Chat Bot -> Webhook -->
+  <line x1="412" y1="316" x2="465" y2="316" stroke="#22D3EE" stroke-width="2.5" marker-start="url(#arrowCyan)" marker-end="url(#arrowCyan)" />
+  <rect x="415" y="286" width="48" height="20" rx="6" fill="#090D16" stroke="#164E63" stroke-width="1" />
+  <text x="439" y="300" text-anchor="middle" class="mono" font-size="10.5" font-weight="600" fill="#67E8F9">HTTPS</text>
+
+  <!-- Mini App <-> RPC -->
+  <line x1="412" y1="596" x2="465" y2="596" stroke="#22D3EE" stroke-width="2.5" marker-start="url(#arrowCyan)" marker-end="url(#arrowCyan)" />
+  <rect x="419" y="566" width="40" height="20" rx="6" fill="#090D16" stroke="#164E63" stroke-width="1" />
+  <text x="439" y="580" text-anchor="middle" class="mono" font-size="10.5" font-weight="600" fill="#67E8F9">RPC</text>
+
+  <!-- Block 2 <-> Block 3 -->
+  <line x1="908" y1="305" x2="948" y2="305" stroke="#FBBF24" stroke-width="2.5" marker-start="url(#arrowAmber)" marker-end="url(#arrowAmber)" />
+
+  <!-- Block 2 <-> Block 4 -->
+  <line x1="908" y1="648" x2="948" y2="648" stroke="#34D399" stroke-width="2.5" marker-start="url(#arrowEmerald)" marker-end="url(#arrowEmerald)" />
+
+  <!-- Block 3 <-> Block 4 (Tools read/write SQLite) -->
+  <line x1="1243" y1="489" x2="1243" y2="503" stroke="#34D399" stroke-width="2.5" marker-start="url(#arrowEmerald)" marker-end="url(#arrowEmerald)" />
+
+  <!-- ==================== FOOTER: GITHUB -> PROD ==================== -->
+  <rect x="45" y="830" width="1510" height="98" rx="16" fill="#0F172A" fill-opacity="0.92" stroke="#334155" stroke-width="1.5" />
+  <text x="68" y="857" class="sans" font-size="15" font-weight="700" fill="#E2E8F0">
+    🔄 Как код попадает в прод (GitHub Actions → tgcloud.ai)
+  </text>
+
+  <!-- Step 1 -->
+  <rect x="68" y="871" width="320" height="42" rx="10" fill="#1E293B" stroke="#475569" stroke-width="1.2" />
+  <text x="228" y="897" text-anchor="middle" class="sans" font-size="13.5" font-weight="600" fill="#F1F5F9">
+    1. Push / PR в ValDagon/tokio (main)
+  </text>
+
+  <line x1="393" y1="892" x2="424" y2="892" stroke="#64748B" stroke-width="2" marker-end="url(#arrowSlate)" />
+
+  <!-- Step 2 -->
+  <rect x="430" y="871" width="355" height="42" rx="10" fill="#1E293B" stroke="#475569" stroke-width="1.2" />
+  <text x="607" y="897" text-anchor="middle" class="sans" font-size="13.5" font-weight="600" fill="#F1F5F9">
+    2. CI: тесты (2 114 + 52) и check:leaks
+  </text>
+
+  <line x1="790" y1="892" x2="821" y2="892" stroke="#64748B" stroke-width="2" marker-end="url(#arrowSlate)" />
+
+  <!-- Step 3 -->
+  <rect x="827" y="871" width="345" height="42" rx="10" fill="#1E293B" stroke="#475569" stroke-width="1.2" />
+  <text x="999" y="897" text-anchor="middle" class="sans" font-size="13.5" font-weight="600" fill="#F1F5F9">
+    3. Сборка public-overlay/ + secrets.js
+  </text>
+
+  <line x1="1177" y1="892" x2="1208" y2="892" stroke="#64748B" stroke-width="2" marker-end="url(#arrowSlate)" />
+
+  <!-- Step 4 -->
+  <rect x="1214" y="871" width="318" height="42" rx="10" fill="#064E3B" stroke="#10B981" stroke-width="1.4" />
+  <text x="1373" y="897" text-anchor="middle" class="sans" font-size="13.5" font-weight="600" fill="#A7F3D0">
+    4. Деплой &lt;app&gt;.tgcloud.ai + смоук
+  </text>
+</svg>
