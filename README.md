@@ -19,6 +19,17 @@
 
 ## Architecture
 
+![Tokio Architecture](docs/system/architecture.svg)
+
+### How It Works in Plain Terms
+
+1. **One Serverless Isolate for Everything (`tgcloud.ai`)**: No VPS, Docker, or external DB server — the bot, Mini App static bundle (`miniapp-dist/`), and SQLite database run inside a single V8 isolate (91 TS modules, < 50 ms response).
+2. **Two User Entry Points (Chat + Mini App)**: The chat bot handles text, voice notes, and receipt photos (19 commands and a 2-layer keyboard), while the **React 19 Telegram Mini App** (5 tabs, 4 locales) calls the exact same backend via `POST /api/rpc` with `initData` HMAC verification.
+3. **Tool-Calling Agent (`runAgent`, 60 Tools + Skills)**: Records simple expenses and tasks right away, queries live numbers for deep questions, transcribes voice (`stt.ts`), reads receipt photos (`vision.ts`), guards destructive writes (`Write-Gate`), and respects a 26s soft deadline with live progress (`⏳ Thinking…`).
+4. **Embedded Multi-Tenant SQLite (24 Tables)**: Every user's data is strictly isolated by `user_id` across tasks (`tasks`), accounts/expenses/debts & FX rates (`accounts`, `transactions`, `liabilities`, `fx_rates`), 5-column Kanban notes (`notes`), settings, and Lazy Cron reminders (`users`, `kv`, `due_jobs`).
+5. **Models & Keys ($2 Trial Pool + BYOK)**: New users start immediately on the shared $2 pool, and personal API keys (**Gemini, OpenAI, DeepSeek, or Anthropic**) entered in the Mini App are encrypted inside the isolate using **ChaCha20-Poly1305**.
+6. **Shared `core/` + Swappable Overlay**: The neutral engine stays identical across instances, while branding, URLs, trial limits, access flags (`publicOpenAccess`), and runtime `.md` skills live in an overlay folder (`public-overlay/` or private `overlay/`). Pushing to `ValDagon/tokio` `main` runs CI tests and deploys automatically to `<app>.tgcloud.ai`.
+
 ```mermaid
 flowchart LR
   TG["Telegram Bot & Mini App<br/>(React 19 + Vite SPA)"] -->|Webhook & POST /api/rpc| ISO["Telegram Serverless V8 Isolate<br/>(tgcloud.ai, <= 100 modules)"]
@@ -40,7 +51,7 @@ For full runtime and module details, see [`docs/system/ARCHITECTURE.md`](docs/sy
 - **4-Locale Support (`EN`, `RU`, `SR-Latn`, `JA`)**: Localized bot replies, keyboards, onboarding wizard, prompts, Mini App UI, and starter demo seed (`locales/*.json` + `miniapp/src/i18n/`).
 - **60 Native Agent Tools**: Modular toolset covering tasks & recurring calendar events (`item_type: 'task' | 'event'`), multicurrency finances & debt queues, omnivorous Second Brain notes & knowledge graph, medications, runway forecasting, triage, diary, runtime skills (`list_skills`, `read_skill`, `draft_skill`), and soft-delete trash.
 - **Deterministic Financial Parser & Rollback**: Parses expenses, income, transfers, and multi-account balances across text, voice STT, and receipt/balance photos with one-tap `[Undo]` / `/undo`.
-- **Pure-TS ChaCha20-Poly1305 BYOK Encryption**: Zero native C++ dependencies; users can bring their own encrypted Gemini API key while honoring optional instance spend limits and open or fail-closed whitelist access modes.
+- **Pure-TS ChaCha20-Poly1305 BYOK Encryption**: Zero native C++ dependencies; users can bring their own encrypted API keys (`Gemini`, `OpenAI`, `DeepSeek`, `Anthropic`) while honoring optional instance spend limits and open or fail-closed whitelist access modes.
 - **3-Layer Leak Protection**: Private `overlay/` and `.forbidden-strings.local` are gitignored, `.githooks/pre-push` + `scripts/check-leaks.mjs` scan files and git history, and GitHub Actions runs `gitleaks` + leak checks on every push and pull request.
 
 ---
