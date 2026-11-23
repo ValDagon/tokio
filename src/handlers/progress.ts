@@ -11,8 +11,10 @@
  *    чаще раза в `TYPING_REFRESH_MS` — иначе старт и первая стадия `model`
  *    шлют один и тот же сигнал дважды;
  *  - `onProgress(event)` — хук движка (`AgentProgressEvent`): на медленной
- *    стадии (>= 8 с) показывает одну строку «⏳ Думаю…» / «⏳ Считаю расходы…»
- *    и обновляет её не чаще раза в 2 с;
+ *    стадии (>= 8 с), на тяжёлом инструменте и на любом ходе пользователя с
+ *    медленной историей (прошлый ход дольше 8 с или был дедлайн) показывает
+ *    одну строку «⏳ Думаю…» / «⏳ Считаю расходы…», обновляет её не чаще раза в
+ *    2 с и продлевает «печатает…» на каждом возврате модели, пока строка видна;
  *  - `finish()` — успех: строка исчезает (эфемерная гаснет сама, обычная
  *    удаляется);
  *  - `fail(text)` — сбой: строка заменяется честным текстом ошибки, чтобы
@@ -20,8 +22,11 @@
  *
  * Платформенное ограничение: в изоляте нет `setTimeout`, поэтому окно в 8 с
  * нельзя отсчитать само по себе — оно проверяется на границах стадий, которые
- * присылает движок. Один долгий вызов модели без инструментов покажет строку
- * только на следующей стадии; это честный предел платформы, а не забытый таймер.
+ * присылает движок. Ход, у которого единственный вызов модели оказался долгим и
+ * финальным, границ внутри окна не даёт, поэтому строка открывается заранее:
+ * по медленной истории ходов этого пользователя и на заведомо тяжёлом
+ * инструменте, а движок на возврате модели присылает стадию ещё раз, чтобы её
+ * продлить. Это предел платформы, а не забытый таймер.
  *
  * Все вызовы Bot API обёрнуты: падение индикации не ломает ход.
  */
@@ -30,7 +35,7 @@ import { api } from 'sdk';
 
 import type { AgentProgressEvent } from '../lib/agent/engine.js';
 import { PROGRESS_SHOW_AFTER_MS } from '../lib/agent/engine.js';
-import { kvDelete, kvGetJson, kvSetJson, patchTurnTrace } from '../lib/dal/misc.js';
+import { kvDelete, kvGetJson, kvSetJson, patchTurnTrace, readTurnTrace } from '../lib/dal/misc.js';
 import { safeEdit, safeSendMessage } from './formatting.js';
 import { getMainKeyboard } from './keyboards.js';
 
@@ -112,6 +117,47 @@ export function progressText(event: AgentProgressEvent): string {
   return label ? `⏳ ${label}…` : '⏳ Выполняю действие…';
 }
 
+/**
+ * Инструменты, которые заведомо идут долго: собирают картину дня, инбокс,
+ * прогноз или траты за период и читают много строк. Их стадия открывает строку
+ * сразу, не дожидаясь окна `PROGRESS_SHOW_AFTER_MS`: пользователь видит, что
+ * бот действительно работает, а не молчит до первой правки.
+ */
+export const HEAVY_TOOLS: ReadonlySet<string> = new Set([
+  'synthesize_life_context',
+  'get_inbox_digest',
+  'get_runway_forecast',
+  'query_spending',
+  'list_transactions',
+  'triage_tasks',
+  'auto_detect_tasks',
+  'search_notes',
+]);
+
+/**
+ * Был ли прошлый ход этого пользователя медленным.
+ *
+ * Читается в начале хода, до `startTurnTrace` движка, поэтому в `kv` ещё лежит
+ * крошка **прошлого** хода: её `startedAt` и `updatedAt` (последняя метка —
+ * `send`) дают фактическую длительность. Счётчик `deadlineTurns` — второй
+ * признак: ход, упёршийся в бюджет, медленный по определению. Оба поля живут в
+ * `turn_stats:v1` / `turn_trace:v1`, новых записей индикатор не заводит.
+ */
+async function slowTurnHistory(userId: number): Promise<boolean> {
+  try {
+    const { trace, stats } = await readTurnTrace(userId);
+    if (Math.max(0, Number(stats?.deadlineTurns) || 0) > 0) return true;
+    if (!trace) return false;
+    const startedAtMs = Date.parse(trace.startedAt);
+    const updatedAtMs = Date.parse(trace.updatedAt);
+    if (!Number.isFinite(startedAtMs) || !Number.isFinite(updatedAtMs)) return false;
+    return updatedAtMs - startedAtMs >= PROGRESS_SHOW_AFTER_MS;
+  } catch {
+    // диагностика — украшение: без неё ход идёт по общему окну
+    return false;
+  }
+}
+
 export interface TurnProgressOptions {
   chatId: number;
   /** Кому показать эфемерную строку (`receiver_user_id`). */
@@ -128,8 +174,12 @@ export interface TurnProgress {
   begin(): Promise<void>;
   /** «Печатает…» перед каждым обращением к модели. */
   typing(): Promise<void>;
-  /** Хук движка: стадия прогона. */
-  onProgress(event: AgentProgressEvent): Promise<void>;
+  /**
+   * Хук движка: стадия прогона.
+   * `true` — строка прогресса открыта: движок повторит стадию на возврате
+   * модели, чтобы индикатор её продлил.
+   */
+  onProgress(event: AgentProgressEvent): Promise<boolean>;
   /** Успех: строка исчезает. */
   finish(): Promise<void>;
   /**
@@ -197,6 +247,12 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
   /** Когда «печатает…» ушло в последний раз: повтор не чаще `TYPING_REFRESH_MS`. */
   let lastTypingAt = 0;
   let closed = false;
+  /**
+   * Прошлый ход этого пользователя шёл дольше порога: строка открывается на
+   * первой же границе стадии, а не после окна. Иначе долгий финальный вызов без
+   * инструментов снова оставил бы её вспышкой на возврате модели.
+   */
+  let slowHistory = false;
 
   const typing = async (): Promise<void> => {
     // Отметка ставится и на отказе: индикатор — украшение, а повторять упавший
@@ -229,6 +285,9 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
 
   const begin = async (): Promise<void> => {
     await sweepStaleProgress(chatId);
+    // Медленная история читается до `startTurnTrace` движка: крошка в `kv` ещё
+    // принадлежит прошлому ходу этого пользователя.
+    slowHistory = await slowTurnHistory(userId);
     await typing();
   };
 
@@ -297,8 +356,8 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
     await forget();
   };
 
-  const onProgress = async (event: AgentProgressEvent): Promise<void> => {
-    if (closed) return;
+  const onProgress = async (event: AgentProgressEvent): Promise<boolean> => {
+    if (closed) return false;
     try {
       // «Печатает…» уходит, только пока строки нет: открытая строка «⏳ …» уже
       // и есть индикатор хода. Повторный `sendChatAction` на каждой стадии
@@ -309,32 +368,47 @@ export function startTurnProgress(options: TurnProgressOptions): TurnProgress {
       // `sendChatAction` в ту же секунду.
       const modelStage = event.stage === 'model';
       if (modelStage && !visible && now() - lastTypingAt >= TYPING_REFRESH_MS) await typing();
-      if (unavailable) return;
+      if (unavailable) return false;
 
       const text = progressText(event);
       const elapsed = now() - startedAt;
       if (!visible) {
-        if (elapsed < PROGRESS_SHOW_AFTER_MS || busy) return;
+        // Тяжёлый инструмент и медленная история ходов открывают строку раньше
+        // общего окна: у хода без инструментов других границ нет, и строка
+        // иначе осталась бы вспышкой на возврате модели.
+        const heavyTool =
+          event.stage === 'tool' && event.tool !== undefined && HEAVY_TOOLS.has(event.tool);
+        if (elapsed < PROGRESS_SHOW_AFTER_MS && !heavyTool && !slowHistory) return visible;
+        if (busy) return visible;
         busy = true;
         try {
           await send(text);
         } finally {
           busy = false;
         }
-        return;
+        return visible;
       }
-      if (text === shownText || busy) return;
+      if (busy) return visible;
+      if (text === shownText) {
+        // Строку продлевает «печатает…» на возврате модели: правку тем же
+        // текстом Telegram отклонил бы как «message is not modified». Порог
+        // `TYPING_REFRESH_MS` держит продления редкими.
+        if (modelStage && now() - lastTypingAt >= TYPING_REFRESH_MS) await typing();
+        return visible;
+      }
       // Окно в 2 с защищает от частой смены подписи инструмента; стадия модели
       // — признак живого хода, её правка строку продлевает сразу.
-      if (!modelStage && now() - shownAt < PROGRESS_UPDATE_EVERY_MS) return;
+      if (!modelStage && now() - shownAt < PROGRESS_UPDATE_EVERY_MS) return visible;
       busy = true;
       try {
         await update(text);
       } finally {
         busy = false;
       }
+      return visible;
     } catch {
       // индикация — украшение: ход не ломается
+      return visible;
     }
   };
 

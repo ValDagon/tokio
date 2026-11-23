@@ -516,4 +516,141 @@ describe('живая индикация хода агента', () => {
     const { trace } = await readTurnTrace(USER);
     expect(trace?.indicator).toBe('unavailable');
   });
+
+  it('медленная история ходов открывает строку до окна 8 секунд', async () => {
+    // Прошлый ход этого пользователя шёл 12 с — крошка прошлого хода ещё в `kv`
+    // (`startTurnTrace` движка её перезапишет позже). Строка открывается сразу:
+    // у хода без инструментов другой границы до долгого вызова модели нет.
+    await kvSetJson(`turn_trace:v1:${USER}`, {
+      startedAt: '2026-11-22T09:59:00.000Z',
+      updatedAt: '2026-11-22T09:59:12.000Z',
+      stage: 'send',
+      modelCalls: 1,
+      models: ['gemini-4-hydrogen'],
+      tools: [],
+      deadlineAt: null,
+      deadlineCause: null,
+      indicator: 'shown',
+      stopReason: 'final',
+    });
+    scriptTurn(
+      [
+        { afterMs: 200, stage: 'model' },
+        { afterMs: 14_500, stage: 'model' },
+      ],
+      FINAL_RUN,
+    );
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
+
+    const [indicator] = ephemeralSends();
+    expect(ephemeralSends()).toHaveLength(1);
+    expect(String(indicator?.params.text)).toBe('⏳ Думаю…');
+    // Строка открыта на 0,2 с и живёт до отправки: повтор стадии модели на
+    // 14,5 с продлевает её «печатает…» (правка тем же текстом ничего не даёт).
+    expect(typingCalls()).toHaveLength(2);
+    expect(sentTexts().at(-1)).toBe('Готово: посчитал.');
+    expect(callsOf('deleteMessage')).toHaveLength(1);
+  });
+
+  it('счётчик дедлайн-ходов тоже считается медленной историей', async () => {
+    // Ход, упёршийся в бюджет 26 с, — медленный по определению, даже если
+    // крошка прошлого хода уже стёрта или коротка.
+    await kvSetJson(`turn_stats:v1:${USER}`, {
+      turns: 4,
+      deadlineTurns: 1,
+      updatedAt: '2026-11-22T09:59:12.000Z',
+    });
+    scriptTurn([{ afterMs: 300, stage: 'model' }], FINAL_RUN);
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
+
+    expect(ephemeralSends()).toHaveLength(1);
+    expect(callsOf('deleteMessage')).toHaveLength(1);
+  });
+
+  it('быстрый прошлый ход строку заранее не открывает', async () => {
+    await kvSetJson(`turn_trace:v1:${USER}`, {
+      startedAt: '2026-11-22T09:59:00.000Z',
+      updatedAt: '2026-11-22T09:59:02.000Z',
+      stage: 'send',
+      modelCalls: 1,
+      models: ['gemini-4-hydrogen'],
+      tools: [],
+      deadlineAt: null,
+      deadlineCause: null,
+      indicator: 'none',
+      stopReason: 'final',
+    });
+    scriptTurn([{ afterMs: 200, stage: 'model' }], FINAL_RUN);
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
+
+    // Окно 8 с не пройдено, история короткая, инструментов не было — строки нет.
+    expect(ephemeralSends()).toHaveLength(0);
+  });
+
+  it('тяжёлый инструмент открывает строку раньше окна 8 секунд', async () => {
+    scriptTurn(
+      [
+        { afterMs: 0, stage: 'model' },
+        { afterMs: 2_000, stage: 'tool', tool: 'get_inbox_digest' },
+        { afterMs: 3_000, stage: 'model' },
+      ],
+      FINAL_RUN,
+    );
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'разбери инбокс', forwarded: false });
+
+    const [indicator] = ephemeralSends();
+    expect(ephemeralSends()).toHaveLength(1);
+    expect(String(indicator?.params.text)).toBe('⏳ Собираю инбокс…');
+    expect(callsOf('deleteMessage')).toHaveLength(1);
+  });
+
+  it('лёгкий инструмент до окна 8 секунд строку не открывает', async () => {
+    scriptTurn(
+      [
+        { afterMs: 2_000, stage: 'tool', tool: 'add_expense' },
+        { afterMs: 3_000, stage: 'model' },
+      ],
+      FINAL_RUN,
+    );
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'запиши обед 12 евро', forwarded: false });
+
+    expect(ephemeralSends()).toHaveLength(0);
+  });
+
+  it('видимая строка продлевается «печатает…» на возврате модели не чаще 5 секунд', async () => {
+    await kvSetJson(`turn_trace:v1:${USER}`, {
+      startedAt: '2026-11-22T09:59:00.000Z',
+      updatedAt: '2026-11-22T09:59:12.000Z',
+      stage: 'send',
+      modelCalls: 1,
+      models: ['gemini-4-hydrogen'],
+      tools: [],
+      deadlineAt: null,
+      deadlineCause: null,
+      indicator: 'shown',
+      stopReason: 'final',
+    });
+    scriptTurn(
+      [
+        { afterMs: 0, stage: 'model' },
+        { afterMs: 4_000, stage: 'model' },
+        { afterMs: 6_000, stage: 'model' },
+      ],
+      FINAL_RUN,
+    );
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'посчитай бюджет', forwarded: false });
+
+    expect(ephemeralSends()).toHaveLength(1);
+    // 4 с — внутри порога `TYPING_REFRESH_MS`, продления нет; 6 с — за порогом,
+    // «печатает…» уходит ещё раз. Правки тем же текстом нет вовсе.
+    expect(typingCalls()).toHaveLength(2);
+    expect(callsOf('editMessageText')).toHaveLength(0);
+    expect(callsOf('deleteMessage')).toHaveLength(1);
+  });
 });

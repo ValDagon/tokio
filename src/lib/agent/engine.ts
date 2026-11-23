@@ -195,6 +195,18 @@ export interface AgentProgressEvent {
   tool?: string;
 }
 
+/**
+ * Хук живой индикации.
+ *
+ * Возврат `true` означает «строка прогресса открыта»: движок повторит стадию
+ * `model` после возврата модели, чтобы индикатор продлил строку. Любой другой
+ * ответ (в том числе `undefined`) — строки нет, лишних стадий движок не шлёт:
+ * быстрый ход остаётся с прежним потоком событий.
+ */
+export type AgentProgressHook = (
+  event: AgentProgressEvent,
+) => void | boolean | Promise<void | boolean>;
+
 /** Один шаг цикла: что модель подумала и что из этого вышло. */
 export interface AgentStep {
   index: number;
@@ -264,8 +276,9 @@ export interface RunAgentOptions {
   /**
    * Живая индикация стадий («печатает…» и строка прогресса). Хук необязателен,
    * а его ошибки проглатываются: падение индикатора не должно рвать ход.
+   * `true` в ответе — строка открыта, её нужно продлить на возврате модели.
    */
-  onProgress?: (event: AgentProgressEvent) => void | Promise<void>;
+  onProgress?: AgentProgressHook;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,11 +322,12 @@ export const MODEL_CALL_FLOOR_MS = 12_000;
 
 /**
  * Порог медленного хода для живой строки «⏳ …»: индикатор
- * (`handlers/progress.ts`) открывает её только после этого момента, а движок
- * повторяет стадию `model` сразу после возврата модели. Без этого повторения
- * ход, у которого единственный вызов оказался долгим и финальным, не даёт ни
- * одной стадии после окна показа (живой замер 22.11.2026: ответ на 14,5 с,
- * строки нет вообще).
+ * (`handlers/progress.ts`) открывает её на этом моменте, если у пользователя нет
+ * медленной истории ходов, а движок повторяет стадию `model` после возврата
+ * модели, когда строка уже открыта. Без этого повторения ход, у которого
+ * единственный вызов оказался долгим и финальным, не даёт ни одной стадии после
+ * окна показа (живой замер 22.11.2026: ответ на 14,5 с, строки нет вообще), а без
+ * стадии на возврате заранее открытая строка не продлевается.
  */
 export const PROGRESS_SHOW_AFTER_MS = 8_000;
 
@@ -1077,14 +1091,30 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     /** Неожиданные отказы инструментов: имя тулзы = часть сигнатуры. */
     const unexpectedTools = new Set<string>();
 
-    /** Стадия прогона наружу: ошибки индикации не рвут ход. */
-    const notifyProgress = async (event: AgentProgressEvent): Promise<void> => {
-      if (!options.onProgress) return;
+    /**
+     * Стадия прогона наружу: ошибки индикации не рвут ход.
+     * `true` — индикатор ответил, что строка прогресса открыта.
+     */
+    const notifyProgress = async (event: AgentProgressEvent): Promise<boolean> => {
+      if (!options.onProgress) return false;
       try {
-        await options.onProgress(event);
+        return (await options.onProgress(event)) === true;
       } catch {
         // индикация — украшение, а не часть прогона
+        return false;
       }
+    };
+
+    /**
+     * Граница «модель вернулась»: открытую строку индикатор продлевает правкой
+     * или «печатает…» (`handlers/progress.ts`), и без этой метки строка,
+     * открытая заранее — по медленной истории ходов или на тяжёлом инструменте,
+     * — висела бы без продления весь остаток хода. Ход без строки лишних
+     * стадий не получает: быстрый вызов остаётся прежним потоком событий.
+     */
+    const extendIfVisible = async (step: number, indicatorOpen: boolean): Promise<void> => {
+      if (!indicatorOpen && elapsedMs() < PROGRESS_SHOW_AFTER_MS) return;
+      await notifyProgress({ stage: 'model', step });
     };
 
     if (pendingConfirm) {
@@ -1158,7 +1188,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           ...working,
           { role: 'assistant', content: partialReply },
         ]);
-        await notifyProgress({ stage: 'model', step: iteration });
+        const indicatorOpen = await notifyProgress({ stage: 'model', step: iteration });
         await traceTurn({ stage: 'model-start', modelStarted: true });
         const contRaw = await chatFn({
           userId,
@@ -1170,6 +1200,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           purpose: 'agent',
         });
         await traceTurn({ stage: 'model-end', model: answeredModel(contRaw) });
+        await extendIfVisible(iteration, indicatorOpen);
         const contNative = normalizeChatReply(contRaw);
         const contCalls = contNative.toolCalls.filter(
           (call) => typeof call.name === 'string' && call.name.trim(),
@@ -1219,7 +1250,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         ? `${baseSystemPrompt}\n\n${READ_ONLY_DIRECTIVE}`
         : baseSystemPrompt;
 
-      await notifyProgress({ stage: 'model', step: iteration });
+      const indicatorOpen = await notifyProgress({ stage: 'model', step: iteration });
       await traceTurn({ stage: 'model-start', modelStarted: true });
       let raw: AgentChatResult;
       try {
@@ -1237,10 +1268,9 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         // Стадию отдаём наружу и после возврата модели: длинный вызов (14–17 с)
         // идёт без промежуточных стадий, и без этой метки ход, у которого вызов
         // оказался финальным, не открыл бы строку «⏳ …» ни разу. Окно показа
-        // отсчитывает сам индикатор, движок сообщает только границу.
-        if (elapsedMs() >= PROGRESS_SHOW_AFTER_MS) {
-          await notifyProgress({ stage: 'model', step: iteration });
-        }
+        // отсчитывает сам индикатор, движок сообщает только границу; открытую
+        // строку эта же граница продлевает.
+        await extendIfVisible(iteration, indicatorOpen);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!healed && isRecoverableHistoryError(message)) {
@@ -1588,7 +1618,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           executiveOverload,
         })}\n\n${readOnly ? `${READ_ONLY_DIRECTIVE}\n\n` : ''}${FINAL_SYNTHESIS_DIRECTIVE}`;
 
-        await notifyProgress({ stage: 'model', step: iteration });
+        const synthIndicatorOpen = await notifyProgress({ stage: 'model', step: iteration });
         await traceTurn({ stage: 'model-start', modelStarted: true });
         const synthRaw = await chatFn({
           userId,
@@ -1597,6 +1627,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           purpose: 'agent',
         });
         await traceTurn({ stage: 'model-end', model: answeredModel(synthRaw) });
+        await extendIfVisible(iteration, synthIndicatorOpen);
         const synthNative = normalizeChatReply(synthRaw);
         const synthCalls = synthNative.toolCalls.filter(
           (call) => typeof call.name === 'string' && call.name.trim(),

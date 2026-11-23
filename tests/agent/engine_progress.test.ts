@@ -137,6 +137,103 @@ describe('runAgent: хук прогресса', () => {
     ]);
   });
 
+  it('открытая строка получает стадию и после возврата модели', async () => {
+    // Строка открыта заранее (медленная история ходов или тяжёлый инструмент):
+    // ход короткий, окно 8 с не пройдено, но индикатору нужна граница на
+    // возврате модели — иначе строка висит без продления до отправки ответа.
+    let clock = 0;
+    const events: AgentProgressEvent[] = [];
+    const chat: AgentChatFn = async () => {
+      clock += 2_000;
+      return { content: 'Готово.', toolCalls: [] };
+    };
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'посчитай бюджет',
+      mode: 'action',
+      tools: [],
+      store: null,
+      chatFn: chat,
+      profile: PROFILE,
+      now: NOW,
+      clock: () => clock,
+      onProgress: (event) => {
+        events.push(event);
+        return true;
+      },
+    });
+
+    expect(result.stopReason).toBe('final');
+    expect(events.map((event) => [event.stage, event.step])).toEqual([
+      ['model', 0],
+      ['model', 0],
+    ]);
+  });
+
+  it('без открытой строки быстрый ход лишних стадий не получает', async () => {
+    let clock = 0;
+    const events: AgentProgressEvent[] = [];
+    const chat: AgentChatFn = async () => {
+      clock += 2_000;
+      return { content: 'Готово.', toolCalls: [] };
+    };
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'посчитай бюджет',
+      mode: 'action',
+      tools: [],
+      store: null,
+      chatFn: chat,
+      profile: PROFILE,
+      now: NOW,
+      clock: () => clock,
+      onProgress: (event) => {
+        events.push(event);
+        return false;
+      },
+    });
+
+    expect(result.stopReason).toBe('final');
+    expect(events.map((event) => [event.stage, event.step])).toEqual([['model', 0]]);
+  });
+
+  it('синтез после лимита шагов тоже продлевает открытую строку', async () => {
+    const events: AgentProgressEvent[] = [];
+    const chat = nativeChat([
+      { content: '', toolCalls: [{ id: 'c1', name: 'echo', args: { text: 'привет' } }] },
+      { content: 'Итог: сделал.', toolCalls: [] },
+    ]);
+
+    const result = await runAgent({
+      userId: USER,
+      text: 'скажи привет',
+      mode: 'action',
+      maxSteps: 1,
+      tools: [echoTool([])],
+      store: null,
+      chatFn: chat,
+      profile: PROFILE,
+      now: NOW,
+      onProgress: (event) => {
+        events.push(event);
+        return true;
+      },
+    });
+
+    expect(result.stopReason).toBe('final');
+    expect(result.reply).toBe('Итог: сделал.');
+    // Стадия модели после инструмента — синтез: перед вызовом и после возврата.
+    expect(events.map((event) => [event.stage, event.step, event.tool ?? null])).toEqual([
+      ['model', 0, null],
+      ['model', 0, null],
+      ['tool', 0, 'echo'],
+      ['model', 1, null],
+      ['model', 1, null],
+    ]);
+  });
+
   it('падение хука не рвёт прогон', async () => {
     const order: string[] = [];
     const chat = nativeChat([
