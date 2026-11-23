@@ -5,7 +5,12 @@ import '../../src/lib/agent/engine';
 import { listTools } from '../../src/lib/agent/registry';
 
 describe('agent boot path', () => {
-  it('registers all 57 tools on module import', () => {
-    expect(listTools().length).toBe(57);
+  it('registers all 60 tools on module import', () => {
+    const tools = listTools();
+    expect(tools.length).toBe(60);
+    const names = new Set(tools.map((t) => t.name));
+    expect(names.has('list_skills')).toBe(true);
+    expect(names.has('read_skill')).toBe(true);
+    expect(names.has('draft_skill')).toBe(true);
   });
 });

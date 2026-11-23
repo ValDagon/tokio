@@ -62,11 +62,14 @@ describe('parseStartParam', () => {
     expect(parseStartParam('NOTE_7')).toEqual({ tab: 'notes', noteId: '7' });
   });
 
-  it('parses assistant, system, meds, docs, and dossier routes', () => {
+  it('parses assistant, system, meds, docs, skills, backlog, diagnostics, and dossier routes', () => {
     expect(parseStartParam('system')).toEqual({ tab: 'assistant' });
     expect(parseStartParam('ASSISTANT')).toEqual({ tab: 'assistant' });
     expect(parseStartParam('Meds')).toEqual({ tab: 'assistant' });
     expect(parseStartParam('DOCS')).toEqual({ tab: 'assistant' });
+    expect(parseStartParam('skills')).toEqual({ tab: 'assistant', systemSection: 'skills' });
+    expect(parseStartParam('BACKLOG')).toEqual({ tab: 'assistant', systemSection: 'skills' });
+    expect(parseStartParam('diagnostics')).toEqual({ tab: 'assistant', systemSection: 'diagnostics' });
     expect(parseStartParam('dossier')).toEqual({ tab: 'assistant', openDossier: true });
     expect(parseStartParam('DoSsIeR')).toEqual({ tab: 'assistant', openDossier: true });
   });

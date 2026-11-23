@@ -284,6 +284,7 @@ describe('T16 endpoints: finances', () => {
       currency: 'EUR',
       amount_eur: 2000,
       monthly_payment: 200,
+      monthly_payment_eur: 200,
       payment_day: 5,
       total_payments: null,
       end_date: null,
@@ -480,6 +481,7 @@ describe('finances_liabilities: amount_eur по живому курсу', () => 
     const before = await financesLiabilities({}, mockCtx);
     const first = before.find((item) => item.id === String(liability.id));
     expect(first?.amount_eur).toBe(18.18); // 20 $ / 1.1
+    expect(first?.monthly_payment_eur).toBe(18.18);
 
     // Курс изменился, строку в БД никто не трогал.
     await setRates('2026-03-16', { USD: 1.25 });
@@ -487,5 +489,6 @@ describe('finances_liabilities: amount_eur по живому курсу', () => 
     const after = await financesLiabilities({}, mockCtx);
     const second = after.find((item) => item.id === String(liability.id));
     expect(second?.amount_eur).toBe(16); // 20 $ / 1.25
+    expect(second?.monthly_payment_eur).toBe(16);
   });
 });

@@ -25,6 +25,7 @@ export interface LiabilityResponse {
   currency: string;
   amount_eur: number;
   monthly_payment: number | null;
+  monthly_payment_eur: number | null;
   payment_day: number | null;
   total_payments: number | null;
   end_date: string | null;
@@ -35,6 +36,36 @@ export interface LiabilityResponse {
   last_payment_date: string | null;
   account_id: string | null;
   account_name: string | null;
+}
+
+/** Пересчитывает остаток и ежемесячный платёж в EUR по живому курсу с фолбэком на пропорцию БД. */
+export function liabilityEurFields(
+  liability: Pick<
+    {
+      amountCents: number;
+      monthlyPaymentCents: number;
+      currency: string;
+      amountEurCents: number;
+    },
+    'amountCents' | 'monthlyPaymentCents' | 'currency' | 'amountEurCents'
+  >,
+  rates: Record<string, number>,
+): { amount_eur: number; monthly_payment: number | null; monthly_payment_eur: number | null } {
+  const amount_eur =
+    (toEurCents(liability.amountCents, liability.currency, rates) ?? liability.amountEurCents) / 100;
+  if (liability.monthlyPaymentCents === 0) {
+    return { amount_eur, monthly_payment: null, monthly_payment_eur: null };
+  }
+  const monthlyEurCents =
+    toEurCents(liability.monthlyPaymentCents, liability.currency, rates) ??
+    (liability.amountCents > 0
+      ? Math.round((liability.monthlyPaymentCents / liability.amountCents) * liability.amountEurCents)
+      : 0);
+  return {
+    amount_eur,
+    monthly_payment: liability.monthlyPaymentCents / 100,
+    monthly_payment_eur: monthlyEurCents / 100,
+  };
 }
 
 export default async function (
@@ -52,29 +83,30 @@ export default async function (
   const accountNames = new Map(accounts.map((account) => [account.id, account.name]));
   const rates = await getRates();
 
-  return liabilities.map((liability) => ({
-    id: String(liability.id),
-    name: liability.name,
-    queue: liability.queue,
-    amount: liability.amountCents / 100,
-    currency: liability.currency,
-    // Живой курс, а не сохранённый amount_eur_cents: иначе тот же платёж
-    // показывается здесь и в /runway двумя разными суммами.
-    amount_eur:
-      (toEurCents(liability.amountCents, liability.currency, rates) ??
-        liability.amountEurCents) / 100,
-    monthly_payment:
-      liability.monthlyPaymentCents === 0 ? null : liability.monthlyPaymentCents / 100,
-    payment_day: liability.paymentDay,
-    total_payments: liability.totalPayments,
-    end_date: liability.endDate,
-    notes: liability.notes,
-    is_active: liability.isActive,
-    paid_months: [...liability.paidMonths],
-    is_paid_this_month: liability.paidMonths.includes(month),
-    last_payment_date: liability.lastPaymentDate,
-    account_id: liability.accountId === null ? null : String(liability.accountId),
-    account_name:
-      liability.accountId === null ? null : accountNames.get(liability.accountId) ?? null,
-  }));
+  return liabilities.map((liability) => {
+    const eur = liabilityEurFields(liability, rates);
+    return {
+      id: String(liability.id),
+      name: liability.name,
+      queue: liability.queue,
+      amount: liability.amountCents / 100,
+      currency: liability.currency,
+      // Живой курс, а не сохранённый amount_eur_cents: иначе тот же платёж
+      // показывается здесь и в /runway двумя разными суммами.
+      amount_eur: eur.amount_eur,
+      monthly_payment: eur.monthly_payment,
+      monthly_payment_eur: eur.monthly_payment_eur,
+      payment_day: liability.paymentDay,
+      total_payments: liability.totalPayments,
+      end_date: liability.endDate,
+      notes: liability.notes,
+      is_active: liability.isActive,
+      paid_months: [...liability.paidMonths],
+      is_paid_this_month: liability.paidMonths.includes(month),
+      last_payment_date: liability.lastPaymentDate,
+      account_id: liability.accountId === null ? null : String(liability.accountId),
+      account_name:
+        liability.accountId === null ? null : accountNames.get(liability.accountId) ?? null,
+    };
+  });
 }

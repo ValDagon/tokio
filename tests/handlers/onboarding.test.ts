@@ -354,14 +354,13 @@ describe('тексты онбординга', () => {
 // ---------------------------------------------------------------------------
 
 describe('отправка онбординга', () => {
-  it('sendOnboardingIntro без выбора валюты — один текст и свёрнутая клавиатура', async () => {
+  it('sendOnboardingIntro без выбора валюты — один текст и без лишнего remove_keyboard', async () => {
     await sendOnboardingIntro(USER);
     const [call] = callsOf('sendMessage');
     expect(call?.params.chat_id).toBe(USER);
     expect(call?.params.text).toContain('Мы ещё не знакомы');
     expect(call?.params.text).not.toContain('Выбери базовую валюту');
-    // Сетку разделов показывает только `/start`/`/menu`; интро — обычный ответ.
-    expect(call?.params.reply_markup).toEqual({ remove_keyboard: true });
+    expect(call?.params.reply_markup).toBeUndefined();
   });
 
   it('sendOnboardingIntro с валютой — просьба и клавиатура выбора', async () => {

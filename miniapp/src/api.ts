@@ -15,13 +15,18 @@ import type {
   StepUpdateResponse,
   TelegramWebAppInitData,
   OnboardingPayload,
-  AdminInviteItem,
-  AdminDashboardData,
   AccessInfo,
   CreateAccountPayload,
   UpdateAccountPayload,
   BackupRestoreResponse,
   UiConfig,
+  SkillsResponse,
+  BacklogItem,
+  DiagnosticsResponse,
+  FxRatesResponse,
+  CreateTransactionPayload,
+  TransactionWriteResponse,
+  DocSearchResult,
 } from './types';
 
 export type { UiConfig } from './types';
@@ -545,35 +550,6 @@ export async function completeOnboarding(payload: OnboardingPayload): Promise<Us
   });
 }
 
-// --- Admin Access & Invites Management ---
-
-export async function fetchAdminUsers(): Promise<AdminDashboardData> {
-  return request<AdminDashboardData>('/api/admin/users');
-}
-
-export async function createAdminInvite(note: string, maxUses: number = 1): Promise<AdminInviteItem> {
-  return request<AdminInviteItem>('/api/admin/invites', {
-    method: 'POST',
-    body: { note, max_uses: maxUses },
-  });
-}
-
-export async function deleteAdminInvite(code: string): Promise<void> {
-  await request<void>(`/api/admin/invites/${encodeURIComponent(code)}`, {
-    method: 'DELETE',
-  });
-}
-
-export async function updateAdminUser(
-  telegramId: number,
-  patch: { is_approved?: boolean; daily_msg_limit?: number; role?: string }
-): Promise<void> {
-  await request<void>(`/api/admin/users/${telegramId}`, {
-    method: 'PATCH',
-    body: patch,
-  });
-}
-
 export async function fetchLifeContext(topic?: string, depth: number = 1): Promise<{ context: string }> {
   const params = new URLSearchParams();
   if (topic) params.append('topic', topic);
@@ -667,7 +643,7 @@ export async function fetchNotes(column?: string): Promise<Note[]> {
   return request<Note[]>(url);
 }
 
-export async function createNote(text: string, column: string = 'inbox'): Promise<Note> {
+export async function createNote(text: string, column: Note['column'] | string = 'raw'): Promise<Note> {
   return request<Note>('/api/notes', {
     method: 'POST',
     body: { text, column },
@@ -676,7 +652,7 @@ export async function createNote(text: string, column: string = 'inbox'): Promis
 
 export async function updateNote(
   noteId: string,
-  updates: { clean_text?: string; column?: string }
+  updates: { raw_text?: string; clean_text?: string; column?: Note['column'] | string }
 ): Promise<Note> {
   return request<Note>(`/api/notes/${noteId}`, {
     method: 'PATCH',
@@ -787,10 +763,16 @@ export async function fetchAccessInfo(): Promise<AccessInfo> {
   return request<AccessInfo>('/api/system/access');
 }
 
-export async function saveByokKey(apiKey: string): Promise<{ status: string; message?: string }> {
+export async function saveByokKey(
+  apiKey: string,
+  provider?: string
+): Promise<{ status: string; message?: string }> {
   return request<{ status: string; message?: string }>('/api/system/byok', {
     method: 'POST',
-    body: { api_key: apiKey },
+    body: {
+      api_key: apiKey,
+      ...(provider ? { provider } : {}),
+    },
   });
 }
 
@@ -861,5 +843,108 @@ export async function restoreBackupJson(
   return request<BackupRestoreResponse>('/api/system/backup/restore', {
     method: 'POST',
     body: { data, mode },
+  });
+}
+
+// --- Skills & Evolution Backlog ---
+
+export async function fetchSkills(): Promise<SkillsResponse> {
+  return request<SkillsResponse>('/api/skills');
+}
+
+export async function activateUserSkill(
+  skillId: string
+): Promise<{ ok: boolean; id: string; status: string }> {
+  return request<{ ok: boolean; id: string; status: string }>(`/api/skills/${skillId}/activate`, {
+    method: 'POST',
+  });
+}
+
+export async function rejectUserSkill(
+  skillId: string
+): Promise<{ ok: boolean; id: string; status: string }> {
+  return request<{ ok: boolean; id: string; status: string }>(`/api/skills/${skillId}/reject`, {
+    method: 'POST',
+  });
+}
+
+export async function fetchBacklog(): Promise<{ items: BacklogItem[] }> {
+  return request<{ items: BacklogItem[] }>('/api/backlog');
+}
+
+export async function resolveBacklogItem(
+  itemId: string,
+  status: 'shipped' | 'rejected' | 'pending' = 'shipped'
+): Promise<{ ok: boolean; id: string; status: string }> {
+  return request<{ ok: boolean; id: string; status: string }>(`/api/backlog/${itemId}/resolve`, {
+    method: 'POST',
+    body: { status },
+  });
+}
+
+// --- Diagnostics, Session & Docs Search ---
+
+export async function fetchDiagnostics(): Promise<DiagnosticsResponse> {
+  return request<DiagnosticsResponse>('/api/system/diagnostics', { skipCache: true });
+}
+
+export async function resetAgentSession(): Promise<{ ok: boolean; status: string }> {
+  return request<{ ok: boolean; status: string }>('/api/system/session/reset', {
+    method: 'POST',
+  });
+}
+
+export async function searchDocs(query: string, topic?: string): Promise<DocSearchResult> {
+  const params = new URLSearchParams({ q: query });
+  if (topic) params.append('topic', topic);
+  return request<DocSearchResult>(`/api/docs/search?${params.toString()}`);
+}
+
+// --- Finances CRUD & FX ---
+
+export async function fetchFxRates(): Promise<FxRatesResponse> {
+  return request<FxRatesResponse>('/api/finances/fx');
+}
+
+export async function saveFxRates(
+  rates: Record<string, number>,
+  date?: string
+): Promise<FxRatesResponse> {
+  return request<FxRatesResponse>('/api/finances/fx', {
+    method: 'POST',
+    body: { rates, ...(date ? { date } : {}) },
+  });
+}
+
+export async function createTransaction(
+  payload: CreateTransactionPayload
+): Promise<TransactionWriteResponse> {
+  return request<TransactionWriteResponse>('/api/finances/transactions', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function deleteTransaction(
+  transactionId: string
+): Promise<{ status: string; id: string }> {
+  return request<{ status: string; id: string }>(`/api/finances/transactions/${transactionId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function deleteAccount(
+  accountId: string
+): Promise<{ success: boolean; id: string }> {
+  return request<{ success: boolean; id: string }>(`/api/finances/accounts/${accountId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function deleteLiability(
+  liabilityId: string
+): Promise<{ success: boolean; id: string }> {
+  return request<{ success: boolean; id: string }>(`/api/finances/liabilities/${liabilityId}`, {
+    method: 'DELETE',
   });
 }

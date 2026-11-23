@@ -50,12 +50,24 @@ export interface DirectivesSplit {
 
 /** Делит главу на текст правил и хвост стиля; стиль сохраняется как есть. */
 export function splitDirectives(content: string): DirectivesSplit {
-  const text = String(content ?? '');
-  const marker = text.lastIndexOf(`\n${STYLE_TAIL}`);
-  if (marker === -1) return { instructions: text.trim(), style: null };
+  const text = String(content ?? '').trim();
+  if (!text) return { instructions: '', style: null };
+  const tailPrefix = STYLE_TAIL.trimEnd();
+  if (text === tailPrefix || text.startsWith(STYLE_TAIL)) {
+    const style = text.slice(tailPrefix.length).trim();
+    return { instructions: '', style: style || null };
+  }
+  const markerWithSpace = text.lastIndexOf(`\n${STYLE_TAIL}`);
+  const markerExact = markerWithSpace !== -1 ? markerWithSpace : text.lastIndexOf(`\n${tailPrefix}`);
+  if (markerExact === -1) return { instructions: text, style: null };
+  const tailLine = text.slice(markerExact + 1);
+  if (!tailLine.startsWith(STYLE_TAIL) && tailLine !== tailPrefix) {
+    return { instructions: text, style: null };
+  }
+  const style = tailLine.slice(tailPrefix.length).trim();
   return {
-    instructions: text.slice(0, marker).trim(),
-    style: text.slice(marker + STYLE_TAIL.length + 1).trim(),
+    instructions: text.slice(0, markerExact).trim(),
+    style: style || null,
   };
 }
 
@@ -82,7 +94,43 @@ export function ruleKey(rule: string): string {
 /** Собирает главу обратно: правила пунктами + сохранённый хвост стиля. */
 function joinDirectives(rules: readonly string[], style: string | null): string {
   const body = rules.map((rule) => `${RULE_PREFIX}${rule}`).join('\n');
-  return style ? `${body}\n\n${STYLE_TAIL}${style}` : body;
+  return formatDirectivesChapter(body, style);
+}
+
+/** Форматирует свободный текст директив и опциональный хвост стиля в единый Markdown главы `07_custom_instructions`. */
+export function formatDirectivesChapter(instructions: string, style: string | null): string {
+  const cleanInst = String(instructions ?? '').trim();
+  const cleanStyle = typeof style === 'string' ? style.trim() : '';
+  if (cleanInst && cleanStyle) return `${cleanInst}\n\n${STYLE_TAIL}${cleanStyle}`;
+  if (cleanStyle) return `${STYLE_TAIL}${cleanStyle}`;
+  return cleanInst;
+}
+
+/** Сохраняет директивы и стиль общения в главу `07_custom_instructions`. */
+export async function saveDirectives(
+  userId: number,
+  instructions: string,
+  style: string | null,
+): Promise<{ instructions: string; style: string | null }> {
+  const cleanInst = String(instructions ?? '').trim();
+  const cleanStyle = typeof style === 'string' && style.trim() ? style.trim() : null;
+  await upsertChapter(userId, {
+    slug: CUSTOM_INSTRUCTIONS_SLUG,
+    title: DIRECTIVES_TITLE,
+    content: formatDirectivesChapter(cleanInst, cleanStyle),
+    isPinned: true,
+  });
+  return { instructions: cleanInst, style: cleanStyle };
+}
+
+/** Обновляет только стиль общения в `07_custom_instructions`, не затирая существующие правила и директивы. */
+export async function setPersonaStyle(userId: number, style: string): Promise<string> {
+  const cleanStyle = String(style ?? '').replace(/[\r\n]+/g, ' ').trim();
+  if (!cleanStyle) throw new Error('learning.setPersonaStyle: style is empty');
+  const chapter = await getChapter(userId, CUSTOM_INSTRUCTIONS_SLUG);
+  const { instructions } = splitDirectives(chapter?.content ?? '');
+  await saveDirectives(userId, instructions, cleanStyle);
+  return cleanStyle;
 }
 
 /**

@@ -1552,16 +1552,146 @@ export async function activateSkill(userId: number, itemId: number): Promise<Ski
   }
 }
 
-/** Отклонение черновика: только `pending`, следов в промпте не остаётся. */
+/** Отклонение или выключение скилла: `pending` и `active`, следов в промпте не остаётся. */
 export async function rejectSkill(userId: number, itemId: number): Promise<SkillAction> {
   const item = await getEvolutionItem(userId, itemId);
   if (!item || item.category !== 'skill') return { ok: false, error: 'Скилл не найден.' };
-  if (item.status !== 'pending') {
-    return { ok: false, error: 'Отклонить можно только ожидающий черновик.' };
+  if (item.status !== 'pending' && item.status !== 'active') {
+    return { ok: false, error: 'Отклонить можно только ожидающий черновик или активный скилл.' };
   }
   const updated = await updateEvolutionItem(userId, itemId, { status: 'rejected' });
   if (!updated) return { ok: false, error: 'Не удалось отклонить скилл.' };
   return { ok: true, item: updated };
+}
+
+export interface UserSkillSummary {
+  row: EvolutionItemRow;
+  spec: SkillSpec | null;
+  usage: SkillUsage;
+}
+
+/** Все пользовательские скиллы из `evolution_items` (со статусами и телеметрией). */
+export async function listAllUserSkills(userId: number): Promise<UserSkillSummary[]> {
+  const items = (await listEvolutionItems(userId, { limit: 200 })).filter(
+    (item) => item.category === 'skill',
+  );
+  const order: Record<string, number> = { pending: 0, active: 1, superseded: 2, rejected: 3 };
+  const sorted = [...items].sort(
+    (a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || b.id - a.id,
+  );
+  return Promise.all(
+    sorted.map(async (row) => ({
+      row,
+      spec: parseSkillSpec(row.spec),
+      usage: await skillUsage(userId, row.id),
+    })),
+  );
+}
+
+export interface ManualSkillDraftInput {
+  key: string;
+  title: string;
+  whenToUse: string;
+  procedure: string;
+  pitfalls?: string;
+  verification?: string;
+}
+
+export type ManualSkillDraftResult =
+  | { ok: true; item: EvolutionItemRow; spec: SkillSpec }
+  | { ok: false; error: string };
+
+/** Создаёт ручной черновик скилла в статусе `pending` (никогда не активирует сам). */
+export async function createManualSkillDraft(
+  userId: number,
+  input: ManualSkillDraftInput,
+): Promise<ManualSkillDraftResult> {
+  const rawKey = typeof input.key === 'string' ? input.key.trim().toLowerCase() : '';
+  const slug = truncate(
+    rawKey
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .replace(/-{2,}/g, '-'),
+    48,
+  );
+  if (!slug) {
+    return { ok: false, error: 'Укажите ключ скилла латиницей (например, weekly-review).' };
+  }
+  const title = typeof input.title === 'string' ? input.title.trim() : '';
+  if (!title) return { ok: false, error: 'Укажите название скилла.' };
+  const whenToUse = typeof input.whenToUse === 'string' ? input.whenToUse.trim() : '';
+  if (!whenToUse) return { ok: false, error: 'Укажите секцию When to Use (когда применять).' };
+  const procedure = typeof input.procedure === 'string' ? input.procedure.trim() : '';
+  if (!procedure) return { ok: false, error: 'Укажите шаги процедуры (Procedure).' };
+
+  const pitfalls =
+    typeof input.pitfalls === 'string' && input.pitfalls.trim()
+      ? input.pitfalls.trim()
+      : '- Не выдумывать факты: опираться на данные инструментов чтения.';
+  const verification =
+    typeof input.verification === 'string' && input.verification.trim()
+      ? input.verification.trim()
+      : '- Проверить итоговое состояние инструментами чтения перед ответом.';
+
+  const body = [
+    '## When to Use',
+    whenToUse,
+    '',
+    '## Procedure',
+    procedure,
+    '',
+    '## Pitfalls',
+    pitfalls,
+    '',
+    '## Verification',
+    verification,
+  ].join('\n');
+
+  const existing = (await listEvolutionItems(userId, { limit: 500 }))
+    .filter((item) => item.category === 'skill')
+    .map((item) => ({ item, spec: parseSkillSpec(item.spec) }))
+    .filter((entry) => entry.spec?.key === slug);
+
+  let maxVersion = 0;
+  let activeId: number | null = null;
+  let pendingEntry: { item: EvolutionItemRow; spec: SkillSpec | null } | null = null;
+  for (const entry of existing) {
+    if (entry.spec && entry.spec.version > maxVersion) maxVersion = entry.spec.version;
+    if (entry.item.status === 'active') activeId = entry.item.id;
+    if (entry.item.status === 'pending' && !pendingEntry) pendingEntry = entry;
+  }
+
+  // Дедупликация: если уже есть ожидающий черновик с тем же ключом, обновляем его на месте.
+  const version = pendingEntry?.spec ? pendingEntry.spec.version : maxVersion + 1;
+  const specObj: SkillSpec = {
+    format: SKILL_SPEC_FORMAT,
+    key: slug,
+    version,
+    originFailure: pendingEntry?.spec?.originFailure ?? null,
+    supersedes: pendingEntry ? pendingEntry.spec?.supersedes ?? activeId : activeId,
+    body,
+  };
+  const validation = validateSkillSpec(specObj);
+  if (!validation.ok) return { ok: false, error: validation.error };
+
+  const spec = buildSkillSpec(specObj);
+  if (pendingEntry) {
+    const updated = await updateEvolutionItem(userId, pendingEntry.item.id, {
+      title: truncate(title, 120),
+      spec,
+    });
+    if (updated) return { ok: true, item: updated, spec: specObj };
+  }
+
+  const item = await createEvolutionItem(userId, {
+    rawInput: `draft_skill:${slug}:v${version}`,
+    title: truncate(title, 120),
+    category: 'skill',
+    priority: 'medium',
+    spec,
+  });
+
+  return { ok: true, item, spec: specObj };
 }
 
 // --- замер -----------------------------------------------------------------

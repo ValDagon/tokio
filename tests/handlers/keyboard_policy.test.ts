@@ -17,6 +17,7 @@ import { ensureUser } from '../../src/lib/dal/users';
 import { resolveReplyMarkup, safeAnswer, safeEdit } from '../../src/handlers/formatting';
 import {
   getBackupInlineKeyboard,
+  getCommandsKeyboard,
   getMainKeyboard,
 } from '../../src/handlers/keyboards';
 import { resetRouterSeams, routeMessage } from '../../src/handlers/router';
@@ -25,7 +26,7 @@ import type { Message } from '../../src/handlers/message';
 const USER = 601;
 const CHAT = 901;
 
-const REMOVE_KEYBOARD = { remove_keyboard: true };
+const REMOVE_KEYBOARD = { remove_keyboard: true } as const;
 
 function msg(text: string): Message {
   return {
@@ -56,19 +57,23 @@ afterEach(() => {
 });
 
 describe('resolveReplyMarkup', () => {
-  it('обычный ответ без разметки сворачивает клавиатуру', () => {
-    expect(resolveReplyMarkup(undefined)).toEqual(REMOVE_KEYBOARD);
-    expect(resolveReplyMarkup(null)).toEqual(REMOVE_KEYBOARD);
+  it('обычный ответ без разметки не прикладывает remove_keyboard (оставляет ⊞)', () => {
+    expect(resolveReplyMarkup(undefined)).toBeNull();
+    expect(resolveReplyMarkup(null)).toBeNull();
+    expect(resolveReplyMarkup(REMOVE_KEYBOARD)).toEqual(REMOVE_KEYBOARD);
   });
 
-  it('reply-разметка заменяется сворачиванием, inline проходит как есть', () => {
-    expect(resolveReplyMarkup(getMainKeyboard())).toEqual(REMOVE_KEYBOARD);
+  it('reply-разметка без opt-in опускается, inline проходит как есть', () => {
+    expect(resolveReplyMarkup(getMainKeyboard())).toBeNull();
     expect(resolveReplyMarkup(getBackupInlineKeyboard())).toEqual(getBackupInlineKeyboard());
   });
 
-  it('opt-in сохраняет сетку, правка сообщения не добавляет remove_keyboard', () => {
+  it('opt-in сохраняет сетку (Главный экран и Команды)', () => {
     expect(resolveReplyMarkup(getMainKeyboard(), { keepReplyKeyboard: true })).toEqual(
       getMainKeyboard(),
+    );
+    expect(resolveReplyMarkup(getCommandsKeyboard(), { keepReplyKeyboard: true })).toEqual(
+      getCommandsKeyboard(),
     );
     expect(resolveReplyMarkup(undefined, { keepReplyKeyboard: true })).toBeNull();
     expect(resolveReplyMarkup(getMainKeyboard(), { collapse: false })).toBeNull();
@@ -76,25 +81,32 @@ describe('resolveReplyMarkup', () => {
 });
 
 describe('клавиатура в ответах роутера', () => {
-  it('an ordinary reply removes the reply keyboard', async () => {
+  it('ordinary /status reply omits reply_markup so collapsed keyboard stays under ⊞', async () => {
     await routeMessage(msg('/status'));
-    expect(firstSent().reply_markup).toEqual(REMOVE_KEYBOARD);
+    expect(firstSent().reply_markup).toBeUndefined();
   });
 
-  it('start keeps the main keyboard', async () => {
+  it('start and menu keep the Layer 1 main keyboard (2×3)', async () => {
     await routeMessage(msg('/start'));
     expect(firstSent().reply_markup).toEqual(getMainKeyboard());
-  });
 
-  it('menu attaches the main keyboard and lists the sections', async () => {
+    resetApi();
     await routeMessage(msg('/menu'));
-
     const sent = firstSent();
     expect(sent.reply_markup).toEqual(getMainKeyboard());
     const text = String(sent.text ?? '');
-    for (const label of ['Сводка', 'Баланс', 'Долги', 'Задачи', 'Аптечка', 'Дайджест', 'Инбокс', 'Помощь']) {
+    for (const label of ['Новая сессия', 'Скиллы', 'Сводка', 'Диагностика', 'Разобрать', 'Команды']) {
       expect(text).toContain(label);
     }
+  });
+
+  it('two-layer switch moves between Main (2×3) and Commands (4×3)', async () => {
+    await routeMessage(msg('⌨️ Команды ›'));
+    expect(firstSent().reply_markup).toEqual(getCommandsKeyboard());
+
+    resetApi();
+    await routeMessage(msg('← Назад'));
+    expect(firstSent().reply_markup).toEqual(getMainKeyboard());
   });
 
   it('inline keyboards are not stripped', async () => {
@@ -104,10 +116,10 @@ describe('клавиатура в ответах роутера', () => {
 });
 
 describe('safeAnswer / safeEdit', () => {
-  it('safeAnswer сворачивает клавиатуру, если не просили обратное', async () => {
+  it('safeAnswer не шлёт remove_keyboard по умолчанию', async () => {
     const sent: Array<Record<string, unknown>> = [];
     await safeAnswer(1, 'ok', { send: async (params) => sent.push(params) });
-    expect(sent[0]?.reply_markup).toEqual(REMOVE_KEYBOARD);
+    expect(sent[0]).not.toHaveProperty('reply_markup');
   });
 
   it('safeEdit передаёт inline-разметку и не шлёт remove_keyboard', async () => {

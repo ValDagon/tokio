@@ -1679,6 +1679,9 @@ body.low-stimulation .task-card.is-overdue {
 
 .col-badge.inbox { background: rgba(245, 158, 11, 0.12); color: #fcd34d; }
 .col-badge.raw { background: rgba(249, 115, 22, 0.12); color: #fb923c; }
+.col-badge.todo { background: rgba(59, 130, 246, 0.12); color: #93c5fd; }
+.col-badge.note { background: rgba(236, 72, 153, 0.12); color: #f472b6; }
+.col-badge.idea { background: rgba(56, 189, 248, 0.12); color: #7dd3fc; }
 .col-badge.ideas { background: rgba(56, 189, 248, 0.12); color: #7dd3fc; }
 .col-badge.self { background: rgba(236, 72, 153, 0.12); color: #f472b6; }
 .col-badge.useful { background: rgba(16, 185, 129, 0.12); color: #6ee7b7; }

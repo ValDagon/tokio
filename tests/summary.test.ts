@@ -380,7 +380,9 @@ describe('helpText / formatWhole', () => {
     const text = helpText();
 
     expect(text).toContain('/summary');
-    expect(text).toContain('/diary');
+    expect(text).toContain('/skills');
+    expect(text).toContain('/learn');
+    expect(text).not.toContain('/diary');
     expect(text).toContain('Tokio');
   });
 

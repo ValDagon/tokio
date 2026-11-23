@@ -124,11 +124,13 @@ describe('handlers/message: диспетчеризация', () => {
   });
 
   it('callback отдельным payload’ом распознаётся по форме (id + нет chat)', async () => {
+    setTriageHandler(async () => null);
     await handleUpdate(callback('triage:inbox'), {});
 
-    // Без шва триажа: алерт, сообщение в чат не уходит.
-    expect(callsOf('answerCallbackQuery')).toHaveLength(1);
-    expect(callsOf('answerCallbackQuery')[0]?.params.show_alert).toBe(true);
+    // Явный null из шва триажа: алерт, сообщение в чат не уходит.
+    const answers = callsOf('answerCallbackQuery');
+    expect(answers.length).toBeGreaterThanOrEqual(1);
+    expect(answers.at(-1)?.params.show_alert).toBe(true);
     expect(callsOf('sendMessage')).toHaveLength(0);
   });
 

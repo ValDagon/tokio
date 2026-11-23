@@ -22,7 +22,16 @@ export type KeyboardButtonKey =
   | 'digest'
   | 'inbox'
   | 'newSession'
-  | 'help';
+  | 'help'
+  | 'skills'
+  | 'diagnostics'
+  | 'triage'
+  | 'commands'
+  | 'backlog'
+  | 'backup'
+  | 'byok'
+  | 'lang'
+  | 'back';
 
 export type LocaleCatalog = Record<string, unknown>;
 

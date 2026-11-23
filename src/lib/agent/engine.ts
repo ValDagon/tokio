@@ -48,6 +48,7 @@ import {
 import { listTasks } from '../dal/tasks.js';
 import { getUser } from '../dal/users.js';
 import { listActiveSkills, recordFailure, recordSkillRun, type FailureReason } from '../evolution.js';
+import { splitDirectives } from '../learning.js';
 import { chat, type ChatMessage } from '../gemini.js';
 import { normalizeLocale, t, type LocaleCode } from '../i18n.js';
 import { getOverlay } from '../overlay.js';
@@ -450,13 +451,15 @@ export async function loadAgentProfile(userId: number, now: Date = new Date()): 
     now,
   );
 
+  const parsedDirectives = splitDirectives(custom?.content ?? '');
+
   return {
     userName: user?.name ?? null,
     timezone,
     baseCurrency: user?.baseCurrency || DEFAULT_BASE_CURRENCY,
     locale: normalizeLocale(user?.language, getOverlay().manifest.defaultLocale),
-    personaStyle: null,
-    customInstructions: custom?.content ?? null,
+    personaStyle: parsedDirectives.style || null,
+    customInstructions: parsedDirectives.instructions || null,
     activeSkills: skills,
     lowStimulationMode: Boolean(user?.lowStimulationMode),
     overdueTaskCount,
@@ -863,6 +866,8 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   'synthesize_life_context',
   'get_custom_directives',
   'read_turn_log',
+  'list_skills',
+  'read_skill',
 ]);
 
 /** Имя модели из ответа: строковый контракт модель не называет. */

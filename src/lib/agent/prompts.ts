@@ -26,7 +26,9 @@ import {
   getAssistantName,
   getOverlay,
   getOverlayPrompt,
+  getOverlaySkills,
   getPersonaStyleText,
+  type OverlaySkill,
 } from '../overlay.js';
 import {
   computeWorkloadMetrics,
@@ -475,6 +477,24 @@ export function renderSkillBlock(skills: readonly ActiveSkill[]): string {
 }
 
 /**
+ * Компактный индекс встроенных `.md`-скиллов оверлея (Progressive Disclosure):
+ * в системный промпт попадают только `id`, `name` и краткое `description`.
+ * Полный Markdown-регламент агент подгружает по необходимости через `read_skill`.
+ */
+export function renderOverlaySkillCatalog(skills: readonly OverlaySkill[]): string {
+  if (skills.length === 0) return '';
+  const lines = skills.map((skill) => {
+    const namePart = skill.name && skill.name !== skill.id ? ` (${skill.name})` : '';
+    return `- ${skill.id}${namePart}: ${skill.description}`;
+  });
+  return [
+    'КАТАЛОГ ДОМЕННЫХ СКИЛЛОВ (.md, загружай по запросу через read_skill):',
+    ...lines,
+    'Правило: когда запрос подходит под описание скилла, сначала вызови read_skill(name_or_id) и следуй его процедуре. Для создания нового повторяемого навыка по просьбе пользователя используй draft_skill (включение всегда подтверждает пользователь).',
+  ].join('\n');
+}
+
+/**
  * Собирает системный промпт. Все персональные значения — параметры; в самом
  * тексте промпта нет ни одного имени банка, города, валюты или сферы жизни.
  */
@@ -508,6 +528,9 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): string {
 
   const profile = profileBlock(options);
   if (profile) blocks.push(profile);
+
+  const overlaySkillCatalog = renderOverlaySkillCatalog(getOverlaySkills());
+  if (overlaySkillCatalog) blocks.push(overlaySkillCatalog);
 
   const skills = renderSkillBlock(options.profile?.activeSkills ?? []);
   if (skills) blocks.push(skills);

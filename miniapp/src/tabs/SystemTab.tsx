@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { FeedbackPanel } from '../components/FeedbackPanel';
 import {
   Sparkles,
@@ -18,20 +18,17 @@ import {
   Zap,
   X,
   Coins,
-  Shield,
-  Users,
-  UserCheck,
-  UserX,
-  Link2,
-  Copy,
-  Plus,
   AlertTriangle,
-  ExternalLink,
   Key,
   Download,
   Upload,
   Database,
   Globe,
+  Wrench,
+  Activity,
+  Bug,
+  Lightbulb,
+  RotateCcw,
 } from 'lucide-react';
 import {
   SUPPORTED_LOCALES,
@@ -44,22 +41,30 @@ import type {
   DocChapterDetail,
   Medication,
   UserSettings,
-  AdminDashboardData,
-  AdminUserItem,
-  AdminInviteItem,
   AccessInfo,
+  SkillsResponse,
+  BacklogItem,
+  DiagnosticsResponse,
+  DocSearchResult,
+  ReaderSkillData,
 } from '../types';
 import {
-  fetchAdminUsers,
-  createAdminInvite,
-  deleteAdminInvite,
-  updateAdminUser,
   saveByokKey,
   clearByokKey,
   exportBackupJson,
   restoreBackupJson,
+  fetchSkills,
+  activateUserSkill,
+  rejectUserSkill,
+  fetchBacklog,
+  resolveBacklogItem,
+  fetchDiagnostics,
+  resetAgentSession,
+  searchDocs,
 } from '../api';
 import { findDocSectionMatches, stripMarkdownInline } from '../utils';
+
+export type SystemSectionId = 'directives' | 'skills' | 'diagnostics' | 'meds' | 'dossier' | 'docs';
 
 export interface PersonaPreset {
   id: string;
@@ -79,11 +84,9 @@ export interface SystemTabProps {
   handleSaveDirectives: (extra?: {
     base_currency?: string;
     timezone?: string;
-    personal_memory?: string;
+    summary_time?: string;
+    model_provider?: string;
   }) => void;
-  suggestedQuestions?: readonly string[];
-  copiedPromptIndex?: number | null;
-  handleCopyPrompt?: (q: string, idx: number) => void;
   loadingContext: boolean;
   lifeContext: string;
   contextDepth: number;
@@ -100,12 +103,16 @@ export interface SystemTabProps {
   loadingChapterDetail: boolean;
   chapterDetail: DocChapterDetail | null;
   onOpenDossierReader?: () => void;
+  onOpenSkillReader?: (skill: ReaderSkillData) => void;
+  initialOpenSection?: SystemSectionId | null;
+  skillsRefreshKey?: number;
+  showConfirm?: (msg: string) => Promise<boolean>;
+  showAlert?: (msg: string) => Promise<void>;
   triggerHaptic: (type?: 'light' | 'medium' | 'success') => void;
 
   userSettings?: UserSettings | null;
   accessInfo?: AccessInfo | null;
   onReloadSettings?: () => Promise<void> | void;
-  assistantName?: string;
   backupPrefix?: string;
   feedbackEnabled?: boolean;
 
@@ -145,15 +152,22 @@ const TIMEZONE_PRESETS = [
   'Asia/Almaty',
 ] as const;
 
+const PROVIDER_OPTIONS = [
+  { id: 'gemini', label: 'Gemini' },
+  { id: 'openai', label: 'OpenAI' },
+  { id: 'deepseek', label: 'DeepSeek' },
+  { id: 'anthropic', label: 'Anthropic' },
+] as const;
+
 function getPresetIcon(id: string) {
   switch (id) {
     case 'mentor':
       return <HeartHandshake size={15} color="var(--accent-color)" />;
-    case 'executive':
+    case 'strategist':
       return <Zap size={15} color="var(--accent-color)" />;
-    case 'partner':
+    case 'calm_partner':
       return <GraduationCap size={15} color="var(--accent-color)" />;
-    case 'socratic':
+    case 'concise':
       return <Brain size={15} color="var(--accent-color)" />;
     default:
       return <Sparkles size={15} color="var(--accent-color)" />;
@@ -164,12 +178,12 @@ function getPresetBadge(id: string, t: (key: string) => string): string {
   switch (id) {
     case 'mentor':
       return t('badges.calmMode');
-    case 'executive':
+    case 'strategist':
       return t('badges.focusFacts');
-    case 'partner':
+    case 'calm_partner':
       return t('badges.peerToPeer');
-    case 'socratic':
-      return t('badges.socratic');
+    case 'concise':
+      return t('badges.concise');
     default:
       return '';
   }
@@ -197,6 +211,11 @@ export const SystemTab: React.FC<SystemTabProps> = ({
   docChapters,
   handleToggleChapter,
   onOpenDossierReader,
+  onOpenSkillReader,
+  initialOpenSection,
+  skillsRefreshKey = 0,
+  showConfirm,
+  showAlert,
   triggerHaptic,
   userSettings,
   medications,
@@ -218,17 +237,19 @@ export const SystemTab: React.FC<SystemTabProps> = ({
   handleDeleteMedication,
   accessInfo,
   onReloadSettings,
-  assistantName = 'Tokio',
   backupPrefix = 'tokio-backup',
   feedbackEnabled = true,
 }) => {
-  const { locale, setLocale, t, formatDate } = useI18n();
+  const { locale, setLocale, t, formatDate, formatNumber } = useI18n();
   const isAdmin = userSettings?.role === 'admin';
 
   // Profile preferences state
   const [baseCurrency, setBaseCurrency] = useState(userSettings?.base_currency || 'EUR');
   const [timezone, setTimezone] = useState(userSettings?.timezone || 'Europe/Moscow');
-  const [personalMemory, setPersonalMemory] = useState(userSettings?.personal_memory || '');
+  const [summaryTime, setSummaryTime] = useState(userSettings?.summary_time || '07:00');
+  const [modelProvider, setModelProvider] = useState(
+    userSettings?.model_provider || accessInfo?.model_provider || 'gemini'
+  );
   const [prevUserSettings, setPrevUserSettings] = useState(userSettings);
 
   // BYOK state
@@ -249,178 +270,165 @@ export const SystemTab: React.FC<SystemTabProps> = ({
     setPrevUserSettings(userSettings);
     if (userSettings?.base_currency) setBaseCurrency(userSettings.base_currency);
     if (userSettings?.timezone) setTimezone(userSettings.timezone);
-    if (userSettings?.personal_memory !== undefined) setPersonalMemory(userSettings.personal_memory);
+    if (userSettings?.summary_time) setSummaryTime(userSettings.summary_time);
+    if (userSettings?.model_provider) setModelProvider(userSettings.model_provider);
     if (userSettings?.has_byok_key !== undefined) setLocalByokOverride(null);
   }
 
   // Section accordions
-  const [openSection, setOpenSection] = useState<'directives' | 'meds' | 'admin' | 'dossier' | 'docs' | null>(
-    isAdmin ? 'docs' : 'directives'
+  const [openSection, setOpenSection] = useState<SystemSectionId | null>(() =>
+    initialOpenSection ?? (isAdmin ? 'docs' : 'directives')
   );
-
-  // Admin Dashboard state
-  const [adminData, setAdminData] = useState<AdminDashboardData | null>(null);
-  const [adminLoading, setAdminLoading] = useState(false);
-  const [adminError, setAdminError] = useState<string | null>(null);
-  const [inviteNote, setInviteNote] = useState('');
-  const [inviteMaxUses, setInviteMaxUses] = useState(1);
-  const [isCreatingInvite, setIsCreatingInvite] = useState(false);
-  const [copiedInviteCode, setCopiedInviteCode] = useState<string | null>(null);
-  const [isUpdatingUser, setIsUpdatingUser] = useState(false);
-  const [userLimitInputs, setUserLimitInputs] = useState<Record<number, string>>({});
-
-  const loadAdminData = async () => {
-    if (!isAdmin) return;
-    try {
-      setAdminLoading(true);
-      setAdminError(null);
-      const data = await fetchAdminUsers();
-      setAdminData(data);
-    } catch (err: unknown) {
-      console.error('Failed to load admin data:', err);
-      const msg = err instanceof Error ? err.message : t('system.adminErrLoad');
-      setAdminError(msg);
-    } finally {
-      setAdminLoading(false);
+  const [prevInitialSection, setPrevInitialSection] = useState(initialOpenSection);
+  if (initialOpenSection !== prevInitialSection) {
+    setPrevInitialSection(initialOpenSection);
+    if (initialOpenSection) {
+      setOpenSection(initialOpenSection);
     }
-  };
+  }
 
-  const toggleSection = (section: 'directives' | 'meds' | 'admin' | 'dossier' | 'docs') => {
-    triggerHaptic('light');
-    setOpenSection((prev) => {
-      const next = prev === section ? null : section;
-      if (next === 'admin' && !adminData) {
-        loadAdminData();
-      }
-      return next;
+  // Skills & Backlog state
+  const [skillsData, setSkillsData] = useState<SkillsResponse | null>(null);
+  const [backlogItems, setBacklogItems] = useState<BacklogItem[]>([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillBusyId, setSkillBusyId] = useState<string | null>(null);
+  const [backlogBusyId, setBacklogBusyId] = useState<string | null>(null);
+
+  // Diagnostics & Session state
+  const [diagData, setDiagData] = useState<DiagnosticsResponse | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+  const [sessionResetting, setSessionResetting] = useState(false);
+  const [showRawDiagText, setShowRawDiagText] = useState(false);
+
+  // Server-side Docs Search state
+  const [docSearchResult, setDocSearchResult] = useState<DocSearchResult | null>(null);
+
+  const loadSkillsAndBacklog = React.useCallback(async () => {
+    try {
+      setSkillsLoading(true);
+      const [sk, bl] = await Promise.all([fetchSkills(), fetchBacklog()]);
+      setSkillsData(sk);
+      setBacklogItems(bl.items);
+    } catch (err) {
+      console.error('Failed to load skills/backlog:', err);
+    } finally {
+      setSkillsLoading(false);
+    }
+  }, []);
+
+  const loadDiagnostics = React.useCallback(async () => {
+    try {
+      setDiagLoading(true);
+      const d = await fetchDiagnostics();
+      setDiagData(d);
+    } catch (err) {
+      console.error('Failed to load diagnostics:', err);
+    } finally {
+      setDiagLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (openSection === 'skills' && !skillsData) {
+      void Promise.resolve().then(() => {
+        if (!cancelled) void loadSkillsAndBacklog();
+      });
+    } else if (openSection === 'diagnostics' && !diagData) {
+      void Promise.resolve().then(() => {
+        if (!cancelled) void loadDiagnostics();
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [openSection, skillsData, diagData, loadSkillsAndBacklog, loadDiagnostics]);
+
+  useEffect(() => {
+    if (skillsRefreshKey <= 0) return;
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) void loadSkillsAndBacklog();
     });
+    return () => {
+      cancelled = true;
+    };
+  }, [skillsRefreshKey, loadSkillsAndBacklog]);
+
+  useEffect(() => {
+    const q = docSearchQuery.trim();
+    if (q.length < 2) {
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      searchDocs(q)
+        .then((res) => {
+          if (!cancelled) setDocSearchResult(res);
+        })
+        .catch(() => {
+          if (!cancelled) setDocSearchResult({ query: q, topic: null, result: '' });
+        });
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [docSearchQuery]);
+
+  const toggleSection = (section: SystemSectionId) => {
+    triggerHaptic('light');
+    setOpenSection((prev) => (prev === section ? null : section));
   };
 
-  const handleCreateInvite = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleToggleUserSkill = async (skillId: string, action: 'activate' | 'reject') => {
+    if (action === 'reject' && showConfirm && !(await showConfirm(t('skills.rejectConfirm')))) {
+      return;
+    }
     try {
-      setIsCreatingInvite(true);
+      setSkillBusyId(skillId);
       triggerHaptic('medium');
-      const inv = await createAdminInvite(inviteNote.trim() || t('system.inviteDefaultNote'), inviteMaxUses);
+      if (action === 'activate') {
+        await activateUserSkill(skillId);
+      } else {
+        await rejectUserSkill(skillId);
+      }
       triggerHaptic('success');
-      setInviteNote('');
-      setInviteMaxUses(1);
-      setAdminData((prev) => (prev ? { ...prev, invites: [inv, ...prev.invites] } : null));
+      await loadSkillsAndBacklog();
     } catch (err: unknown) {
-      console.error('Failed to create invite:', err);
-      const msg = err instanceof Error ? err.message : t('system.adminErrInvite');
-      setAdminError(msg);
+      if (showAlert) await showAlert(err instanceof Error ? err.message : t('common.error'));
     } finally {
-      setIsCreatingInvite(false);
+      setSkillBusyId(null);
     }
   };
 
-  const handleCopyInviteLink = async (invite: AdminInviteItem) => {
+  const handleResolveBacklog = async (itemId: string, status: 'shipped' | 'rejected') => {
     try {
-      const link = invite.bot_link || invite.code;
-      await navigator.clipboard.writeText(link);
-      triggerHaptic('success');
-      setCopiedInviteCode(invite.code);
-      setTimeout(() => setCopiedInviteCode(null), 2500);
-    } catch (e) {
-      console.warn('Clipboard write error:', e);
-    }
-  };
-
-  const handleShareInvite = (invite: AdminInviteItem) => {
-    const link = invite.bot_link || '';
-    const wa = typeof window !== 'undefined' ? window.Telegram?.WebApp : undefined;
-    if (link && wa && 'openTelegramLink' in wa && typeof (wa as unknown as { openTelegramLink: (url: string) => void }).openTelegramLink === 'function') {
-      triggerHaptic('light');
-      (wa as unknown as { openTelegramLink: (url: string) => void }).openTelegramLink(
-        `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(t('system.shareInviteText', { name: assistantName, note: invite.note }))}`
-      );
-    } else {
-      handleCopyInviteLink(invite);
-    }
-  };
-
-  const handleDeleteInvite = async (code: string) => {
-    try {
+      setBacklogBusyId(itemId);
       triggerHaptic('medium');
-      await deleteAdminInvite(code);
+      await resolveBacklogItem(itemId, status);
       triggerHaptic('success');
-      setAdminData((prev) =>
-        prev ? { ...prev, invites: prev.invites.filter((i) => i.code !== code) } : null
-      );
-    } catch (err) {
-      console.error('Failed to delete invite:', err);
+      setBacklogItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, status } : it)));
+    } catch (err: unknown) {
+      if (showAlert) await showAlert(err instanceof Error ? err.message : t('common.error'));
+    } finally {
+      setBacklogBusyId(null);
     }
   };
 
-  const handleApproveUser = async (telegramId: number) => {
+  const handleResetSession = async () => {
+    if (showConfirm && !(await showConfirm(t('system.diagResetConfirm')))) return;
     try {
-      setIsUpdatingUser(true);
+      setSessionResetting(true);
       triggerHaptic('medium');
-      await updateAdminUser(telegramId, { is_approved: true });
+      await resetAgentSession();
       triggerHaptic('success');
-      setAdminData((prev) =>
-        prev
-          ? {
-              ...prev,
-              users: prev.users.map((u) =>
-                u.telegram_id === telegramId ? { ...u, is_approved: true } : u
-              ),
-            }
-          : null
-      );
-    } catch (err) {
-      console.error('Failed to approve user:', err);
+      await loadDiagnostics();
+      if (showAlert) await showAlert(t('system.diagResetDone'));
+    } catch (err: unknown) {
+      if (showAlert) await showAlert(err instanceof Error ? err.message : t('common.error'));
     } finally {
-      setIsUpdatingUser(false);
-    }
-  };
-
-  const handleToggleUserApproval = async (u: AdminUserItem) => {
-    try {
-      setIsUpdatingUser(true);
-      triggerHaptic('medium');
-      const nextApproved = !u.is_approved;
-      await updateAdminUser(u.telegram_id, { is_approved: nextApproved });
-      triggerHaptic('success');
-      setAdminData((prev) =>
-        prev
-          ? {
-              ...prev,
-              users: prev.users.map((item) =>
-                item.telegram_id === u.telegram_id ? { ...item, is_approved: nextApproved } : item
-              ),
-            }
-          : null
-      );
-    } catch (err) {
-      console.error('Failed to toggle approval:', err);
-    } finally {
-      setIsUpdatingUser(false);
-    }
-  };
-
-  const handleUpdateLimit = async (telegramId: number, newLimit: number) => {
-    if (newLimit < 0) return;
-    try {
-      setIsUpdatingUser(true);
-      triggerHaptic('light');
-      await updateAdminUser(telegramId, { daily_msg_limit: newLimit });
-      triggerHaptic('success');
-      setAdminData((prev) =>
-        prev
-          ? {
-              ...prev,
-              users: prev.users.map((u) =>
-                u.telegram_id === telegramId ? { ...u, daily_msg_limit: newLimit } : u
-              ),
-            }
-          : null
-      );
-    } catch (err) {
-      console.error('Failed to update limit:', err);
-    } finally {
-      setIsUpdatingUser(false);
+      setSessionResetting(false);
     }
   };
 
@@ -428,7 +436,8 @@ export const SystemTab: React.FC<SystemTabProps> = ({
     handleSaveDirectives({
       base_currency: baseCurrency.toUpperCase(),
       timezone: timezone.trim(),
-      personal_memory: personalMemory,
+      summary_time: summaryTime,
+      model_provider: modelProvider,
     });
   };
 
@@ -442,7 +451,7 @@ export const SystemTab: React.FC<SystemTabProps> = ({
       setByokLoading(true);
       setByokMsg(null);
       triggerHaptic('medium');
-      await saveByokKey(key);
+      await saveByokKey(key, modelProvider);
       setLocalByokOverride(true);
       setByokInput('');
       setByokMsg({ type: 'success', text: t('system.byokSaved') });
@@ -716,7 +725,7 @@ export const SystemTab: React.FC<SystemTabProps> = ({
                     gap: 4,
                   }}
                 >
-                  {hasByokKey ? t('system.byokActive') : t('system.byokShared')}
+                  {hasByokKey ? `${t('system.byokActive')} (${modelProvider})` : t('system.byokShared')}
                 </span>
               </div>
 
@@ -724,10 +733,38 @@ export const SystemTab: React.FC<SystemTabProps> = ({
                 {t('system.byokDesc')}
               </span>
 
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 2 }}>
+                {PROVIDER_OPTIONS.map((prov) => {
+                  const selected = modelProvider === prov.id;
+                  return (
+                    <button
+                      key={prov.id}
+                      type="button"
+                      onClick={() => {
+                        triggerHaptic('light');
+                        setModelProvider(prov.id);
+                      }}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: selected ? '1px solid var(--accent-color)' : '1px solid var(--border-hairline)',
+                        background: selected ? 'rgba(245, 158, 11, 0.16)' : 'rgba(255, 255, 255, 0.04)',
+                        color: selected ? 'var(--accent-color)' : 'var(--text-secondary)',
+                        fontSize: 12,
+                        fontWeight: selected ? 700 : 500,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {prov.label}
+                    </button>
+                  );
+                })}
+              </div>
+
               <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
                 <input
                   type="password"
-                  placeholder="AIzaSy..."
+                  placeholder={t('system.byokPlaceholder')}
                   value={byokInput}
                   onChange={(e) => setByokInput(e.target.value)}
                   style={{
@@ -988,6 +1025,31 @@ export const SystemTab: React.FC<SystemTabProps> = ({
               />
             </div>
 
+            {/* Summary Digest Time */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+              <label
+                htmlFor="profile-summary-time"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: 'var(--text-primary)',
+                }}
+              >
+                <Clock size={14} color="var(--accent-color)" />
+                <span>{t('system.summaryTime')}</span>
+              </label>
+              <input
+                id="profile-summary-time"
+                type="time"
+                className="input-field"
+                value={summaryTime}
+                onChange={(e) => setSummaryTime(e.target.value)}
+              />
+            </div>
+
             {/* Persona Presets Grid */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
               <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
@@ -1006,7 +1068,6 @@ export const SystemTab: React.FC<SystemTabProps> = ({
                       onClick={() => {
                         triggerHaptic('light');
                         setPersonaStyle(preset.id);
-                        setCustomInstructions(preset.instruction);
                       }}
                     >
                       <div className="persona-preset-header">
@@ -1042,23 +1103,6 @@ export const SystemTab: React.FC<SystemTabProps> = ({
               placeholder={t('system.directivesPlaceholder')}
               value={customInstructions}
               onChange={(e) => setCustomInstructions(e.target.value)}
-            />
-
-            {/* Personal Memory Textarea */}
-            <label
-              id="memory-label"
-              style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 2, marginTop: 4 }}
-            >
-              {t('system.memoryLabel')}
-            </label>
-            <textarea
-              className="directives-textarea"
-              aria-labelledby="memory-label"
-              aria-label={t('system.memoryLabel')}
-              style={{ minHeight: 70 }}
-              placeholder={t('system.memoryPlaceholder')}
-              value={personalMemory}
-              onChange={(e) => setPersonalMemory(e.target.value)}
             />
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
@@ -1333,363 +1377,379 @@ export const SystemTab: React.FC<SystemTabProps> = ({
         )}
       </div>
 
-      {/* SECTION 3: Admin */}
-      {isAdmin && (
-        <div className="system-accordion-card">
-          <button
-            type="button"
-            className="system-accordion-trigger"
-            onClick={() => toggleSection('admin')}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Shield size={18} color="var(--accent-color)" />
-              <span>{t('system.adminTitle')}</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {adminData && (
-                <span
-                  className="tabular-nums"
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    padding: '2px 8px',
-                    borderRadius: '10px',
-                    background: 'rgba(255, 255, 255, 0.06)',
-                    color: adminData.users.some((u) => !u.is_approved) ? '#f59e0b' : 'var(--accent-color)',
-                  }}
-                >
-                  {t('system.usersCount', { count: adminData.users.length })}
-                </span>
-              )}
-              {openSection === 'admin' ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </div>
-          </button>
+      {/* SECTION 3: Runtime Skills & Evolution Backlog */}
+      <div className="system-accordion-card">
+        <button
+          type="button"
+          className="system-accordion-trigger"
+          onClick={() => toggleSection('skills')}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Wrench size={18} color="var(--accent-color)" />
+            <span>{t('skills.sectionTitle')}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {skillsData && (
+              <span
+                className="tabular-nums"
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: '10px',
+                  background: 'rgba(255, 255, 255, 0.06)',
+                  color: 'var(--accent-color)',
+                }}
+              >
+                {skillsData.builtin.length + skillsData.user.length}
+              </span>
+            )}
+            {openSection === 'skills' ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </div>
+        </button>
 
-          {openSection === 'admin' && (
-            <div className="system-accordion-body">
-              {adminError && (
-                <div
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: 'var(--radius-sm)',
-                    background: 'rgba(239, 68, 68, 0.12)',
-                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                    color: '#fca5a5',
-                    fontSize: 12.5,
-                  }}
-                >
-                  {adminError}
-                </div>
-              )}
+        {openSection === 'skills' && (
+          <div className="system-accordion-body">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
+                {t('skills.sectionDesc')}
+              </p>
+              <button
+                type="button"
+                className="btn-link"
+                disabled={skillsLoading}
+                onClick={() => {
+                  triggerHaptic('light');
+                  void loadSkillsAndBacklog();
+                }}
+                style={{ fontSize: 12, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
+              >
+                <RefreshCw size={12} className={skillsLoading ? 'spin-icon' : ''} />
+                <span>{skillsLoading ? t('common.loading') : t('common.refresh')}</span>
+              </button>
+            </div>
 
-              {/* Stats Bar */}
-              <div className="admin-stat-row">
-                <div className="admin-stat-box">
-                  <span className="title">{t('system.totalUsers')}</span>
-                  <span className="val tabular-nums">{adminData?.users.length ?? '—'}</span>
-                </div>
-                <div className="admin-stat-box">
-                  <span className="title">{t('system.pendingApproval')}</span>
-                  <span
-                    className="val tabular-nums"
-                    style={{
-                      color:
-                        (adminData?.users.filter((u) => !u.is_approved).length ?? 0) > 0
-                          ? 'var(--accent-color)'
-                          : 'var(--text-primary)',
-                    }}
-                  >
-                    {adminData?.users.filter((u) => !u.is_approved).length ?? 0}
-                  </span>
-                </div>
-                <div className="admin-stat-box">
-                  <span className="title">{t('system.activeInvites')}</span>
-                  <span className="val tabular-nums">{adminData?.invites.length ?? '—'}</span>
-                </div>
+            {skillsLoading && !skillsData ? (
+              <div style={{ textAlign: 'center', padding: 16, color: 'var(--text-muted)', fontSize: 12 }}>
+                {t('common.loading')}
               </div>
-
-              {/* Create Invite Form */}
-              <form onSubmit={handleCreateInvite} className="admin-card">
-                <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-primary)' }}>
-                  {t('system.createInviteTitle')}
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input
-                    type="text"
-                    className="input-field"
-                    style={{ flex: 1 }}
-                    placeholder={t('system.invitePlaceholder')}
-                    value={inviteNote}
-                    onChange={(e) => setInviteNote(e.target.value)}
-                    required
-                  />
-                  <input
-                    type="number"
-                    min="1"
-                    max="100"
-                    className="input-field"
-                    style={{ width: 75 }}
-                    placeholder={t('system.usesLimitPlaceholder')}
-                    title={t('system.usesLimitTitle')}
-                    value={inviteMaxUses}
-                    onChange={(e) => setInviteMaxUses(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                  />
-                  <button
-                    type="submit"
-                    className="btn-primary"
-                    disabled={isCreatingInvite}
-                    style={{ padding: '0 14px', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <Plus size={15} />
-                    <span>{isCreatingInvite ? '...' : t('common.create')}</span>
-                  </button>
-                </div>
-              </form>
-
-              {/* Active Invites List */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-                <span className="section-title" style={{ fontSize: 13 }}>
-                  {t('system.inviteLinks')}
-                </span>
-                {adminData?.invites.length === 0 ? (
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('system.noInvites')}</div>
-                ) : (
-                  adminData?.invites.map((inv) => {
-                    const isCopied = copiedInviteCode === inv.code;
-                    return (
-                      <div key={inv.code} className="admin-invite-row">
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+            ) : (
+              <>
+                {skillsData && skillsData.builtin.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <span className="section-title" style={{ fontSize: 12.5 }}>
+                      {t('skills.builtinHeader')} ({skillsData.builtin.length})
+                    </span>
+                    {skillsData.builtin.map((sk) => (
+                      <div
+                        key={sk.id}
+                        className="doc-chapter-card reader-preview-card"
+                        style={{ marginBottom: 0, padding: '10px 12px' }}
+                        onClick={() => {
+                          triggerHaptic('light');
+                          onOpenSkillReader?.({
+                            source: 'builtin',
+                            id: sk.id,
+                            title: sk.name,
+                            subtitle: `${sk.id}.md`,
+                            triggers: sk.triggers,
+                            body: sk.body,
+                          });
+                        }}
+                      >
+                        <div className="doc-chapter-header">
+                          <span className="doc-chapter-title">{sk.name}</span>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <Link2 size={13} color="var(--accent-color)" />
-                            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-                              {inv.note || t('system.inviteDefaultNote')}
-                            </span>
-                            <span
-                              className="tabular-nums"
-                              style={{
-                                fontSize: 11,
-                                padding: '1px 6px',
-                                borderRadius: 8,
-                                background: 'rgba(255, 255, 255, 0.06)',
-                                color: 'var(--text-muted)',
-                              }}
-                            >
-                              {inv.uses_count} / {inv.max_uses}
-                            </span>
+                            <span className="doc-chapter-badge">{t('skills.builtinBadge')}</span>
+                            <ChevronRight size={14} color="var(--text-muted)" />
                           </div>
-                          <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                            {inv.code}
-                          </span>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <button
-                            type="button"
-                            className="admin-btn-action"
-                            onClick={() => handleCopyInviteLink(inv)}
-                          >
-                            <Copy size={12} />
-                            <span>{isCopied ? t('system.copiedBtn') : t('system.copyBtn')}</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="admin-btn-action"
-                            onClick={() => handleShareInvite(inv)}
-                            title={t('system.shareTg')}
-                          >
-                            <ExternalLink size={12} />
-                          </button>
-                          <button
-                            type="button"
-                            className="admin-btn-action admin-btn-danger"
-                            onClick={() => handleDeleteInvite(inv.code)}
-                            title={t('system.deleteInvite')}
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                        {sk.description && (
+                          <div className="note-preview-snippet" style={{ marginTop: 4 }}>
+                            {sk.description}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                  <span className="section-title" style={{ fontSize: 12.5 }}>
+                    {t('skills.userHeader')} ({skillsData?.user.length ?? 0})
+                  </span>
+                  {!skillsData || skillsData.user.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      {t('skills.emptyUser')}
+                    </div>
+                  ) : (
+                    skillsData.user.map((sk) => (
+                      <div
+                        key={sk.id}
+                        className="doc-chapter-card reader-preview-card"
+                        style={{ marginBottom: 0, padding: '10px 12px' }}
+                        onClick={() => {
+                          triggerHaptic('light');
+                          onOpenSkillReader?.({
+                            source: 'user',
+                            id: sk.id,
+                            title: sk.title || sk.key,
+                            subtitle: `${sk.key} · v${sk.version}`,
+                            status: sk.status,
+                            body: sk.body,
+                            runs: sk.runs,
+                            views: sk.views,
+                          });
+                        }}
+                      >
+                        <div className="doc-chapter-header">
+                          <span className="doc-chapter-title">
+                            #{sk.id} {sk.key}
+                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span className="doc-chapter-badge tabular-nums">
+                              {sk.status} · {sk.runs}/{sk.views}
+                            </span>
+                            <ChevronRight size={14} color="var(--text-muted)" />
+                          </div>
+                        </div>
+                        <div
+                          style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 6 }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <span style={{ fontSize: 12, color: 'var(--text-muted)', minWidth: 0 }}>{sk.title}</span>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                            {sk.status !== 'active' && (
+                              <button
+                                type="button"
+                                className="admin-btn-action admin-btn-approve"
+                                disabled={skillBusyId === sk.id}
+                                onClick={() => void handleToggleUserSkill(sk.id, 'activate')}
+                              >
+                                <Check size={12} />
+                                <span>{t('skills.activateBtn')}</span>
+                              </button>
+                            )}
+                            {(sk.status === 'pending' || sk.status === 'active') && (
+                              <button
+                                type="button"
+                                className="admin-btn-action admin-btn-danger"
+                                disabled={skillBusyId === sk.id}
+                                onClick={() => void handleToggleUserSkill(sk.id, 'reject')}
+                              >
+                                <X size={12} />
+                                <span>{sk.status === 'active' ? t('skills.disableBtn') : t('skills.rejectBtn')}</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    );
-                  })
-                )}
-              </div>
-
-              {/* Users Management */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span className="section-title" style={{ fontSize: 13 }}>
-                    {t('system.usersSection')}
-                  </span>
-                  <button
-                    type="button"
-                    className="btn-link"
-                    disabled={adminLoading}
-                    onClick={() => {
-                      triggerHaptic('light');
-                      loadAdminData();
-                    }}
-                    style={{ fontSize: 12, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <RefreshCw size={12} className={adminLoading ? 'spin-icon' : ''} />
-                    <span>{adminLoading ? t('common.loading') : t('common.refresh')}</span>
-                  </button>
+                    ))
+                  )}
                 </div>
 
-                {adminLoading && !adminData ? (
-                  <div style={{ textAlign: 'center', padding: 16, color: 'var(--text-muted)', fontSize: 12 }}>
-                    {t('system.loadingUsers')}
-                  </div>
-                ) : (
-                  <>
-                    {/* Pending Users Highlight */}
-                    {adminData?.users
-                      .filter((u) => !u.is_approved)
-                      .map((u) => (
-                        <div key={u.telegram_id} className="admin-card pending">
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                            <div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <AlertTriangle size={15} color="#f59e0b" />
-                                <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>
-                                  {u.name || t('system.newUser')}
-                                </span>
-                              </div>
-                              <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 2 }}>
-                                ID: {u.telegram_id} · {t('system.currencyShort')} {u.base_currency} · {t('system.createdShort')}{' '}
-                                {u.created_at ? formatDate(u.created_at) : '—'}
-                              </div>
-                            </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                  <span className="section-title" style={{ fontSize: 12.5 }}>
+                    {t('skills.backlogHeader')} ({backlogItems.filter((b) => b.status === 'pending').length})
+                  </span>
+                  {backlogItems.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      {t('skills.emptyBacklog')}
+                    </div>
+                  ) : (
+                    backlogItems.map((item) => (
+                      <div key={item.id} className="admin-card" style={{ padding: '10px 12px', gap: 6 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {item.category === 'bug' ? (
+                              <Bug size={14} color="#f59e0b" />
+                            ) : (
+                              <Lightbulb size={14} color="var(--accent-color)" />
+                            )}
+                            <span style={{ fontSize: 13, fontWeight: 600 }}>{item.title}</span>
+                          </div>
+                          <span className="doc-chapter-badge">{item.status}</span>
+                        </div>
+                        {item.status === 'pending' && (
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
                             <button
                               type="button"
                               className="admin-btn-action admin-btn-approve"
-                              disabled={isUpdatingUser}
-                              onClick={() => handleApproveUser(u.telegram_id)}
-                              style={{ padding: '6px 12px', fontSize: 12 }}
+                              disabled={backlogBusyId === item.id}
+                              onClick={() => void handleResolveBacklog(item.id, 'shipped')}
                             >
-                              <UserCheck size={14} />
-                              <span>{t('system.approveAccess')}</span>
+                              <Check size={12} />
+                              <span>{t('skills.resolveShipped')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="admin-btn-action admin-btn-danger"
+                              disabled={backlogBusyId === item.id}
+                              onClick={() => void handleResolveBacklog(item.id, 'rejected')}
+                            >
+                              <X size={12} />
+                              <span>{t('skills.rejectBtn')}</span>
                             </button>
                           </div>
-                        </div>
-                      ))}
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
 
-                    {/* Approved Users List */}
-                    {adminData?.users
-                      .filter((u) => u.is_approved)
-                      .map((u) => {
-                        const isSelf = userSettings?.name === u.name;
-                        const currentInputLimit =
-                          userLimitInputs[u.telegram_id] !== undefined
-                            ? userLimitInputs[u.telegram_id]
-                            : String(u.daily_msg_limit);
+      {/* SECTION 3B: Agent Diagnostics & Session Reset */}
+      <div className="system-accordion-card">
+        <button
+          type="button"
+          className="system-accordion-trigger"
+          onClick={() => toggleSection('diagnostics')}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Activity size={18} color="var(--accent-color)" />
+            <span>{t('system.diagTitle')}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {diagData && (
+              <span
+                className="tabular-nums"
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: '10px',
+                  background: 'rgba(255, 255, 255, 0.06)',
+                  color: diagData.last_failure ? '#f59e0b' : '#34d399',
+                }}
+              >
+                {diagData.model_provider}
+              </span>
+            )}
+            {openSection === 'diagnostics' ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </div>
+        </button>
 
-                        return (
-                          <div key={u.telegram_id} className="admin-card">
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                              <div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  <Users size={14} color="var(--accent-color)" />
-                                  <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-primary)' }}>
-                                    {u.name || t('system.userDefault')}
-                                  </span>
-                                  {u.role === 'admin' && (
-                                    <span
-                                      style={{
-                                        fontSize: 10,
-                                        padding: '1px 5px',
-                                        borderRadius: 6,
-                                        background: 'rgba(245, 158, 11, 0.16)',
-                                        color: 'var(--accent-color)',
-                                        fontWeight: 700,
-                                      }}
-                                    >
-                                      Admin
-                                    </span>
-                                  )}
-                                  {isSelf && (
-                                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('system.selfTag')}</span>
-                                  )}
-                                </div>
-                                <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 2 }}>
-                                  ID: {u.telegram_id} · {t('system.currencyShort')} {u.base_currency}
-                                </div>
-                              </div>
-                              <div style={{ textAlign: 'right' }}>
-                                <div className="tabular-nums" style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
-                                  {t('system.aiQuotaShort', { used: u.daily_msg_used, limit: u.daily_msg_limit })}
-                                </div>
-                                <div className="tabular-nums" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                  {t('system.spentUsd', { amount: u.total_cost_usd !== undefined ? u.total_cost_usd.toFixed(2) : '0.00' })}
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Quota adjusting controls */}
-                            <div
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: 6,
-                                paddingTop: 6,
-                                borderTop: '1px solid var(--border-hairline)',
-                              }}
-                            >
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>{t('system.quotaLabel')}</span>
-                                <input
-                                  type="number"
-                                  className="input-field"
-                                  style={{ width: 60, padding: '3px 6px', fontSize: 12 }}
-                                  value={currentInputLimit}
-                                  onChange={(e) =>
-                                    setUserLimitInputs((prev) => ({
-                                      ...prev,
-                                      [u.telegram_id]: e.target.value,
-                                    }))
-                                  }
-                                />
-                                <button
-                                  type="button"
-                                  className="admin-btn-action"
-                                  onClick={() =>
-                                    handleUpdateLimit(
-                                      u.telegram_id,
-                                      parseInt(currentInputLimit, 10) || u.daily_msg_limit
-                                    )
-                                  }
-                                >
-                                  OK
-                                </button>
-                                <button
-                                  type="button"
-                                  className="admin-btn-action"
-                                  onClick={() => handleUpdateLimit(u.telegram_id, u.daily_msg_limit + 20)}
-                                >
-                                  +20
-                                </button>
-                              </div>
-
-                              {!isSelf && (
-                                <button
-                                  type="button"
-                                  className="admin-btn-action admin-btn-danger"
-                                  onClick={() => handleToggleUserApproval(u)}
-                                >
-                                  <UserX size={12} />
-                                  <span>{t('system.pauseUser')}</span>
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                  </>
-                )}
-              </div>
+        {openSection === 'diagnostics' && (
+          <div className="system-accordion-body">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
+                {t('system.diagDesc')}
+              </p>
+              <button
+                type="button"
+                className="btn-link"
+                disabled={diagLoading}
+                onClick={() => {
+                  triggerHaptic('light');
+                  void loadDiagnostics();
+                }}
+                style={{ fontSize: 12, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
+              >
+                <RefreshCw size={12} className={diagLoading ? 'spin-icon' : ''} />
+                <span>{diagLoading ? t('common.loading') : t('common.refresh')}</span>
+              </button>
             </div>
-          )}
-        </div>
-      )}
+
+            {diagLoading && !diagData ? (
+              <div style={{ textAlign: 'center', padding: 16, color: 'var(--text-muted)', fontSize: 12 }}>
+                {t('common.loading')}
+              </div>
+            ) : diagData ? (
+              <>
+                <div className="admin-stat-row">
+                  <div className="admin-stat-box">
+                    <span className="title">{t('system.diagThreadMessages')}</span>
+                    <span className="val tabular-nums">{diagData.thread.count}</span>
+                  </div>
+                  <div className="admin-stat-box">
+                    <span className="title">{t('system.diagTokens')}</span>
+                    <span className="val tabular-nums">{formatNumber(diagData.usage.total_tokens)}</span>
+                  </div>
+                  <div className="admin-stat-box">
+                    <span className="title">{t('system.diagCost')}</span>
+                    <span className="val tabular-nums">
+                      ${diagData.usage.total_cost_usd.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+
+                {diagData.turn_trace && (
+                  <div className="admin-card" style={{ padding: '10px 12px', gap: 4 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>{t('system.diagLastTurn')}</div>
+                    <div className="tabular-nums" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      stage: {diagData.turn_trace.stage || '—'} · calls: {diagData.turn_trace.modelCalls ?? 0}
+                      {diagData.turn_trace.updatedAt ? ` · ${formatDate(diagData.turn_trace.updatedAt)}` : ''}
+                    </div>
+                  </div>
+                )}
+
+                {diagData.last_failure && (
+                  <div
+                    className="admin-card"
+                    style={{
+                      padding: '10px 12px',
+                      borderColor: 'rgba(245, 158, 11, 0.35)',
+                      gap: 4,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#f59e0b', fontSize: 12.5, fontWeight: 600 }}>
+                      <AlertTriangle size={14} />
+                      <span>{t('system.diagLastFailure')}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', wordBreak: 'break-word' }}>
+                      {diagData.last_failure.message || `HTTP ${diagData.last_failure.status ?? 0}`}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn-link"
+                    style={{ fontSize: 12 }}
+                    onClick={() => setShowRawDiagText((p) => !p)}
+                  >
+                    {showRawDiagText ? t('system.diagHideRaw') : t('system.diagShowRaw')}
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-btn-action admin-btn-danger"
+                    disabled={sessionResetting}
+                    onClick={() => void handleResetSession()}
+                    style={{ padding: '6px 12px' }}
+                  >
+                    <RotateCcw size={13} />
+                    <span>{sessionResetting ? t('common.loading') : t('system.diagResetSession')}</span>
+                  </button>
+                </div>
+
+                {showRawDiagText && (
+                  <pre
+                    style={{
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      fontSize: 11.5,
+                      lineHeight: 1.45,
+                      padding: '10px 12px',
+                      borderRadius: 'var(--radius-sm)',
+                      background: 'rgba(0, 0, 0, 0.35)',
+                      border: '1px solid var(--border-hairline)',
+                      color: 'var(--text-secondary)',
+                      margin: 0,
+                    }}
+                  >
+                    {diagData.summary_text}
+                  </pre>
+                )}
+              </>
+            ) : null}
+          </div>
+        )}
+      </div>
 
       {/* SECTION 4: Grounding Dossier (ADMIN ONLY) */}
       {isAdmin && (
@@ -1887,6 +1947,34 @@ export const SystemTab: React.FC<SystemTabProps> = ({
                   </button>
                 )}
               </div>
+
+              {docSearchQuery.trim().length >= 2 && (
+                <div
+                  className="admin-card"
+                  style={{ padding: '10px 12px', gap: 6, borderColor: 'var(--border-hairline)' }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-color)' }}>
+                    {t('system.docsServerSearchTitle')}
+                  </div>
+                  {docSearchResult?.query !== docSearchQuery.trim() ? (
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('common.loading')}</div>
+                  ) : docSearchResult.result ? (
+                    <pre
+                      style={{
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        fontSize: 12,
+                        lineHeight: 1.45,
+                        color: 'var(--text-secondary)',
+                        margin: 0,
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      {docSearchResult.result}
+                    </pre>
+                  ) : null}
+                </div>
+              )}
 
               {loadingDocs && docChapters.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)', fontSize: 12 }}>

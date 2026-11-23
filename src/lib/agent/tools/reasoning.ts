@@ -25,7 +25,21 @@
 
 import type { NoteRow, RelationRow, TaskRow } from '../../../types';
 import { DEFAULT_TIMEZONE } from '../../config';
-import { getChapter, upsertChapter } from '../../dal/docs';
+import { getChapter } from '../../dal/docs';
+import {
+  createManualSkillDraft,
+  listAllUserSkills,
+  parseSkillSpec,
+  recordSkillView,
+} from '../../evolution';
+import {
+  formatLearnedRuleReply,
+  listRuleLines,
+  rememberRule,
+  saveDirectives,
+  splitDirectives,
+} from '../../learning';
+import { findOverlaySkill, getOverlaySkills } from '../../overlay';
 import { listLiabilities } from '../../dal/finances';
 import { listDoses, listMedications } from '../../dal/medications';
 import {
@@ -50,7 +64,6 @@ import {
 } from '../constants';
 import type { Tool, ToolArgs, ToolContext, ToolOutcome } from '../registry';
 import { asText, errorText, fail, snippet } from './tasks';
-import { formatLearnedRuleReply, rememberRule } from '../../learning';
 
 // ---------------------------------------------------------------------------
 // Хелперы
@@ -345,8 +358,6 @@ async function synthesizeLifeContext(args: ToolArgs, ctx: ToolContext): Promise<
 // update_custom_directives / get_custom_directives
 // ---------------------------------------------------------------------------
 
-const DIRECTIVES_TITLE = 'Персональные директивы';
-const STYLE_TAIL = 'Стиль общения: ';
 const STYLES: readonly string[] = ['mentor', 'strategist', 'calm_partner', 'concise'];
 
 interface DirectivesState {
@@ -356,12 +367,11 @@ interface DirectivesState {
 
 /** Разбор главы директив: текст + хвост «Стиль общения: X» (ADR: в `users` колонки нет). */
 function parseDirectives(content: string): DirectivesState {
-  const trimmed = content.trim();
-  const marker = trimmed.lastIndexOf(`\n${STYLE_TAIL}`);
-  if (marker === -1) return { instructions: trimmed, style: 'mentor' };
-  const style = trimmed.slice(marker + STYLE_TAIL.length + 1).trim();
-  const instructions = trimmed.slice(0, marker).trim();
-  return { instructions, style: STYLES.includes(style) ? style : 'mentor' };
+  const { instructions, style } = splitDirectives(content);
+  return {
+    instructions,
+    style: style && STYLES.includes(style) ? style : 'mentor',
+  };
 }
 
 async function readDirectives(ctx: ToolContext): Promise<DirectivesState> {
@@ -383,14 +393,7 @@ async function updateCustomDirectives(args: ToolArgs, ctx: ToolContext): Promise
   try {
     const existing = await readDirectives(ctx);
     const style = requestedStyle ?? existing.style;
-    const content = `${instructions}\n\n${STYLE_TAIL}${style}`;
-
-    await upsertChapter(ctx.userId, {
-      slug: CUSTOM_INSTRUCTIONS_SLUG,
-      title: DIRECTIVES_TITLE,
-      content,
-      isPinned: true,
-    });
+    await saveDirectives(ctx.userId, instructions, style);
 
     return {
       ok: true,
@@ -636,6 +639,179 @@ async function rememberRuleTool(args: ToolArgs, ctx: ToolContext): Promise<ToolO
   }
 }
 
+// ---------------------------------------------------------------------------
+// list_skills / read_skill / draft_skill (Runtime Markdown Skills + SQLite)
+// ---------------------------------------------------------------------------
+
+async function listSkillsTool(_args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
+  try {
+    const builtin = getOverlaySkills();
+    const [userSkills, directives] = await Promise.all([
+      listAllUserSkills(ctx.userId),
+      readDirectives(ctx),
+    ]);
+    const rulesCount = listRuleLines(directives.instructions).length;
+
+    const lines: string[] = [
+      `Стиль общения: ${directives.style} · Запомненных правил (/learn): ${rulesCount}`,
+      '',
+      `Встроенные доменные скиллы (.md, ${builtin.length} шт.):`,
+    ];
+    if (builtin.length === 0) {
+      lines.push('— нет встроенных скиллов');
+    } else {
+      for (const s of builtin) {
+        lines.push(`- ${s.id} (${s.name}): ${s.description}`);
+      }
+    }
+
+    lines.push('');
+    lines.push(`Пользовательские скиллы (SQLite, ${userSkills.length} шт.):`);
+    if (userSkills.length === 0) {
+      lines.push('— пока нет черновиков или включённых процедур');
+    } else {
+      for (const entry of userSkills) {
+        const key = entry.spec?.key ?? `#${entry.row.id}`;
+        const version = entry.spec ? `v${entry.spec.version}` : 'v?';
+        const title = entry.row.title ? ` — ${entry.row.title}` : '';
+        lines.push(
+          `- #${entry.row.id} ${key} ${version} [${entry.row.status}]${title} (применений: ${entry.usage.uses}, просмотров: ${entry.usage.views})`,
+        );
+      }
+    }
+
+    return {
+      ok: true,
+      content: lines.join('\n'),
+      data: {
+        persona_style: directives.style,
+        rules_count: rulesCount,
+        builtin_skills: builtin.map((s) => ({
+          id: s.id,
+          name: s.name,
+          description: s.description,
+          triggers: s.triggers ?? [],
+        })),
+        user_skills: userSkills.map((entry) => ({
+          id: entry.row.id,
+          key: entry.spec?.key ?? null,
+          title: entry.row.title ?? null,
+          status: entry.row.status,
+          version: entry.spec?.version ?? null,
+          uses: entry.usage.uses,
+          views: entry.usage.views,
+        })),
+      },
+    };
+  } catch (error) {
+    return fail(`Не удалось получить список скиллов: ${errorText(error)}`);
+  }
+}
+
+async function readSkillTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
+  const raw =
+    typeof args.name_or_id === 'number' && Number.isFinite(args.name_or_id)
+      ? String(Math.trunc(args.name_or_id))
+      : asText(args.name_or_id);
+  if (!raw) return fail('Укажите имя или ID скилла (name_or_id).');
+
+  try {
+    const builtin = findOverlaySkill(raw);
+    if (builtin) {
+      return {
+        ok: true,
+        content: `# ${builtin.name}\n${builtin.description}\n\n${builtin.body}`,
+        data: {
+          source: 'overlay',
+          id: builtin.id,
+          name: builtin.name,
+          description: builtin.description,
+          status: 'active',
+          body_md: builtin.body,
+        },
+      };
+    }
+
+    const userSkills = await listAllUserSkills(ctx.userId);
+    const cleaned = raw.replace(/^#/, '').trim();
+    const numericId = /^\d+$/.test(cleaned) ? Number.parseInt(cleaned, 10) : null;
+    const lower = cleaned.toLowerCase();
+
+    const matched = userSkills.find((entry) => {
+      if (numericId !== null && entry.row.id === numericId) return true;
+      if (entry.spec?.key.toLowerCase() === lower) return true;
+      if (entry.row.title && entry.row.title.trim().toLowerCase() === lower) return true;
+      return false;
+    });
+
+    if (!matched) {
+      return fail(`Скилл «${raw}» не найден. Вызови list_skills, чтобы увидеть доступные.`);
+    }
+
+    await recordSkillView(ctx.userId, matched.row.id);
+    const spec = matched.spec ?? parseSkillSpec(matched.row.spec);
+    const bodyMd = spec?.body ?? matched.row.rawInput;
+    const name = spec?.key ?? `#${matched.row.id}`;
+    const title = matched.row.title ?? name;
+
+    return {
+      ok: true,
+      content: `# ${title} (${name} v${spec?.version ?? '?'} · ${matched.row.status})\n\n${bodyMd}`,
+      data: {
+        source: 'sqlite',
+        id: matched.row.id,
+        name,
+        description: title,
+        status: matched.row.status,
+        body_md: bodyMd,
+      },
+    };
+  } catch (error) {
+    return fail(`Не удалось прочитать скилл: ${errorText(error)}`);
+  }
+}
+
+async function draftSkillTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
+  const key = asText(args.key);
+  const title = asText(args.title);
+  const whenToUse = asText(args.when_to_use);
+  const procedure = asText(args.procedure);
+  const pitfalls = asText(args.pitfalls) ?? undefined;
+  const verification = asText(args.verification) ?? undefined;
+
+  if (!key || !title || !whenToUse || !procedure) {
+    return fail('Для создания черновика скилла нужны key, title, when_to_use и procedure.');
+  }
+
+  try {
+    const result = await createManualSkillDraft(ctx.userId, {
+      key,
+      title,
+      whenToUse,
+      procedure,
+      pitfalls,
+      verification,
+    });
+    if (!result.ok) return fail(result.error);
+
+    return {
+      ok: true,
+      content:
+        `🧩 Черновик скилла #${result.item.id} (${result.spec.key} v${result.spec.version}) создан в статусе pending.\n` +
+        'Активируется только по явному подтверждению владельца (/skills activate или кнопка под ответом).',
+      data: {
+        skill_id: result.item.id,
+        key: result.spec.key,
+        title: result.item.title ?? title,
+        status: 'pending',
+        requires_approval: true,
+      },
+    };
+  } catch (error) {
+    return fail(`Не удалось создать черновик скилла: ${errorText(error)}`);
+  }
+}
+
 export const reasoningTools: Tool[] = [
   {
     name: 'synthesize_life_context',
@@ -705,6 +881,50 @@ export const reasoningTools: Tool[] = [
       'Показывает собственный журнал последнего хода: когда начался и закончился, до какой стадии дошёл, какие модели и инструменты вызывались, почему сработал дедлайн, что стало с индикатором «⏳ …» и почему ход остановился, плюс счётчики ходов и последний отказ модели. Вызывай, когда спрашивают «почему ты молчал», «почему так долго думал», «что с тобой было». Только чтение: ничего не пишет.',
     schema: { type: 'object', properties: {}, required: [] },
     run: readTurnLog,
+  },
+  {
+    name: 'list_skills',
+    effect: { kind: 'read' },
+    description:
+      'Показывает все доступные доменные .md-скиллы оверлея, пользовательские процедурные скиллы (active/pending) и текущий стиль общения. Только чтение.',
+    schema: { type: 'object', properties: {}, required: [] },
+    run: listSkillsTool,
+  },
+  {
+    name: 'read_skill',
+    effect: { kind: 'read' },
+    description:
+      'Загружает полный Markdown-регламент скилла по id/имени (встроенного .md или пользовательского в SQLite). Вызывай перед выполнением подходящего доменного скилла.',
+    schema: {
+      type: 'object',
+      properties: {
+        name_or_id: {
+          type: 'string',
+          description: 'Идентификатор или имя скилла (например, daily-focus, inbox-triage, или числовой ID из SQLite).',
+        },
+      },
+      required: ['name_or_id'],
+    },
+    run: readSkillTool,
+  },
+  {
+    name: 'draft_skill',
+    effect: { kind: 'create' },
+    description:
+      'Создаёт новый черновик процедурного скилла (status=pending) по просьбе пользователя. Никогда не активирует сам — активацию подтверждает только пользователь.',
+    schema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Короткий ключ латиницей в kebab-case (например, weekly-review).' },
+        title: { type: 'string', description: 'Краткое название скилла.' },
+        when_to_use: { type: 'string', description: 'Когда применять этот скилл (секция When to Use).' },
+        procedure: { type: 'string', description: 'Пошаговая процедура выполнения (секция Procedure).' },
+        pitfalls: { type: 'string', description: 'Опционально: частые ошибки и ограничения (секция Pitfalls).' },
+        verification: { type: 'string', description: 'Опционально: как проверить результат (секция Verification).' },
+      },
+      required: ['key', 'title', 'when_to_use', 'procedure'],
+    },
+    run: draftSkillTool,
   },
 ];
 

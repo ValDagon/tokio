@@ -69,7 +69,7 @@ npx tgcloud push && npx tgcloud migrate --yes
 
 - `src/lib/db/tables.ts` & `src/schema.ts`: Single-source 24-table SQLite schema (`users`, `tasks`, `accounts`, `transactions`, `liabilities`, `notes`, `entities`, `relations`, `medications`, `due_jobs`, `agent_state`, `feedback`, etc.).
 - `src/lib/dal/`: Tenant-scoped SQLite Data Access Layer.
-- `src/lib/agent/`: Native ReAct loop (`engine.ts`, `prompts.ts`, `constants.ts`) and 57 tools (`tools/index.ts`; the count is locked by `tests/agent/boot.test.ts`).
+- `src/lib/agent/`: Native ReAct loop (`engine.ts`, `prompts.ts`, `constants.ts`) and 60 tools (`tools/index.ts`; the count is locked by `tests/agent/boot.test.ts`).
 - `src/handlers/`: Telegram update handlers (`message.ts`, `callback_query.ts`, `router.ts`, `ingest.ts`, `onboarding.ts`, `keyboards.ts`, `formatting.ts`).
 - `src/endpoints/rpc.ts`: Unified RPC gateway for the Mini App (`POST /api/rpc`) with Telegram `initData` HMAC-SHA256 validation.
 - `src/lib/overlay.ts` & `src/lib/i18n.ts`: Runtime entrypoints compiled from `overlay/` (or `example/overlay/`) and `locales/*.json` by `scripts/compile-runtime-assets.mjs`.
@@ -94,7 +94,7 @@ npx tgcloud push && npx tgcloud migrate --yes
 - **Cold-Start Read Order (OpenCode, Antigravity, Claude Code, Codex, Gemini CLI, or any model)**:
   1. `AGENTS.md` (core boundaries, gates, and V8 isolate invariants)
   2. `docs/system/INDEX.md` (documentation map)
-  3. `docs/system/ARCHITECTURE.md` (runtime layout, module cap, SQLite schema, 54-tool engine)
+  3. `docs/system/ARCHITECTURE.md` (runtime layout, module cap, SQLite schema, 60-tool engine)
   4. `docs/system/OVERLAY-SPEC.md` (Level 1 Overlay manifest, prompt compilation, feature flags)
 - **Branch & PR Workflow**:
   - Develop core mechanics (tools, bug fixes, Mini App features, i18n, feature flags) on a feature branch and submit a PR to `main` so maintainers can review cleanly.

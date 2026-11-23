@@ -353,7 +353,7 @@ describe('Slice 3 — ?startapp= deep-link кнопки после шагов а
     await smartIngest({ userId: USER, chatId: CHAT, text: 'Какие у меня задачи?', forwarded: false });
 
     const call = callsOf('sendMessage').at(-1);
-    expect(call?.params.reply_markup).toEqual({ remove_keyboard: true });
+    expect(call?.params.reply_markup).toBeUndefined();
   });
 
   it('add_expense и add_exchange сохраняют undo_tx:<id> + ?startapp=finances', async () => {

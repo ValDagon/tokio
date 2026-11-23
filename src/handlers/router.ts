@@ -27,11 +27,12 @@
 
 import { api, InputFile } from 'sdk';
 
-import { MAX_REPLY_CONTEXT_CHARS, formatAgentQueryWithReply } from '../lib/agent/constants';
+import { CUSTOM_INSTRUCTIONS_SLUG, MAX_REPLY_CONTEXT_CHARS, formatAgentQueryWithReply } from '../lib/agent/constants';
 import { isLlmErrorReply, runAgent } from '../lib/agent/engine';
 import { exportUserData, stringifyBackup } from '../lib/backup';
 import { runNightlyConsolidation } from '../lib/consolidation';
 import { clearThread } from '../lib/dal/agentState';
+import { getChapter } from '../lib/dal/docs';
 import { deleteTransaction, getLiability, rollbackLiabilityPayment } from '../lib/dal/finances';
 import { kvGet, kvSet, liabilityReviewKey, type LiabilityReviewDecision } from '../lib/dal/misc';
 import { getMedication, skipMedication, takeMedication } from '../lib/dal/medications';
@@ -54,10 +55,12 @@ import {
 } from '../lib/digest';
 import { deliverLiabilityReview } from '../lib/reminders';
 import {
+  SKILL_CORRELATION_NOTE,
   activateSkill,
   formatSkillCard,
-  formatSkillsList,
+  getItem as getEvolutionItem,
   handleEvolutionCommand,
+  listAllUserSkills,
   listItems,
   parseSkillSpec,
   rejectSkill,
@@ -65,8 +68,10 @@ import {
 import {
   LEARN_USAGE_TEXT,
   formatLearnedRuleReply,
+  listRuleLines,
   parseLearnCommand,
   rememberRule,
+  splitDirectives,
 } from '../lib/learning';
 import {
   applyBalanceChoice,
@@ -94,12 +99,14 @@ import {
 import type { NoteRow } from '../lib/types';
 import { truncate, zonedParts } from '../lib/utils';
 
-import { escapeAmpLtGt, safeAnswer, safeEdit, signalChatAction } from './formatting';
+import { escapeAmpLtGt, markdownToTelegramHtml, safeAnswer, safeEdit, signalChatAction } from './formatting';
 import { startTurnProgress } from './progress';
 import {
   buildAgentDeepLinkKeyboard,
+  buildSkillsInlineKeyboard,
   buildUndoWithAppKeyboard,
   getBackupInlineKeyboard,
+  getCommandsKeyboard,
   getDashboardInlineKeyboard,
   getMainKeyboard,
   getOpenAppInlineKeyboard,
@@ -114,6 +121,7 @@ import {
   KEYBOARD_STATUS,
   KEYBOARD_TASKS,
   OPEN_APP_LABEL,
+  type InlineKeyboardButton,
   type InlineKeyboardMarkup,
 } from './keyboards';
 // [public-only] Мастер онбординга и BYOK — фичи публичной редакции (HANDOFF §7.1).
@@ -141,7 +149,7 @@ import {
 import { getConfig } from '../lib/config';
 import { getUser, updateUser } from '../lib/dal/users';
 import { getAllKeyboardLabels, normalizeLocale, SUPPORTED_LOCALES, t, type LocaleCode } from '../lib/i18n';
-import { getAssistantName, getOverlay } from '../lib/overlay';
+import { getAssistantName, getOverlay, getOverlaySkills } from '../lib/overlay';
 import { deferReplyNotice, endReplyTurn } from '../lib/reply_turn';
 import { checkSpendLimit, SPEND_LIMIT_EXCEEDED_MESSAGE } from '../lib/billing';
 import { decryptByok, encryptByok, hasSecureRandom, looksLikeApiKey } from '../lib/crypto';
@@ -193,20 +201,17 @@ export const ASK_HINT_TEXT =
 export const DASHBOARD_UNAVAILABLE_TEXT =
   '🚀 Дашборд пока не подключён: адрес Mini App не задан в окружении.';
 
-/** `/menu`: короткий перечень разделов под сеткой кнопок. */
+/** `/menu`: короткий перечень экранов двухслойной клавиатуры. */
 export const MENU_TEXT = [
-  '🧭 **Разделы под рукой** — сетка на один шаг:',
+  '🧭 **Главный экран** — быстрые действия в 2 ряда:',
   '',
-  '📊 Сводка — день целиком: бюджет, счета, фокус',
-  '💰 Баланс — остатки по счетам и контуры',
-  '💳 Долги — кредиты и график платежей',
-  '🎯 Задачи — бэклог и микро-фокус',
-  '💊 Аптечка — расписание лекарств',
-  '☀️ Дайджест — утренняя сводка дня',
-  '📥 Инбокс — накопившиеся мысли и заметки',
-  'ℹ️ Помощь — все команды и правила',
+  '🧹 Новая сессия · 🧩 Скиллы · 📊 Сводка',
+  '🩺 Диагностика · 🧠 Разобрать · ⌨️ Команды ›',
   '',
-  '_Клавиатура уберётся сама после нажатия — вернуть её можно командой_ `/menu`.',
+  'В слое **«⌨️ Команды ›»**:',
+  '💰 Баланс · 💳 Долги · 🎯 Задачи · 📥 Инбокс · ☀️ Дайджест · 💊 Аптечка · 📋 Бэклог · 📥 Бэкап · 🔑 Ключ · 🌐 Язык · ℹ️ Помощь',
+  '',
+  '_Клавиатура сворачивается в иконку ⊞ после нажатия и всегда раскрывается в 1 клик (или через_ `/menu` _)._',
 ].join('\n');
 
 /** Текст `/backlog`, когда очередь пуста (паритет с upstream). */
@@ -609,11 +614,16 @@ async function handleTasks(userId: number, chatId: number): Promise<void> {
 
 async function handleMeds(userId: number, chatId: number): Promise<void> {
   await sendTyping(chatId);
+  const locale = await loadUserLocale(userId);
   try {
-    await safeAnswer(chatId, await medsSummary(userId), { replyMarkup: getMainKeyboard() });
+    await safeAnswer(chatId, await medsSummary(userId), {
+      replyMarkup: getMainKeyboard(locale),
+      keepReplyKeyboard: true,
+    });
   } catch (error) {
     await safeAnswer(chatId, `⚠️ Не удалось получить расписание лекарств: ${errorText(error)}`, {
-      replyMarkup: getMainKeyboard(),
+      replyMarkup: getMainKeyboard(locale),
+      keepReplyKeyboard: true,
     });
   }
 }
@@ -637,13 +647,14 @@ async function buildOnDemandDigest(userId: number): Promise<string> {
 
 async function handleDigest(userId: number, chatId: number): Promise<void> {
   await sendTyping(chatId);
+  const locale = await loadUserLocale(userId);
   try {
     await safeAnswer(chatId, await buildOnDemandDigest(userId), {
-      replyMarkup: getBackupInlineKeyboard(),
+      replyMarkup: getBackupInlineKeyboard(locale),
     });
   } catch (error) {
     await safeAnswer(chatId, `⚠️ Не удалось составить утреннюю сводку: ${errorText(error)}`, {
-      replyMarkup: getMainKeyboard(),
+      replyMarkup: getMainKeyboard(locale),
     });
     return;
   }
@@ -676,7 +687,8 @@ async function handleHelp(userId: number, chatId: number): Promise<void> {
     ]);
   }
   await safeAnswer(chatId, helpText(locale), {
-    replyMarkup: rows.length > 0 ? { inline_keyboard: rows } : undefined,
+    replyMarkup: rows.length > 0 ? { inline_keyboard: rows } : getMainKeyboard(locale),
+    keepReplyKeyboard: rows.length === 0,
   });
 }
 
@@ -700,8 +712,12 @@ async function handleLang(userId: number, chatId: number): Promise<void> {
 
 // [public-only] `/byok` снимает лимит $2 — есть только в публичной редакции.
 async function handleByok(userId: number, chatId: number, keyArg?: string): Promise<void> {
+  const locale = await loadUserLocale(userId);
   if (!getOverlay().manifest.features.byokCommand) {
-    await safeAnswer(chatId, 'Команда /byok отключена в этой конфигурации.');
+    await safeAnswer(chatId, 'Команда /byok отключена в этой конфигурации.', {
+      replyMarkup: getMainKeyboard(locale),
+      keepReplyKeyboard: true,
+    });
     return;
   }
   const cleanKey = (keyArg || '').trim();
@@ -713,7 +729,7 @@ async function handleByok(userId: number, chatId: number, keyArg?: string): Prom
     await safeAnswer(
       chatId,
       '🔓 Персональный ключ удалён. Бот снова работает на общем ключе (лимит $2.00).',
-      { replyMarkup: getMainKeyboard() },
+      { replyMarkup: getMainKeyboard(locale), keepReplyKeyboard: true },
     );
     return;
   }
@@ -745,7 +761,10 @@ async function handleByok(userId: number, chatId: number, keyArg?: string): Prom
       '2. Отправьте его боту командой:\n`/byok ВАШ_КЛЮЧ`\n' +
       '3. Убрать ключ и вернуться на общий: `/byok clear`\n\n' +
       'Ключ хранится зашифрованным (ChaCha20-Poly1305) и никогда не будет показан в чате. Он снимет все ограничения!';
-    await safeAnswer(chatId, text, { replyMarkup: getMainKeyboard() });
+    await safeAnswer(chatId, text, {
+      replyMarkup: getMainKeyboard(locale),
+      keepReplyKeyboard: true,
+    });
     return;
   }
 
@@ -754,7 +773,7 @@ async function handleByok(userId: number, chatId: number, keyArg?: string): Prom
     await safeAnswer(
       chatId,
       '⚠️ Некорректный формат ключа Gemini API. Ключ должен начинаться с `AIza...` или `AQ....` и содержать около 39–50 символов.',
-      { replyMarkup: getMainKeyboard() },
+      { replyMarkup: getMainKeyboard(locale), keepReplyKeyboard: true },
     );
     return;
   }
@@ -763,7 +782,7 @@ async function handleByok(userId: number, chatId: number, keyArg?: string): Prom
     await safeAnswer(
       chatId,
       '⚠️ Не удалось безопасно сохранить ключ Gemini API: платформа не предоставляет криптографический генератор случайных чисел. Текущий ключ не изменён.',
-      { replyMarkup: getMainKeyboard() },
+      { replyMarkup: getMainKeyboard(locale), keepReplyKeyboard: true },
     );
     return;
   }
@@ -777,19 +796,34 @@ async function handleByok(userId: number, chatId: number, keyArg?: string): Prom
     chatId,
     '🎉 **Ключ Google Gemini API успешно сохранён и зашифрован!**\n\n' +
       'Все лимиты расходов сняты. Запросы теперь выполняются напрямую через ваш персональный ключ.',
-    { replyMarkup: getMainKeyboard() },
+    { replyMarkup: getMainKeyboard(locale), keepReplyKeyboard: true },
   );
 }
 
 /**
- * `/menu` — единственная (вместе с `/start`) команда, которая показывает сетку
- * разделов. Обычные ответы её сворачивают, поэтому вернуть клавиатуру можно
- * только отсюда.
+ * `/menu` — показывает компактный Главный экран (Слой 1, 2×3) с кнопкой перехода
+ * в «⌨️ Команды ›».
  */
 async function handleMenu(userId: number, chatId: number): Promise<void> {
-  void userId;
+  const locale = await loadUserLocale(userId);
   await safeAnswer(chatId, MENU_TEXT, {
-    replyMarkup: getMainKeyboard(),
+    replyMarkup: getMainKeyboard(locale),
+    keepReplyKeyboard: true,
+  });
+}
+
+async function handleCommandsKeyboard(userId: number, chatId: number): Promise<void> {
+  const locale = await loadUserLocale(userId);
+  await safeAnswer(chatId, t(locale, 'keyboards.commandsPrompt'), {
+    replyMarkup: getCommandsKeyboard(locale),
+    keepReplyKeyboard: true,
+  });
+}
+
+async function handleMainKeyboard(userId: number, chatId: number): Promise<void> {
+  const locale = await loadUserLocale(userId);
+  await safeAnswer(chatId, t(locale, 'keyboards.mainPrompt'), {
+    replyMarkup: getMainKeyboard(locale),
     keepReplyKeyboard: true,
   });
 }
@@ -801,11 +835,16 @@ async function handleMenu(userId: number, chatId: number): Promise<void> {
  */
 async function handleDiagnostics(userId: number, chatId: number): Promise<void> {
   await sendTyping(chatId);
+  const locale = await loadUserLocale(userId);
   try {
-    await safeAnswer(chatId, await diagnosticsReply(userId), { replyMarkup: getMainKeyboard() });
+    await safeAnswer(chatId, await diagnosticsReply(userId), {
+      replyMarkup: getMainKeyboard(locale),
+      keepReplyKeyboard: true,
+    });
   } catch (error) {
     await safeAnswer(chatId, `⚠️ Не удалось прочитать журнал сбоев: ${errorText(error)}`, {
-      replyMarkup: getMainKeyboard(),
+      replyMarkup: getMainKeyboard(locale),
+      keepReplyKeyboard: true,
     });
   }
 }
@@ -827,13 +866,21 @@ async function handleConsolidate(userId: number, chatId: number): Promise<void> 
 
 async function handleReset(userId: number, chatId: number): Promise<void> {
   await clearThread(userId);
-  await safeAnswer(chatId, RESET_TEXT, { replyMarkup: getMainKeyboard() });
+  const locale = await loadUserLocale(userId);
+  await safeAnswer(chatId, RESET_TEXT, {
+    replyMarkup: getMainKeyboard(locale),
+    keepReplyKeyboard: true,
+  });
 }
 
 async function handleBacklog(userId: number, chatId: number): Promise<void> {
+  const locale = await loadUserLocale(userId);
   const items = await listItems(userId, { status: 'pending' });
   if (items.length === 0) {
-    await safeAnswer(chatId, BACKLOG_EMPTY_TEXT, { replyMarkup: getMainKeyboard() });
+    await safeAnswer(chatId, BACKLOG_EMPTY_TEXT, {
+      replyMarkup: getMainKeyboard(locale),
+      keepReplyKeyboard: true,
+    });
     return;
   }
 
@@ -845,7 +892,10 @@ async function handleBacklog(userId: number, chatId: number): Promise<void> {
   }
   lines.push(BACKLOG_FOOTER);
 
-  await safeAnswer(chatId, lines.join('\n'), { replyMarkup: getMainKeyboard() });
+  await safeAnswer(chatId, lines.join('\n'), {
+    replyMarkup: getMainKeyboard(locale),
+    keepReplyKeyboard: true,
+  });
 }
 
 /** Неразобранные заметки: DAL не умеет фильтровать по `processed_at` — фильтруем здесь. */
@@ -894,18 +944,48 @@ async function handleInbox(userId: number, chatId: number): Promise<void> {
   }
 }
 
-async function handleTriage(userId: number, chatId: number): Promise<void> {
-  const handler = seams.triage;
-  if (!handler) {
-    await safeAnswer(chatId, TRIAGE_UNAVAILABLE_TEXT, { replyMarkup: getMainKeyboard() });
-    return;
+function toSafeEditMarkdownHtml(markdown: string): string {
+  const capped = truncate(markdown, 3200);
+  const html = markdownToTelegramHtml(capped);
+  if (html.length <= 3900) return html;
+  return truncateSafeEscapedHtml(escapeAmpLtGt(capped), 3500);
+}
+
+async function defaultAgentTriage(userId: number, chatId: number): Promise<TriageOutcome> {
+  const pending = await unprocessedNotes(userId, 20);
+  if (pending.length === 0) {
+    return { count: 0, text: TRIAGE_EMPTY_TEXT };
   }
 
+  const prompt =
+    'Вызови read_skill("inbox-triage") и разбери необработанные входящие заметки пользователя. ' +
+    'Явные дела переведи в задачи (add_task), идеи/заметки рассортируй (move_note), не удаляй фото и чеки без сверки. ' +
+    'Верни короткую спокойную сводку разбора.';
+
+  if (seams.agent) {
+    const reply = await seams.agent({ userId, chatId, text: prompt });
+    if (isLlmErrorReply(reply)) throw new Error(reply);
+    return { count: pending.length, text: toSafeEditMarkdownHtml(reply) };
+  }
+
+  const spend = await checkSpendLimit(userId);
+  if (!spend.allowed) {
+    throw new Error(SPEND_LIMIT_EXCEEDED_MESSAGE);
+  }
+
+  const result = await runAgent({ userId, text: prompt });
+  if (isLlmErrorReply(result.reply)) throw new Error(result.reply);
+  return { count: pending.length, text: toSafeEditMarkdownHtml(result.reply) };
+}
+
+async function handleTriage(userId: number, chatId: number): Promise<void> {
   await sendTyping(chatId);
   const statusId = messageIdOf(await safeAnswer(chatId, TRIAGE_STATUS_TEXT));
 
   try {
-    const outcome = await handler(userId);
+    const outcome = seams.triage
+      ? await seams.triage(userId)
+      : await defaultAgentTriage(userId, chatId);
     if (!outcome) {
       if (statusId !== null) await safeEdit(chatId, statusId, TRIAGE_UNAVAILABLE_TEXT);
       return;
@@ -984,6 +1064,7 @@ async function handleAsk(
       return;
     }
 
+    const locale = await loadUserLocale(userId);
     const result = await runAgent({
       userId,
       text: effectiveQuery,
@@ -993,12 +1074,12 @@ async function handleAsk(
       if (deferReplyNotice(chatId, result.reply)) return;
       if (await progress.fail(result.reply)) return;
       await safeAnswer(chatId, result.reply, {
-        replyMarkup: buildAgentDeepLinkKeyboard(result.steps) ?? getMainKeyboard(),
+        replyMarkup: buildAgentDeepLinkKeyboard(result.steps, locale) ?? getMainKeyboard(locale),
       });
       return;
     }
     await safeAnswer(chatId, result.reply, {
-      replyMarkup: buildAgentDeepLinkKeyboard(result.steps) ?? getMainKeyboard(),
+      replyMarkup: buildAgentDeepLinkKeyboard(result.steps, locale) ?? getMainKeyboard(locale),
     });
   } catch (error) {
     const text = `⚠️ Ошибка агента: ${errorText(error)}`;
@@ -1056,44 +1137,185 @@ export function parseSkillsCommand(text: string): SkillsCommand | null {
   return { action, id: Number.isFinite(id) && id > 0 ? id : null };
 }
 
+const SKILL_STATUS_KEYS: Record<string, string> = {
+  pending: 'skills.statusPending',
+  active: 'skills.statusActive',
+  superseded: 'skills.statusSuperseded',
+  rejected: 'skills.statusRejected',
+};
+
+const MAX_SAFE_EDIT_HTML_CHARS = 3400;
+
+function parseStrictPositiveInt(raw: string): number | null {
+  const clean = raw.trim();
+  if (!/^\d+$/.test(clean)) return null;
+  const parsed = Number.parseInt(clean, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+/** Обрезает уже экранированный (`escapeAmpLtGt`) текст, не разрезая `&amp;`/`&lt;`/`&gt;`. */
+function truncateSafeEscapedHtml(escaped: string, limit: number): string {
+  if (escaped.length <= limit) return escaped;
+  let cut = Math.max(0, limit - 2);
+  const lastAmp = escaped.lastIndexOf('&', cut);
+  if (lastAmp !== -1) {
+    const semi = escaped.indexOf(';', lastAmp);
+    if (semi === -1 || semi >= cut) cut = lastAmp;
+  }
+  return `${escaped.slice(0, cut)}\n…`;
+}
+
+async function renderSkillsOverview(
+  userId: number,
+  locale: LocaleCode,
+): Promise<{ html: string; replyMarkup?: InlineKeyboardMarkup }> {
+  const builtin = getOverlaySkills();
+  const [userSkills, chapter] = await Promise.all([
+    listAllUserSkills(userId),
+    getChapter(userId, CUSTOM_INSTRUCTIONS_SLUG),
+  ]);
+  const directives = splitDirectives(chapter?.content ?? '');
+  const style = directives.style || 'mentor';
+  const rulesCount = listRuleLines(directives.instructions).length;
+
+  const footer = t(locale, 'skills.agentHint');
+  const noteBlock = userSkills.length > 0 ? `<i>${escapeAmpLtGt(SKILL_CORRELATION_NOTE)}</i>` : '';
+  const reservedTailLen =
+    footer.length + (noteBlock ? noteBlock.length + 2 : 0) + 8;
+
+  const lines: string[] = [
+    t(locale, 'skills.header'),
+    t(locale, 'skills.profileLine', { style: escapeAmpLtGt(style), rulesCount }),
+    '',
+    t(locale, 'skills.builtinHeader', { count: builtin.length }),
+  ];
+
+  let usedLen = lines.join('\n').length;
+  const fitsLine = (line: string): boolean =>
+    usedLen + 1 + line.length + reservedTailLen <= MAX_SAFE_EDIT_HTML_CHARS;
+
+  if (builtin.length === 0) {
+    lines.push(t(locale, 'skills.builtinEmpty'));
+    usedLen += 1 + lines[lines.length - 1]!.length;
+  } else {
+    for (const s of builtin.slice(0, 8)) {
+      const line = `• <code>${escapeAmpLtGt(s.id)}</code> — ${escapeAmpLtGt(truncate(s.description, 85))}`;
+      if (!fitsLine(line)) break;
+      lines.push(line);
+      usedLen += 1 + line.length;
+    }
+  }
+
+  lines.push('');
+  const userHeader = t(locale, 'skills.userHeader', { count: userSkills.length });
+  lines.push(userHeader);
+  usedLen += 2 + userHeader.length;
+
+  const pendingIds: number[] = [];
+  if (userSkills.length === 0) {
+    const emptyLine = t(locale, 'skills.userEmpty');
+    lines.push(emptyLine);
+  } else {
+    for (const entry of userSkills.slice(0, 8)) {
+      if (entry.row.status === 'pending') pendingIds.push(entry.row.id);
+      const key = entry.spec?.key ?? '?';
+      const version = entry.spec ? `v${entry.spec.version}` : 'v?';
+      const statusKey = SKILL_STATUS_KEYS[entry.row.status];
+      const statusLabel = statusKey ? t(locale, statusKey) : entry.row.status;
+      const usageLine = t(locale, 'skills.usageLine', {
+        uses: entry.usage.uses,
+        views: entry.usage.views,
+      });
+      const line = `• #${entry.row.id} · <code>${escapeAmpLtGt(key)}</code> ${version} · ${escapeAmpLtGt(statusLabel)} (${escapeAmpLtGt(usageLine)})`;
+      if (!fitsLine(line)) continue;
+      lines.push(line);
+      usedLen += 1 + line.length;
+    }
+    if (noteBlock) lines.push(noteBlock);
+  }
+
+  lines.push('');
+  lines.push(footer);
+
+  return {
+    html: lines.join('\n'),
+    replyMarkup: buildSkillsInlineKeyboard(pendingIds, locale),
+  };
+}
+
+function buildSkillDetailKeyboard(
+  skillId: number,
+  status: string,
+  locale: LocaleCode,
+): InlineKeyboardMarkup {
+  const actionRow: InlineKeyboardButton[] = [];
+  if (status === 'pending' || status === 'superseded') {
+    actionRow.push({
+      text: t(locale, 'skills.btnActivate', { id: skillId }),
+      callback_data: `skills:activate:${skillId}`,
+    });
+  }
+  if (status === 'pending' || status === 'active') {
+    actionRow.push({
+      text: t(locale, 'skills.btnReject'),
+      callback_data: `skills:reject:${skillId}`,
+    });
+  }
+  const rows: InlineKeyboardButton[][] = [];
+  if (actionRow.length > 0) rows.push(actionRow);
+  rows.push([{ text: t(locale, 'skills.btnBack'), callback_data: 'skills:home' }]);
+  return { inline_keyboard: rows };
+}
+
 async function handleSkills(userId: number, chatId: number, text: string): Promise<void> {
   await sendTyping(chatId);
+  const locale = await loadUserLocale(userId);
   try {
     const command = parseSkillsCommand(text);
     if (!command) {
-      await safeAnswer(chatId, SKILLS_USAGE_TEXT, { replyMarkup: getMainKeyboard() });
+      await safeAnswer(chatId, SKILLS_USAGE_TEXT, { replyMarkup: getMainKeyboard(locale) });
       return;
     }
 
     if (command.action === 'list') {
-      await safeAnswer(chatId, await formatSkillsList(userId), { replyMarkup: getMainKeyboard() });
+      const overview = await renderSkillsOverview(userId, locale);
+      await safeAnswer(chatId, overview.html, {
+        isHtml: true,
+        replyMarkup: overview.replyMarkup ?? getMainKeyboard(locale),
+      });
       return;
     }
 
     if (command.id === null) {
-      await safeAnswer(chatId, SKILLS_USAGE_TEXT, { replyMarkup: getMainKeyboard() });
+      await safeAnswer(chatId, SKILLS_USAGE_TEXT, { replyMarkup: getMainKeyboard(locale) });
       return;
     }
 
     if (command.action === 'show') {
       const card = await formatSkillCard(userId, command.id);
-      await safeAnswer(chatId, card ?? 'Скилл с таким номером не найден.', {
-        replyMarkup: getMainKeyboard(),
-      });
+      if (!card) {
+        await safeAnswer(chatId, 'Скилл с таким номером не найден.', {
+          replyMarkup: getMainKeyboard(locale),
+        });
+        return;
+      }
+      const item = await getEvolutionItem(userId, command.id);
+      const replyMarkup = item ? buildSkillDetailKeyboard(command.id, item.status, locale) : getMainKeyboard(locale);
+      await safeAnswer(chatId, card, { replyMarkup });
       return;
     }
 
     if (command.action === 'activate') {
       const result = await activateSkill(userId, command.id);
       if (!result.ok) {
-        await safeAnswer(chatId, `⚠️ ${result.error}`, { replyMarkup: getMainKeyboard() });
+        await safeAnswer(chatId, `⚠️ ${result.error}`, { replyMarkup: getMainKeyboard(locale) });
         return;
       }
       const key = parseSkillSpec(result.item.spec)?.key ?? 'скилл';
       await safeAnswer(
         chatId,
         `✅ Включено: ${key}. Процедура попадёт в промпт со следующего прогона.`,
-        { replyMarkup: getMainKeyboard() },
+        { replyMarkup: getMainKeyboard(locale) },
       );
       return;
     }
@@ -1104,11 +1326,11 @@ async function handleSkills(userId: number, chatId: number, text: string): Promi
       rejected.ok
         ? `🚫 Скилл #${command.id} отклонён и в промпт не попадает.`
         : `⚠️ ${rejected.error}`,
-      { replyMarkup: getMainKeyboard() },
+      { replyMarkup: getMainKeyboard(locale) },
     );
   } catch (error) {
     await safeAnswer(chatId, `⚠️ Ошибка при работе со скиллами: ${errorText(error)}`, {
-      replyMarkup: getMainKeyboard(),
+      replyMarkup: getMainKeyboard(locale),
     });
   }
 }
@@ -1125,6 +1347,10 @@ async function handleOpenDashboard(chatId: number): Promise<void> {
 interface NamedCommand {
   handler: CommandHandler;
 }
+
+const handleByokSlash: CommandHandler = (u, c) => handleByok(u, c, '');
+const handleSkillsSlash: CommandHandler = (u, c) => handleSkills(u, c, '/skills');
+const handleLearnSlash: CommandHandler = (u, c) => handleLearn(u, c, '/learn');
 
 /** Слэш-команды и их алиасы: токен без `/` и без `@botname`. */
 const SLASH_COMMANDS: Record<string, NamedCommand> = {
@@ -1179,15 +1405,19 @@ const SLASH_COMMANDS: Record<string, NamedCommand> = {
   разобрать: { handler: handleTriage },
   разбор: { handler: handleTriage },
   триаж: { handler: handleTriage },
-  byok: { handler: (u, c) => handleByok(u, c, '') },
-  ключ: { handler: (u, c) => handleByok(u, c, '') },
+  byok: { handler: handleByokSlash },
+  ключ: { handler: handleByokSlash },
   lang: { handler: handleLang },
   language: { handler: handleLang },
   язык: { handler: handleLang },
   jezik: { handler: handleLang },
   言語: { handler: handleLang },
-  skills: { handler: (userId: number, chatId: number) => handleSkills(userId, chatId, '/skills') },
-  скиллы: { handler: (userId: number, chatId: number) => handleSkills(userId, chatId, '/skills') },
+  skills: { handler: handleSkillsSlash },
+  скиллы: { handler: handleSkillsSlash },
+  learn: { handler: handleLearnSlash },
+  запомни: { handler: handleLearnSlash },
+  правило: { handler: handleLearnSlash },
+  rule: { handler: handleLearnSlash },
 };
 
 // ---------------------------------------------------------------------------
@@ -1319,6 +1549,15 @@ function bareWordCommands(): Record<string, CommandHandler> {
   for (const label of getAllKeyboardLabels('inbox')) register(label, handleInbox);
   for (const label of getAllKeyboardLabels('newSession')) register(label, handleReset);
   for (const label of getAllKeyboardLabels('help')) register(label, handleHelp);
+  for (const label of getAllKeyboardLabels('skills')) register(label, handleSkillsSlash);
+  for (const label of getAllKeyboardLabels('diagnostics')) register(label, handleDiagnostics);
+  for (const label of getAllKeyboardLabels('triage')) register(label, handleTriage);
+  for (const label of getAllKeyboardLabels('commands')) register(label, handleCommandsKeyboard);
+  for (const label of getAllKeyboardLabels('backlog')) register(label, handleBacklog);
+  for (const label of getAllKeyboardLabels('backup')) register(label, handleBackup);
+  for (const label of getAllKeyboardLabels('byok')) register(label, handleByokSlash);
+  for (const label of getAllKeyboardLabels('lang')) register(label, handleLang);
+  for (const label of getAllKeyboardLabels('back')) register(label, handleMainKeyboard);
   for (const loc of SUPPORTED_LOCALES) {
     register(t(loc, 'keyboards.openApp'), (_userId: number, chatId: number) => handleOpenDashboard(chatId));
   }
@@ -1352,8 +1591,8 @@ function bareWordCommands(): Record<string, CommandHandler> {
     справка: handleHelp,
     меню: handleMenu,
     сброс: handleReset,
-    byok: (u, c) => handleByok(u, c, ''),
-    ключ: (u, c) => handleByok(u, c, ''),
+    byok: handleByokSlash,
+    ключ: handleByokSlash,
   };
   for (const [word, handler] of Object.entries(words)) map[word] = handler;
 
@@ -1596,6 +1835,68 @@ async function handleCurrencyCallback(
   );
 }
 
+async function handleSkillActionCallback(
+  callbackId: string,
+  ctx: CallbackContext,
+  originalText: string,
+  replyMarkup: { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined,
+  action: 'activate' | 'reject',
+  rawId: string,
+): Promise<void> {
+  const { userId, chatId, messageId } = ctx;
+  const locale = await loadUserLocale(userId);
+  const skillId = parseStrictPositiveInt(rawId);
+  if (skillId === null) {
+    await answerCallback(callbackId, t(locale, 'skills.notFound'), { showAlert: true });
+    return;
+  }
+
+  const result =
+    action === 'activate' ? await activateSkill(userId, skillId) : await rejectSkill(userId, skillId);
+  if (!result.ok) {
+    await answerCallback(callbackId, `⚠️ ${result.error}`, { showAlert: true });
+    return;
+  }
+
+  const key = parseSkillSpec(result.item.spec)?.key ?? `#${skillId}`;
+  const toast =
+    action === 'activate'
+      ? t(locale, 'skills.activatedToast', { key })
+      : t(locale, 'skills.rejectedToast', { id: skillId });
+  await confirmCallback(callbackId, chatId, toast);
+
+  const markupRows = replyMarkup?.inline_keyboard ?? [];
+  const isOverviewOrCard = markupRows.some((row) =>
+    row.some(
+      (btn) =>
+        typeof btn.callback_data === 'string' &&
+        (btn.callback_data === 'skills:home' || btn.callback_data.startsWith('skills:show:')),
+    ),
+  );
+  if (isOverviewOrCard) {
+    const overview = await renderSkillsOverview(userId, locale);
+    await trySafeEdit(chatId, messageId, overview.html, {
+      isHtml: true,
+      replyMarkup: overview.replyMarkup ?? { inline_keyboard: [] },
+    });
+    return;
+  }
+
+  const statusLine =
+    action === 'activate'
+      ? t(locale, 'skills.activatedStatus', { id: skillId, key })
+      : t(locale, 'skills.rejectedStatus', { id: skillId });
+  const appBtn = getOpenAppInlineKeyboard('skills', locale);
+  const editedHtml = truncateSafeEscapedHtml(
+    escapeAmpLtGt(appendStatusLine(originalText, statusLine)),
+    MAX_SAFE_EDIT_HTML_CHARS,
+  );
+  await trySafeEdit(chatId, messageId, editedHtml, {
+    isHtml: true,
+    replyMarkup: appBtn ?? { inline_keyboard: [] },
+  });
+}
+
 async function handleBackupCallback(callbackId: string, ctx: CallbackContext): Promise<void> {
   await answerCallback(callbackId, '📦 Отправляю файл бэкапа...');
   try {
@@ -1610,22 +1911,43 @@ async function handleBackupCallback(callbackId: string, ctx: CallbackContext): P
 }
 
 async function handleTriageCallback(callbackId: string, ctx: CallbackContext): Promise<void> {
-  const handler = seams.triage;
-  if (!handler) {
-    await answerCallback(callbackId, TRIAGE_UNAVAILABLE_TEXT, { showAlert: true });
+  if (seams.triage) {
+    try {
+      const outcome = await seams.triage(ctx.userId);
+      if (!outcome) {
+        await answerCallback(callbackId, TRIAGE_UNAVAILABLE_TEXT, { showAlert: true });
+        return;
+      }
+      await answerCallback(callbackId, '🧠 Запускаю разбор...');
+      if (outcome.count === 0) {
+        await trySafeEdit(ctx.chatId, ctx.messageId, TRIAGE_EMPTY_TEXT, {
+          replyMarkup: getOpenAppInlineKeyboard() ?? { inline_keyboard: [] },
+        });
+        return;
+      }
+      await trySafeEdit(ctx.chatId, ctx.messageId, outcome.text, {
+        isHtml: true,
+        replyMarkup: getOpenAppInlineKeyboard() ?? { inline_keyboard: [] },
+      });
+    } catch (error) {
+      await answerCallback(callbackId, `Ошибка: ${errorText(error)}`, { showAlert: true });
+    }
+    return;
+  }
+
+  const pending = await unprocessedNotes(ctx.userId, 1);
+  if (pending.length === 0) {
+    await answerCallback(callbackId, '📥 Инбокс пуст');
+    await trySafeEdit(ctx.chatId, ctx.messageId, TRIAGE_EMPTY_TEXT, {
+      replyMarkup: getOpenAppInlineKeyboard() ?? { inline_keyboard: [] },
+    });
     return;
   }
 
   await answerCallback(callbackId, '🧠 Запускаю разбор...');
   try {
-    const outcome = await handler(ctx.userId);
-    if (!outcome) {
-      await answerCallback(callbackId, TRIAGE_UNAVAILABLE_TEXT, { showAlert: true });
-      return;
-    }
+    const outcome = await defaultAgentTriage(ctx.userId, ctx.chatId);
     if (outcome.count === 0) {
-      // Без `WEBAPP_URL` кнопки приложения нет: пустая клавиатура всё равно
-      // снимает «Разобрать», иначе она осталась бы висеть над пустым инбоксом.
       await trySafeEdit(ctx.chatId, ctx.messageId, TRIAGE_EMPTY_TEXT, {
         replyMarkup: getOpenAppInlineKeyboard() ?? { inline_keyboard: [] },
       });
@@ -1636,7 +1958,9 @@ async function handleTriageCallback(callbackId: string, ctx: CallbackContext): P
       replyMarkup: getOpenAppInlineKeyboard() ?? { inline_keyboard: [] },
     });
   } catch (error) {
-    await answerCallback(callbackId, `Ошибка: ${errorText(error)}`, { showAlert: true });
+    await trySafeEdit(ctx.chatId, ctx.messageId, `⚠️ Ошибка при разборе инбокса: ${errorText(error)}`, {
+      replyMarkup: getOpenAppInlineKeyboard() ?? { inline_keyboard: [] },
+    });
   }
 }
 
@@ -2035,6 +2359,63 @@ export async function routeCallback(callback: CallbackQuery): Promise<void> {
   }
   if (data === 'triage:inbox') {
     await handleTriageCallback(callbackId, ctx);
+    return;
+  }
+
+  // Скиллы: skills:home | skills:show:<id> | skills:activate:<id> | skills:reject:<id>
+  if (data === 'skills:home') {
+    const locale = await loadUserLocale(userId);
+    const overview = await renderSkillsOverview(userId, locale);
+    await answerCallback(callbackId);
+    await trySafeEdit(chatId, messageId, overview.html, {
+      isHtml: true,
+      replyMarkup: overview.replyMarkup ?? { inline_keyboard: [] },
+    });
+    return;
+  }
+
+  if (data.startsWith('skills:show:')) {
+    const locale = await loadUserLocale(userId);
+    const skillId = parseStrictPositiveInt(data.slice('skills:show:'.length));
+    const item = skillId !== null ? await getEvolutionItem(userId, skillId) : null;
+    const card =
+      item && item.category === 'skill' && skillId !== null
+        ? await formatSkillCard(userId, skillId)
+        : null;
+    if (!item || item.category !== 'skill' || !card || skillId === null) {
+      await answerCallback(callbackId, t(locale, 'skills.notFound'), { showAlert: true });
+      return;
+    }
+    const safeCard = truncateSafeEscapedHtml(escapeAmpLtGt(card), MAX_SAFE_EDIT_HTML_CHARS);
+    await answerCallback(callbackId);
+    await trySafeEdit(chatId, messageId, safeCard, {
+      isHtml: true,
+      replyMarkup: buildSkillDetailKeyboard(skillId, item.status, locale),
+    });
+    return;
+  }
+
+  if (data.startsWith('skills:activate:')) {
+    await handleSkillActionCallback(
+      callbackId,
+      ctx,
+      originalText,
+      callback.message?.reply_markup,
+      'activate',
+      data.slice('skills:activate:'.length),
+    );
+    return;
+  }
+
+  if (data.startsWith('skills:reject:')) {
+    await handleSkillActionCallback(
+      callbackId,
+      ctx,
+      originalText,
+      callback.message?.reply_markup,
+      'reject',
+      data.slice('skills:reject:'.length),
+    );
     return;
   }
 

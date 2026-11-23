@@ -26,6 +26,7 @@ import { createLiability } from '../../src/lib/dal/finances';
 import { createMedication, takeMedication } from '../../src/lib/dal/medications';
 import { createTask } from '../../src/lib/dal/tasks';
 import { ensureUser, updateUser } from '../../src/lib/dal/users';
+import { saveDirectives } from '../../src/lib/learning';
 import type { AgentMessage } from '../../src/types';
 import {
   DEFAULT_MAX_STEPS,
@@ -915,7 +916,7 @@ describe('runAgent: нативный function calling', () => {
   });
 
   it('параллельно запускает смежные read-only тулзы и сохраняет порядок декларации в steps и треде', async () => {
-    expect(READ_ONLY_TOOL_NAMES.size).toBe(18);
+    expect(READ_ONLY_TOOL_NAMES.size).toBe(20);
 
     const events: string[] = [];
     let releaseListTasks!: () => void;
@@ -1660,6 +1661,18 @@ describe('loadAgentProfile и runAgent: Executive Overload Shield из SQLite', 
     expect(profile.activeTodoCount).toBe(3);
     expect(profile.overdueTaskCount).toBe(2);
     expect(profile.missedMedsCount).toBe(1);
+    expect(profile.personaStyle).toBeNull();
+    expect(profile.customInstructions).toBeNull();
+  });
+
+  it('loadAgentProfile извлекает personaStyle и чистые customInstructions из 07_custom_instructions', async () => {
+    await ensureUser(USER_A, 'Алиса');
+    await saveDirectives(USER_A, '- Не ставить созвоны утром', 'calm_partner');
+
+    const profile = await loadAgentProfile(USER_A, new Date('2026-11-06T11:30:00Z'));
+    expect(profile.personaStyle).toBe('calm_partner');
+    expect(profile.customInstructions).toBe('- Не ставить созвоны утром');
+    expect(profile.customInstructions).not.toContain('Стиль общения:');
   });
 
   it('runAgent с профилем из БД добавляет директиву щита в промпт при срабатывании порога и опускает ниже порога', async () => {
