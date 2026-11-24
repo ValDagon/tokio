@@ -32,8 +32,10 @@ import {
   MEDICATION_REMINDER_WINDOW_MINUTES,
   deliverMorningDigest,
   MORNING_DIGEST_WINDOW_MINUTES,
+  pruneStaleKvLabels,
 } from '../src/lib/reminders';
-import { kvGet, kvSet, liabilityReviewKey } from '../src/lib/dal/misc';
+import { kvDelete, kvGet, kvSet, liabilityReviewKey } from '../src/lib/dal/misc';
+import { routineRunKey, saveUserPrefs } from '../src/lib/prefs';
 import {
   applyLiabilityReviewChoice,
   LIABILITY_REVIEW_FAILED_TOAST,
@@ -1465,5 +1467,81 @@ describe('reminders: утренняя сводка', () => {
     });
 
     expect(texts().some((text) => text.includes('Доброе утро'))).toBe(true);
+  });
+});
+
+describe('Волна 2: quietHours, настройки 5 проактивных джоб и чистка routine_run', () => {
+  it('quietHours откладывают дайджест/лекарства/предупреждения, но НЕ глушат явные напоминания о задачах и /digest (ignoreQuietHours)', async () => {
+    const quietMoment = new Date('2026-11-24T23:30:00.000Z');
+    await updateUser(USER, { timezone: 'UTC', summaryTime: '23:00' });
+    await saveUserPrefs(USER, {
+      proactive: {
+        quietHours: { enabled: true, start: '23:00', end: '07:00' },
+      },
+    });
+    await createTask(USER, {
+      title: 'Явное ночное напоминание',
+      remindAt: new Date(quietMoment.getTime() - 60_000).toISOString(),
+    });
+    await createMedication(USER, { name: 'Мелатонин', dosage: '3 мг', times: ['23:00'] });
+
+    const digestSkipped = await deliverMorningDigest(USER, { now: quietMoment });
+    expect(digestSkipped.skipped).toBe(1);
+    expect(digestSkipped.delivered).toBe(0);
+
+    const medsSkipped = await deliverMedicationReminders(USER, { now: quietMoment });
+    expect(medsSkipped.skipped).toBe(1);
+    expect(medsSkipped.delivered).toBe(0);
+
+    // Явное разовое напоминание о задаче пробивает quietHours
+    const taskRes = await deliverDueReminders(USER, { now: quietMoment });
+    expect(taskRes.delivered).toBe(1);
+
+    // Ручной /digest c ignoreQuietHours тоже доставляет
+    const forcedDigest = await deliverMorningDigest(USER, { now: quietMoment, ignoreQuietHours: true });
+    expect(forcedDigest.delivered).toBe(1);
+  });
+
+  it('уважает enabled/windowMinutes/daysBefore и чистит протухшие routine_run:', async () => {
+    const baseNow = new Date('2026-11-10T10:00:00.000Z');
+    await updateUser(USER, { timezone: 'UTC', summaryTime: '09:00' });
+    await createMedication(USER, { name: 'Омега', dosage: '1 г', times: ['08:00'] }); // 120 мин назад
+    await createLiability(USER, {
+      name: 'Кредит',
+      queue: 'bank' as LiabilityQueue,
+      amountCents: 100_000,
+      currency: 'EUR',
+      monthlyPaymentCents: 10_000,
+      paymentDay: 15, // через 5 дней
+    });
+
+    await saveUserPrefs(USER, {
+      proactive: {
+        jobs: {
+          morning_digest: { enabled: false },
+          liability_warning: { enabled: true, daysBefore: 7 },
+          medication_reminder: { enabled: true, windowMinutes: 60 }, // опоздание 120 > 60 -> не шлём
+        },
+      },
+    });
+
+    const dig = await deliverMorningDigest(USER, { now: baseNow });
+    expect(dig.skipped).toBe(1);
+    const meds = await deliverMedicationReminders(USER, { now: baseNow });
+    expect(meds.delivered).toBe(0);
+    const lw = await deliverLiabilityWarnings(USER, { now: baseNow });
+    expect(lw.delivered).toBe(1);
+
+    // Тест чистки routine_run: в pruneStaleKvLabels
+    const oldKey = routineRunKey(USER, 'old_r', '2026-09-01');
+    const freshKey = routineRunKey(USER, 'fresh_r', '2026-11-09');
+    await kvSet(oldKey, JSON.stringify({ triggerDate: '2026-09-01', ranAt: '2026-09-01T10:00:00.000Z' }));
+    await kvSet(freshKey, JSON.stringify({ triggerDate: '2026-11-09', ranAt: '2026-11-09T10:00:00.000Z' }));
+
+    const pruneRes = await pruneStaleKvLabels({ now: baseNow });
+    expect(pruneRes.deleted).toBe(1);
+    expect(await kvGet(oldKey)).toBeNull();
+    expect(await kvGet(freshKey)).not.toBeNull();
+    await kvDelete(freshKey);
   });
 });

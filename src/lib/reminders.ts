@@ -68,6 +68,7 @@ import {
   type LiabilityReviewItem,
 } from './digest.js';
 import { markdownToTelegramHtml, splitMessageChunks } from './markdown.js';
+import { isInQuietHours, loadUserPrefs, type UserPrefs } from './prefs.js';
 import {
   addDays,
   dateKey,
@@ -87,6 +88,8 @@ export interface DeliverRemindersOptions {
   chatId?: number;
   /** Сколько напоминаний доставить за проход. */
   limit?: number;
+  /** Игнорировать тихие часы (для ручной команды `/digest`). */
+  ignoreQuietHours?: boolean;
 }
 
 export interface ReminderDeliveryResult {
@@ -349,7 +352,20 @@ export async function deliverLiabilityWarnings(
   const now = resolveNow(options.now);
   if (!now) return empty;
 
-  const timeZone = (await getUser(userId))?.timezone ?? 'Europe/Berlin';
+  const [user, prefs] = await Promise.all([
+    getUser(userId),
+    loadUserPrefs(userId).catch((): UserPrefs => ({})),
+  ]);
+  const timeZone = user?.timezone ?? 'Europe/Berlin';
+  if (prefs.proactive?.jobs?.liability_warning?.enabled === false) {
+    return { ...empty, skipped: 1 };
+  }
+  if (!options.ignoreQuietHours && isInQuietHours(now, timeZone, prefs.proactive?.quietHours)) {
+    return { ...empty, skipped: 1 };
+  }
+  const warningDays =
+    prefs.proactive?.jobs?.liability_warning?.daysBefore ?? LIABILITY_WARNING_WINDOW_DAYS;
+
   const liabilities = await listLiabilities(userId, 'active');
   if (liabilities.length === 0) return empty;
 
@@ -362,7 +378,7 @@ export async function deliverLiabilityWarnings(
     if (Math.round(liability.monthlyPaymentCents) <= 0) continue;
 
     const payment = nextPayment(liability, today);
-    if (!payment || payment.days > LIABILITY_WARNING_WINDOW_DAYS) continue;
+    if (!payment || payment.days > warningDays) continue;
 
     // Обязательство с истёкшим сроком закрывается само, а не напоминает.
     if (liability.endDate !== null && liability.endDate < payment.dueKey) continue;
@@ -466,7 +482,18 @@ export async function deliverLiabilityReview(
   const now = resolveNow(options.now);
   if (!now) return empty;
 
-  const timeZone = (await getUser(userId))?.timezone ?? 'Europe/Berlin';
+  const [user, prefs] = await Promise.all([
+    getUser(userId),
+    loadUserPrefs(userId).catch((): UserPrefs => ({})),
+  ]);
+  const timeZone = user?.timezone ?? 'Europe/Berlin';
+  if (prefs.proactive?.jobs?.liability_review?.enabled === false) {
+    return { ...empty, skipped: 1 };
+  }
+  if (!options.ignoreQuietHours && isInQuietHours(now, timeZone, prefs.proactive?.quietHours)) {
+    return { ...empty, skipped: 1 };
+  }
+
   const liabilities = await listLiabilities(userId, 'active');
   if (liabilities.length === 0) return empty;
 
@@ -600,7 +627,20 @@ export async function deliverMedicationReminders(
   const now = resolveNow(options.now);
   if (!now) return empty;
 
-  const timeZone = (await getUser(userId))?.timezone ?? 'Europe/Berlin';
+  const [user, prefs] = await Promise.all([
+    getUser(userId),
+    loadUserPrefs(userId).catch((): UserPrefs => ({})),
+  ]);
+  const timeZone = user?.timezone ?? 'Europe/Berlin';
+  if (prefs.proactive?.jobs?.medication_reminder?.enabled === false) {
+    return { ...empty, skipped: 1 };
+  }
+  if (!options.ignoreQuietHours && isInQuietHours(now, timeZone, prefs.proactive?.quietHours)) {
+    return { ...empty, skipped: 1 };
+  }
+  const windowMinutes =
+    prefs.proactive?.jobs?.medication_reminder?.windowMinutes ?? MEDICATION_REMINDER_WINDOW_MINUTES;
+
   const todayKey = dateKey(now, timeZone);
   const parts = zonedParts(now, timeZone);
   const nowMinutes = parts.hour * 60 + parts.minute;
@@ -609,7 +649,7 @@ export async function deliverMedicationReminders(
   // Вчерашний журнал нужен только когда окно перекрывает полночь — иначе это
   // лишний SELECT на каждом касании бота.
   const dayKeys =
-    nowMinutes < MEDICATION_REMINDER_WINDOW_MINUTES
+    nowMinutes < windowMinutes
       ? [dateKey(addDays(now, -1), timeZone), todayKey]
       : [todayKey];
   const perDay = await Promise.all(dayKeys.map((day) => listDoses(userId, day)));
@@ -625,7 +665,7 @@ export async function deliverMedicationReminders(
       const scheduled = parseTimeOfDay(dose.scheduledTime);
       if (scheduled === null) continue;
       const late = nowMinutes - scheduled + (fromYesterday ? 1440 : 0);
-      if (late < 0 || late > MEDICATION_REMINDER_WINDOW_MINUTES) continue;
+      if (late < 0 || late > windowMinutes) continue;
       due.push({ dose, dayKey });
     }
   });
@@ -753,13 +793,25 @@ export async function deliverMorningDigest(
   const now = resolveNow(options.now);
   if (!now) return empty;
 
-  const user = await getUser(userId);
+  const [user, prefs] = await Promise.all([
+    getUser(userId),
+    loadUserPrefs(userId).catch((): UserPrefs => ({})),
+  ]);
   // Нет строки — пользователь не прошёл гейт (в личной редакции чужой id
   // отклоняется до `ensureUser`). Сводку ему не шлём: иначе заблокированный
   // получает «всё закрыто, инбокс чист» в обход fail-closed гейта.
   if (!user) return empty;
 
   const timeZone = user.timezone ?? 'Europe/Berlin';
+  if (prefs.proactive?.jobs?.morning_digest?.enabled === false) {
+    return { ...empty, skipped: 1 };
+  }
+  if (!options.ignoreQuietHours && isInQuietHours(now, timeZone, prefs.proactive?.quietHours)) {
+    return { ...empty, skipped: 1 };
+  }
+  const digestWindowMinutes =
+    prefs.proactive?.jobs?.morning_digest?.windowMinutes ?? MORNING_DIGEST_WINDOW_MINUTES;
+
   const summaryMinutes = parseTimeOfDay(user.summaryTime ?? '') ?? DEFAULT_SUMMARY_MINUTES;
   const parts = zonedParts(now, timeZone);
   const nowMinutes = parts.hour * 60 + parts.minute;
@@ -772,7 +824,7 @@ export async function deliverMorningDigest(
       : nowMinutes + MINUTES_PER_DAY - summaryMinutes;
 
   // Ещё рано или уже поздно: сегодня сводка не нужна, и это не ошибка.
-  if (sinceSummary > MORNING_DIGEST_WINDOW_MINUTES) return empty;
+  if (sinceSummary > digestWindowMinutes) return empty;
 
   // Сутки сводки — сутки её начала, а не календарные: касание в 00:30 по окну
   // 22:00 принадлежит вчерашнему дню, и ключ у него вчерашний. Иначе ночь
@@ -810,7 +862,11 @@ export async function deliverMorningDigest(
     // отменяет уже доставленный дайджест и не снимает суточную метку: сводку
     // владелец получает всегда, а проверку доберёт следующий проход.
     try {
-      await deliverLiabilityReview(userId, { now, chatId });
+      await deliverLiabilityReview(userId, {
+        now,
+        chatId,
+        ignoreQuietHours: options.ignoreQuietHours,
+      });
     } catch (err) {
       console.warn('reminders: liability review after digest failed', userId, err);
     }
@@ -861,6 +917,7 @@ const KV_LABEL_SOURCES: ReadonlyArray<{ prefix: string; dateFields: readonly str
   { prefix: 'liability_review:', dateFields: ['dueAt', 'decidedAt'] },
   { prefix: 'med_remind:', dateFields: ['date', 'remindedAt'] },
   { prefix: 'morning_digest:', dateFields: ['digestDate', 'sentAt'] },
+  { prefix: 'routine_run:', dateFields: ['triggerDate', 'ranAt'] },
 ];
 
 export interface KvLabelPruneOptions {

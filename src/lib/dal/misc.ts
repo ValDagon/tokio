@@ -1807,3 +1807,38 @@ export async function updateFeedbackStatus(id: number, status: 'ack' | 'done'): 
     WHERE id = ${id}
   `);
 }
+
+// ---------------------------------------------------------------------------
+// Heartbeat часов напоминаний (`clock:v1:<uid>`)
+// ---------------------------------------------------------------------------
+
+export type ReminderClockSource = 'touch' | 'rpc' | 'external';
+export type ReminderClockStatus = 'delivered' | 'skipped' | 'failed';
+
+/**
+ * Порог тревоги «внешние часы молчат», в минутах.
+ *
+ * Вынесено в `dal/misc.ts`, чтобы `summary.ts` не импортировал `jobs.ts`
+ * (разрыв цикла при вызове `runAgent` из раннера кастомных рутин в `jobs.ts`).
+ */
+export const CLOCK_STALL_AFTER_MINUTES = 24 * 60;
+
+export function clockHeartbeatKey(userId: number): string {
+  return `clock:v1:${userId}`;
+}
+
+export interface ClockHeartbeat {
+  lastTouchAt: string | null;
+  lastExternalAttemptAt: string | null;
+  lastExternalSuccessAt: string | null;
+  source: ReminderClockSource;
+  delivered: number;
+  failed: number;
+  kinds: {
+    task_reminder: ReminderClockStatus;
+    liability_warning: ReminderClockStatus;
+    medication_reminder: ReminderClockStatus;
+    morning_digest: ReminderClockStatus;
+    custom_routines?: ReminderClockStatus;
+  };
+}

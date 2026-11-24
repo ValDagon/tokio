@@ -118,6 +118,7 @@
     "diagnostics": "Dnevnik grešaka: šta je puklo",
     "skills": "Procedure: prikaži, uključi, odbij",
     "learn": "Zapamti stalno pravilo",
+    "talk": "Slobodan razgovor bez upisa u bazu",
     "backlog": "Zaostale ideje i greške",
     "lang": "Promeni jezik interfejsa",
     "byok": "Poveži svoj Gemini API ključ",
@@ -290,5 +291,19 @@
     "deadline_irreversible_hint": "Nepovratne radnje se ne mogu poništiti — proveri rezultat.",
     "deadline_gathered_header": "Šta sam uspeo da prikupim:",
     "deadline_tail": "Ostalo — u sledećoj poruci."
+  },
+  "diary": {
+    "emptyToday": "📔 Današnji dnevnik je još prazan. Napiši ili izdiktiraj „Diary, ...“ i pažljivo ću sačuvati zapis.",
+    "savedHeader": "📔 <b>Sačuvano u dnevnik za {{date}}</b>",
+    "energyLine": "🔋 Energija: <b>{{energy}}/10</b>"
+  },
+  "talk": {
+    "enabled": "💬 Režim razgovora je uključen na 30 minuta. Samo pričamo — ništa ne upisujem u beleške ili bazu. Izlaz: /talk off ili „end talk“.",
+    "disabled": "✅ Izašao sam iz režima razgovora. Vraćen je običan režim.",
+    "alreadyOn": "💬 Režim razgovora je već aktivan (tajmer je produžen za 30 minuta). Izlaz: /talk off ili „end talk“.",
+    "alreadyOff": "💬 Režim razgovora je trenutno isključen. Pošalji /talk ili napiši „let's just talk“ za početak.",
+    "statusOn": "💬 Trenutno je aktivan režim razgovora (samo dijalog, bez upisa u bazu). Izlaz: /talk off ili „end talk“.",
+    "statusOff": "💬 Trenutno je aktivan običan režim (zadaci, finansije i beleške su uključeni). Uključi razgovor sa /talk.",
+    "fallbackError": "Nisam uspeo da odgovorim sada, ali režim razgovora je i dalje uključen — ništa nije sačuvano u beleške. Pokušaj ponovo ili izađi sa /talk off."
   }
 }

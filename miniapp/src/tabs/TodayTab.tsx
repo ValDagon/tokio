@@ -24,6 +24,7 @@ export interface TodayTabProps {
   triggerHaptic: (type?: 'light' | 'medium' | 'success') => void;
   baseCurrency?: string;
   reserveAmount?: number;
+  focusLimit?: number;
 }
 
 export const TodayTab: React.FC<TodayTabProps> = ({
@@ -37,6 +38,7 @@ export const TodayTab: React.FC<TodayTabProps> = ({
   triggerHaptic,
   baseCurrency,
   reserveAmount = 0,
+  focusLimit,
 }) => {
   const { locale, t, formatNumber } = useI18n();
   const [captureMode, setCaptureMode] = useState<'task' | 'note'>('task');
@@ -108,7 +110,14 @@ export const TodayTab: React.FC<TodayTabProps> = ({
   const focusTaskTime = focusTask ? getTaskTimeDisplay(focusTask, currentDate.getTime(), locale) : null;
 
   // Remaining today tasks (excluding focusTask so it is never duplicated below)
-  const remainingTodayTasks = useMemo(() => todayTasks.slice(1, 4), [todayTasks]);
+  const effectiveFocusLimit =
+    typeof focusLimit === 'number' && Number.isFinite(focusLimit)
+      ? Math.min(10, Math.max(1, Math.trunc(focusLimit)))
+      : 4;
+  const remainingTodayTasks = useMemo(
+    () => todayTasks.slice(1, effectiveFocusLimit),
+    [todayTasks, effectiveFocusLimit],
+  );
 
   // Next upcoming scheduled unpaid liability
   const nextLiability = useMemo(() => {

@@ -1508,8 +1508,11 @@ export async function activateSkill(userId: number, itemId: number): Promise<Ski
   if (item.status === 'rejected') {
     return { ok: false, error: 'Отклонённый скилл включить нельзя: сначала нужен новый черновик.' };
   }
-  if (item.status !== 'pending' && item.status !== 'superseded') {
-    return { ok: false, error: 'Включить можно только ожидающий черновик или прежнюю версию.' };
+  if (item.status !== 'pending' && item.status !== 'superseded' && item.status !== 'disabled') {
+    return {
+      ok: false,
+      error: 'Включить можно только ожидающий черновик, отключённый скилл или прежнюю версию.',
+    };
   }
 
   const claim = await claimSkillActivation(userId);
@@ -1552,15 +1555,30 @@ export async function activateSkill(userId: number, itemId: number): Promise<Ski
   }
 }
 
-/** Отклонение или выключение скилла: `pending` и `active`, следов в промпте не остаётся. */
+/** Отклонение или удаление черновика/скилла без возможности повторного включения. */
 export async function rejectSkill(userId: number, itemId: number): Promise<SkillAction> {
   const item = await getEvolutionItem(userId, itemId);
   if (!item || item.category !== 'skill') return { ok: false, error: 'Скилл не найден.' };
-  if (item.status !== 'pending' && item.status !== 'active') {
-    return { ok: false, error: 'Отклонить можно только ожидающий черновик или активный скилл.' };
+  if (item.status !== 'pending' && item.status !== 'active' && item.status !== 'disabled') {
+    return {
+      ok: false,
+      error: 'Отклонить можно только ожидающий черновик, активный или отключённый скилл.',
+    };
   }
   const updated = await updateEvolutionItem(userId, itemId, { status: 'rejected' });
   if (!updated) return { ok: false, error: 'Не удалось отклонить скилл.' };
+  return { ok: true, item: updated };
+}
+
+/** Временное отключение активного скилла с сохранением возможности повторной активации. */
+export async function disableSkill(userId: number, itemId: number): Promise<SkillAction> {
+  const item = await getEvolutionItem(userId, itemId);
+  if (!item || item.category !== 'skill') return { ok: false, error: 'Скилл не найден.' };
+  if (item.status !== 'active') {
+    return { ok: false, error: 'Отключить можно только активный скилл.' };
+  }
+  const updated = await updateEvolutionItem(userId, itemId, { status: 'disabled' });
+  if (!updated) return { ok: false, error: 'Не удалось отключить скилл.' };
   return { ok: true, item: updated };
 }
 
@@ -1575,7 +1593,13 @@ export async function listAllUserSkills(userId: number): Promise<UserSkillSummar
   const items = (await listEvolutionItems(userId, { limit: 200 })).filter(
     (item) => item.category === 'skill',
   );
-  const order: Record<string, number> = { pending: 0, active: 1, superseded: 2, rejected: 3 };
+  const order: Record<string, number> = {
+    pending: 0,
+    active: 1,
+    disabled: 2,
+    superseded: 3,
+    rejected: 4,
+  };
   const sorted = [...items].sort(
     (a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || b.id - a.id,
   );
@@ -1811,6 +1835,7 @@ export async function skillUsage(userId: number, skillId: number): Promise<Skill
 const SKILL_STATUS_LABELS: Record<string, string> = {
   pending: 'ожидает решения',
   active: 'включён',
+  disabled: 'на паузе',
   superseded: 'вытеснен',
   rejected: 'отклонён',
 };
@@ -1850,7 +1875,13 @@ export async function formatSkillsList(userId: number): Promise<string> {
     ].join('\n');
   }
 
-  const order: Record<string, number> = { pending: 0, active: 1, superseded: 2, rejected: 3 };
+  const order: Record<string, number> = {
+    pending: 0,
+    active: 1,
+    disabled: 2,
+    superseded: 3,
+    rejected: 4,
+  };
   const sorted = [...items].sort(
     (a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || b.id - a.id,
   );

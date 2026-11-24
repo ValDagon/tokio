@@ -40,7 +40,7 @@ import type {
   UiConfigAccountTheme,
   FxRatesResponse,
 } from '../types';
-import { getCurrencySymbol } from '../utils';
+import { getCurrencySymbol, matchesAccountThemePattern } from '../utils';
 import { useI18n } from '../i18n/index';
 
 export interface BankAccountGroup {
@@ -87,6 +87,7 @@ export interface FinancesTabProps {
   budgetLimitInput: string;
   setBudgetLimitInput: (val: string) => void;
   handleSaveBudget: () => Promise<void> | void;
+  handleDeleteBudget?: (categoryId: string) => Promise<void> | void;
   transactions: TransactionItem[];
   undoLastTransaction: () => Promise<{ message: string }>;
   resetFinances: () => Promise<unknown>;
@@ -106,9 +107,8 @@ function getAccountPurposeMeta(
   accountThemes: UiConfigAccountTheme[],
   t: (key: string) => string
 ): AccountPurposeMeta {
-  const lower = name.toLowerCase();
   for (const rule of accountThemes) {
-    if (rule.pattern && lower.includes(rule.pattern.toLowerCase())) {
+    if (matchesAccountThemePattern(name, rule.pattern)) {
       return {
         shortName: rule.shortName,
         roleLabel: rule.roleLabel || (envelope === 'spendable' ? t('finances.roleSpendable') : t('finances.roleReserve')),
@@ -148,6 +148,7 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
   budgetLimitInput,
   setBudgetLimitInput,
   handleSaveBudget,
+  handleDeleteBudget,
   transactions,
   undoLastTransaction,
   resetFinances,
@@ -1264,6 +1265,53 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
               <div className="section-header-row">
                 <span className="section-title">{t('finances.categoryBudgets')}</span>
               </div>
+              {(finSummary?.total_budgeted_eur ?? 0) > 0 && (() => {
+                const planTotal = finSummary!.total_budgeted_eur || 0;
+                const planSpent = finSummary!.total_budgeted_spent_eur || 0;
+                const planDiff = planTotal - planSpent;
+                const isOverPlan = planDiff < 0;
+                const planPct = planTotal > 0 ? Math.min((planSpent / planTotal) * 100, 100) : 0;
+                return (
+                  <div
+                    className="budget-card"
+                    style={{ marginBottom: 8, borderColor: isOverPlan ? 'var(--danger-color, #ef4444)' : undefined }}
+                  >
+                    <div className="budget-info">
+                      <span className="budget-name tabular-nums">
+                        {t('finances.budgetPlanSummary', {
+                          month: finSummary!.month,
+                          spent: formatNumber(planSpent, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                          limit: formatNumber(planTotal, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                          currency: currSym,
+                        })}
+                      </span>
+                      <span
+                        className="budget-amounts tabular-nums"
+                        style={{
+                          color: isOverPlan ? 'var(--danger-color, #ef4444)' : 'var(--accent-color)',
+                          fontWeight: 600,
+                        }}
+                      >
+                        {isOverPlan
+                          ? t('finances.budgetPlanOver', {
+                              amount: formatNumber(Math.abs(planDiff), { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                              currency: currSym,
+                            })
+                          : t('finances.budgetPlanRemaining', {
+                              amount: formatNumber(planDiff, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                              currency: currSym,
+                            })}
+                      </span>
+                    </div>
+                    <div className="progress-track">
+                      <div
+                        className={`progress-fill ${isOverPlan ? 'danger' : planPct > 80 ? 'warning' : ''}`}
+                        style={{ width: `${planPct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {finSummary!.categories.map((cat) => {
                   const pct = cat.percent_used || 0;
@@ -1306,32 +1354,54 @@ export const FinancesTab: React.FC<FinancesTabProps> = ({
             </>
           )}
 
-          {budgetModalCategory && (
-            <div className="task-form" style={{ borderColor: 'var(--accent-color)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>
-                  {t('finances.monthLimitFor', { category: budgetModalCategory })}
-                </span>
-                <button className="btn-link" aria-label={t('common.close')} onClick={() => setBudgetModalCategory(null)}>
-                  <X size={16} />
-                </button>
+          {budgetModalCategory && (() => {
+            const selectedBudgetCat = finSummary?.categories.find(
+              (c) => c.category_name === budgetModalCategory
+            );
+            const canResetBudget = Boolean(
+              handleDeleteBudget &&
+                selectedBudgetCat?.category_id &&
+                (selectedBudgetCat.limit_eur ?? 0) > 0
+            );
+            return (
+              <div className="task-form" style={{ borderColor: 'var(--accent-color)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>
+                    {t('finances.monthLimitFor', { category: budgetModalCategory })}
+                  </span>
+                  <button className="btn-link" aria-label={t('common.close')} onClick={() => setBudgetModalCategory(null)}>
+                    <X size={16} />
+                  </button>
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                  <input
+                    type="number"
+                    className="input-field"
+                    aria-label={t('finances.limitPlaceholderEur', { currency: baseCurrency })}
+                    placeholder={t('finances.limitPlaceholderEur', { currency: baseCurrency })}
+                    value={budgetLimitInput}
+                    onChange={(e) => setBudgetLimitInput(e.target.value)}
+                    autoFocus
+                  />
+                  <button className="btn-primary" onClick={handleSaveBudget}>
+                    {t('common.save')}
+                  </button>
+                </div>
+                {canResetBudget && selectedBudgetCat?.category_id && (
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+                    <button
+                      type="button"
+                      className="btn-link"
+                      style={{ fontSize: 12, color: 'var(--text-muted)' }}
+                      onClick={() => handleDeleteBudget!(selectedBudgetCat.category_id!)}
+                    >
+                      {t('finances.resetLimitBtn')}
+                    </button>
+                  </div>
+                )}
               </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-                <input
-                  type="number"
-                  className="input-field"
-                  aria-label={t('finances.limitPlaceholderEur', { currency: baseCurrency })}
-                  placeholder={t('finances.limitPlaceholderEur', { currency: baseCurrency })}
-                  value={budgetLimitInput}
-                  onChange={(e) => setBudgetLimitInput(e.target.value)}
-                  autoFocus
-                />
-                <button className="btn-primary" onClick={handleSaveBudget}>
-                  {t('common.save')}
-                </button>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {(hasTransactions || accounts.length > 0) && (
             <>

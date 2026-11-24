@@ -23,12 +23,14 @@ import {
   createLiability,
   createTransaction,
   deleteAccount,
+  deleteBudget,
   deleteLiability,
   deleteTransaction,
   findAccountByName,
   findAccountCandidates,
   findLastTransaction,
   findLiabilityByName,
+  getBudget,
   getTransactionGroup,
   listAccounts,
   listBudgets,
@@ -59,6 +61,8 @@ import {
   setRates,
   BASE_CURRENCY,
 } from '../../dal/fx';
+import { matchExplicitAccount } from '../../financial-parser';
+import { loadUserPrefs, type UserPrefs } from '../../prefs';
 import { calculateRunway } from '../../runway';
 import type {
   AccountEnvelope,
@@ -265,7 +269,16 @@ async function resolveSingleAccountForManagement(
   name: string,
   currency?: string,
 ): Promise<{ account: AccountRow } | ToolOutcome> {
-  const candidates = await findAccountCandidates(ctx.userId, name, currency);
+  let candidates = await findAccountCandidates(ctx.userId, name, currency);
+  if (candidates.length === 0) {
+    const prefs = await loadUserPrefs(ctx.userId).catch((): UserPrefs => ({}));
+    const aliased = matchExplicitAccount(name, currency ?? ctx.baseCurrency, {
+      userFinancePrefs: prefs.finance,
+    });
+    if (aliased && aliased.toLowerCase() !== name.trim().toLowerCase()) {
+      candidates = await findAccountCandidates(ctx.userId, aliased, currency);
+    }
+  }
   if (candidates.length === 0) {
     const accounts = await listAccounts(ctx.userId, { includeInactive: true });
     return fail(`Счёт «${name}» не найден. Доступные счета: ${joinAccounts(accounts)}.`);
@@ -304,14 +317,31 @@ async function resolveAccount(
   name?: string,
   currency?: string,
 ): Promise<AccountResolution> {
+  const prefs = await loadUserPrefs(ctx.userId).catch((): UserPrefs => ({}));
   if (name) {
     const found = await findAccountByName(ctx.userId, name, currency);
     if (found) return { account: found };
+    const aliased = matchExplicitAccount(name, currency ?? ctx.baseCurrency, {
+      userFinancePrefs: prefs.finance,
+    });
+    if (aliased) {
+      const foundAlias = await findAccountByName(ctx.userId, aliased, currency);
+      if (foundAlias) return { account: foundAlias };
+    }
     const created = await createAccount(ctx.userId, {
-      name,
+      name: aliased ?? name,
       ...(currency ? { currency } : {}),
     });
     return { account: created };
+  }
+
+  const targetCurr = (currency ?? ctx.baseCurrency).toUpperCase();
+  const defaultAccountName = prefs.finance?.defaultAccountByCurrency?.[targetCurr];
+  if (defaultAccountName) {
+    const preferred = await findAccountByName(ctx.userId, defaultAccountName, targetCurr);
+    if (preferred && preferred.isActive && preferred.currency.toUpperCase() === targetCurr) {
+      return { account: preferred };
+    }
   }
 
   const accounts = await listAccounts(ctx.userId);
@@ -694,11 +724,101 @@ async function addExchange(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
 }
 
 // ---------------------------------------------------------------------------
-// set_budget
+// set_budget / delete_budget / get_budget_plan
 // ---------------------------------------------------------------------------
 
-/** Установить месячный лимит бюджета по категории (EUR). */
+const ISO_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+function resolveTargetMonth(
+  raw: unknown,
+  ctx: ToolContext,
+): { ok: true; month: string } | { ok: false; content: string } {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return { ok: true, month: monthKey(ctx.now, ctx.timezone) };
+  }
+  const val = String(raw).trim();
+  if (!ISO_MONTH_RE.test(val)) {
+    return {
+      ok: false,
+      content: `Неверный формат месяца «${val}» — нужен YYYY-MM (например, 2026-11).`,
+    };
+  }
+  return { ok: true, month: val };
+}
+
+function previousMonthKey(month: string): string {
+  const [y, m] = month.split('-').map(Number) as [number, number];
+  const prevYear = m === 1 ? y - 1 : y;
+  const prevMonth = m === 1 ? 12 : m - 1;
+  return `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+}
+
+function monthEndIso(month: string): string {
+  const [y, m] = month.split('-').map(Number) as [number, number];
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return `${month}-${String(lastDay).padStart(2, '0')}T23:59:59.999Z`;
+}
+
+/** Установить месячный лимит бюджета по категории (EUR) или скопировать лимиты с прошлого месяца. */
 async function setBudgetTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
+  const monthRes = resolveTargetMonth(args.month, ctx);
+  if (!monthRes.ok) return fail(monthRes.content);
+  const month = monthRes.month;
+
+  if (args.copy_from_previous === true) {
+    try {
+      const prevMonth = previousMonthKey(month);
+      const [prevBudgets, existingBudgets, categories] = await Promise.all([
+        listBudgets(ctx.userId, prevMonth),
+        listBudgets(ctx.userId, month),
+        listCategories(ctx.userId, 'expense'),
+      ]);
+      if (prevBudgets.length === 0) {
+        return {
+          ok: true,
+          content: `В прошлом месяце (${prevMonth}) лимиты бюджета не были заданы.`,
+          data: { month, previous_month: prevMonth, copied: 0, skipped: 0 },
+        };
+      }
+      const existingCats = new Set(existingBudgets.map((b) => b.categoryId));
+      const catNames = new Map(categories.map((c) => [c.id, c.name]));
+      const copiedLines: string[] = [];
+      let skipped = 0;
+
+      for (const prev of prevBudgets) {
+        if (existingCats.has(prev.categoryId)) {
+          skipped += 1;
+          continue;
+        }
+        const saved = await setBudget(ctx.userId, {
+          month,
+          categoryId: prev.categoryId,
+          limitAmountEurCents: prev.limitAmountEurCents,
+        });
+        const label = catNames.get(prev.categoryId) ?? `#${prev.categoryId}`;
+        copiedLines.push(`• ${label}: ${formatCents(saved.limitAmountEurCents)} €`);
+      }
+
+      if (copiedLines.length === 0) {
+        return {
+          ok: true,
+          content: `Все лимиты из ${prevMonth} уже заданы на ${month} (пропущено: ${skipped}).`,
+          data: { month, previous_month: prevMonth, copied: 0, skipped },
+        };
+      }
+
+      const header = `Скопировал лимиты из ${prevMonth} на ${month} (${copiedLines.length}):`;
+      const footer = skipped > 0 ? `\nПропущено (уже заданы на ${month}): ${skipped}.` : '';
+      return {
+        ok: true,
+        content: `${header}\n${copiedLines.join('\n')}${footer}`,
+        data: { month, previous_month: prevMonth, copied: copiedLines.length, skipped },
+      };
+    } catch (error) {
+      return fail(`Не удалось скопировать бюджет: ${errorText(error)}`);
+    }
+  }
+
   const categoryName = requiredString(args, 'category_name');
   if (!categoryName) return fail('Укажите категорию бюджета: category_name.');
 
@@ -711,7 +831,6 @@ async function setBudgetTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutc
   if (limitCents <= 0) return fail('Лимит бюджета должен быть больше нуля.');
 
   try {
-    const month = monthKey(ctx.now, ctx.timezone);
     const budget = await setBudget(ctx.userId, {
       month,
       categoryName,
@@ -730,6 +849,210 @@ async function setBudgetTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutc
     };
   } catch (error) {
     return fail(`Не удалось установить бюджет: ${errorText(error)}`);
+  }
+}
+
+/** Удалить месячный лимит бюджета по категории. */
+async function deleteBudgetTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
+  const categoryName = requiredString(args, 'category_name');
+  if (!categoryName) return fail('Укажите категорию бюджета: category_name.');
+
+  const monthRes = resolveTargetMonth(args.month, ctx);
+  if (!monthRes.ok) return fail(monthRes.content);
+  const month = monthRes.month;
+
+  try {
+    const categories = await listCategories(ctx.userId, 'expense');
+    const needle = categoryName.trim().toLowerCase();
+    const category = categories.find((c) => c.name.trim().toLowerCase() === needle);
+    if (!category) {
+      return fail(`Категория расходов «${categoryName}» не найдена.`);
+    }
+
+    const existing = await getBudget(ctx.userId, { month, categoryId: category.id });
+    if (!existing) {
+      return fail(`Лимит для категории «${category.name}» на ${month} не установлен.`);
+    }
+
+    await deleteBudget(ctx.userId, existing.id);
+    return {
+      ok: true,
+      content: `Удалил бюджет на ${month} для «${category.name}» (было ${formatCents(existing.limitAmountEurCents)} €).`,
+      data: {
+        budget_id: existing.id,
+        month,
+        category_id: category.id,
+      },
+    };
+  } catch (error) {
+    return fail(`Не удалось удалить бюджет: ${errorText(error)}`);
+  }
+}
+
+/** Сводный месячный план бюджета: деньги, обязательные платежи, лимиты категорий и свободный остаток. */
+async function getBudgetPlanTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
+  const monthRes = resolveTargetMonth(args.month, ctx);
+  if (!monthRes.ok) return fail(monthRes.content);
+  const month = monthRes.month;
+
+  try {
+    const from = `${month}-01T00:00:00`;
+    const to = monthEndIso(month);
+    const [accounts, rates, categories, budgets, liabilities] = await Promise.all([
+      listAccounts(ctx.userId),
+      getRates(),
+      listCategories(ctx.userId, 'expense'),
+      listBudgets(ctx.userId, month),
+      listLiabilities(ctx.userId, 'active'),
+    ]);
+
+    const transactions: TransactionRow[] = [];
+    for (let page = 0; page < MAX_TRANSACTION_PAGES; page += 1) {
+      const batch = await listTransactions(ctx.userId, {
+        from,
+        to,
+        limit: TRANSACTION_PAGE_SIZE,
+        offset: page * TRANSACTION_PAGE_SIZE,
+      });
+      transactions.push(...batch);
+      if (batch.length < TRANSACTION_PAGE_SIZE) break;
+    }
+
+    let spendableCents = 0;
+    let reservedCents = 0;
+    for (const acc of accounts) {
+      let eur = 0;
+      try {
+        eur = toBaseCents(acc.currentBalanceCents, acc.currency, rates);
+      } catch {
+        eur = 0;
+      }
+      if (acc.envelope === 'reserved') {
+        reservedCents += eur;
+      } else {
+        spendableCents += eur;
+      }
+    }
+
+    let monthIncomeCents = 0;
+    let monthSpentCents = 0;
+    const spentByCategory = new Map<number, number>();
+    for (const tx of transactions) {
+      if (tx.kind === 'income') {
+        monthIncomeCents += tx.amountEurCents;
+      } else if (tx.kind === 'expense') {
+        monthSpentCents += tx.amountEurCents;
+        if (tx.categoryId !== null) {
+          spentByCategory.set(
+            tx.categoryId,
+            (spentByCategory.get(tx.categoryId) ?? 0) + tx.amountEurCents,
+          );
+        }
+      }
+    }
+
+    let paidLiabilitiesCents = 0;
+    let unpaidLiabilitiesCents = 0;
+    for (const liab of liabilities) {
+      if (!liab.monthlyPaymentCents || liab.monthlyPaymentCents <= 0) continue;
+      let eur = 0;
+      try {
+        eur = toBaseCents(liab.monthlyPaymentCents, liab.currency, rates);
+      } catch {
+        eur = 0;
+      }
+      if (liab.paidMonths.includes(month)) {
+        paidLiabilitiesCents += eur;
+      } else {
+        unpaidLiabilitiesCents += eur;
+      }
+    }
+    const totalLiabilitiesCents = paidLiabilitiesCents + unpaidLiabilitiesCents;
+
+    const categoryNames = new Map(categories.map((c) => [c.id, c.name]));
+    const budgetedIds = new Set(budgets.map((b) => b.categoryId));
+
+    let totalBudgetedCents = 0;
+    let budgetedSpentCents = 0;
+    let budgetedRemainingCents = 0;
+
+    const planRows = budgets.map((b) => {
+      const spentCents = spentByCategory.get(b.categoryId) ?? 0;
+      const remainingCents = Math.max(0, b.limitAmountEurCents - spentCents);
+      const overspentCents = Math.max(0, spentCents - b.limitAmountEurCents);
+      totalBudgetedCents += b.limitAmountEurCents;
+      budgetedSpentCents += spentCents;
+      budgetedRemainingCents += remainingCents;
+      return {
+        category_id: b.categoryId,
+        category_name: categoryNames.get(b.categoryId) ?? `#${b.categoryId}`,
+        limit_cents: b.limitAmountEurCents,
+        spent_cents: spentCents,
+        remaining_cents: remainingCents,
+        overspent_cents: overspentCents,
+      };
+    });
+
+    let unbudgetedSpentCents = 0;
+    for (const tx of transactions) {
+      if (tx.kind === 'expense' && (tx.categoryId === null || !budgetedIds.has(tx.categoryId))) {
+        unbudgetedSpentCents += tx.amountEurCents;
+      }
+    }
+
+    const freeAfterPlanCents = spendableCents - unpaidLiabilitiesCents - budgetedRemainingCents;
+
+    const lines: string[] = [
+      `📅 <b>План бюджета на ${month}</b>`,
+      `• Доступно на повседневных счетах: ${formatCents(spendableCents)} € (в резерве: ${formatCents(reservedCents)} €)`,
+      `• Факт за ${month}: доходы +${formatCents(monthIncomeCents)} €, расходы −${formatCents(monthSpentCents)} €`,
+      `• Обязательные платежи месяца: ${formatCents(totalLiabilitiesCents)} € (оплачено: ${formatCents(paidLiabilitiesCents)} €, осталось: ${formatCents(unpaidLiabilitiesCents)} €)`,
+      `• Лимиты категорий: ${formatCents(budgetedSpentCents)} € / ${formatCents(totalBudgetedCents)} € (остаток в лимитах: ${formatCents(budgetedRemainingCents)} €)`,
+    ];
+    if (unbudgetedSpentCents > 0) {
+      lines.push(`• Траты без заданного лимита: ${formatCents(unbudgetedSpentCents)} €`);
+    }
+    lines.push(
+      `• Свободно сверх оставшихся платежей и лимитов: ${formatCents(freeAfterPlanCents)} €`,
+    );
+
+    if (planRows.length > 0) {
+      lines.push('', '<b>Категории с лимитами:</b>');
+      for (const row of planRows) {
+        const tail =
+          row.overspent_cents > 0
+            ? `перерасход ${formatCents(row.overspent_cents)} €`
+            : `остаток ${formatCents(row.remaining_cents)} €`;
+        lines.push(
+          `• ${row.category_name}: ${formatCents(row.spent_cents)} € / ${formatCents(row.limit_cents)} € (${tail})`,
+        );
+      }
+    } else {
+      lines.push('', 'Лимиты по категориям на этот месяц пока не заданы.');
+    }
+
+    return {
+      ok: true,
+      content: lines.join('\n'),
+      data: {
+        month,
+        spendable_cents: spendableCents,
+        reserved_cents: reservedCents,
+        month_income_cents: monthIncomeCents,
+        month_spent_cents: monthSpentCents,
+        liabilities_total_cents: totalLiabilitiesCents,
+        liabilities_paid_cents: paidLiabilitiesCents,
+        liabilities_unpaid_cents: unpaidLiabilitiesCents,
+        total_budgeted_cents: totalBudgetedCents,
+        budgeted_spent_cents: budgetedSpentCents,
+        budgeted_remaining_cents: budgetedRemainingCents,
+        unbudgeted_spent_cents: unbudgetedSpentCents,
+        free_after_plan_cents: freeAfterPlanCents,
+        categories: planRows,
+      },
+    };
+  } catch (error) {
+    return fail(`Не удалось построить план бюджета: ${errorText(error)}`);
   }
 }
 
@@ -1935,6 +2258,56 @@ async function deleteLiabilityTool(args: ToolArgs, ctx: ToolContext): Promise<To
 // ---------------------------------------------------------------------------
 
 /** Обновить параметры счёта: имя, конверт (spendable/reserved) или активность. */
+async function createAccountTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
+  const name = requiredString(args, 'name');
+  if (!name) return fail('Укажите название счёта (name).');
+
+  const currencyRaw = stringArg(args, 'currency');
+  const currency = currencyRaw ? normalizeCurrency(currencyRaw) : normalizeCurrency(ctx.baseCurrency);
+  const envelopeRaw = stringArg(args, 'envelope')?.toLowerCase();
+  if (envelopeRaw && !VALID_ACCOUNT_ENVELOPES.includes(envelopeRaw as AccountEnvelope)) {
+    return fail('envelope должен быть "spendable" (свободные) или "reserved" (резерв).');
+  }
+
+  const initialCents = optionalCents(args.initial_balance);
+  if (initialCents === null) {
+    return fail('initial_balance должен быть числом (например "1500.00").');
+  }
+
+  try {
+    const existing = await listAccounts(ctx.userId, { includeInactive: true });
+    const duplicate = existing.find(
+      (a) =>
+        a.name.trim().toLowerCase() === name.toLowerCase() &&
+        a.currency.toUpperCase() === currency,
+    );
+    if (duplicate) {
+      return fail(`Счёт «${duplicate.name}» (${duplicate.currency}) уже существует (#${duplicate.id}).`);
+    }
+
+    const created = await createAccount(ctx.userId, {
+      name,
+      currency,
+      initialBalanceCents: initialCents ?? 0,
+      envelope: (envelopeRaw as AccountEnvelope | undefined) ?? 'spendable',
+    });
+
+    return {
+      ok: true,
+      content: `✅ Создал счёт «${created.name}» (${created.currency}, конверт: ${created.envelope}), баланс: ${formatCents(created.currentBalanceCents)} ${created.currency}.`,
+      data: {
+        account_id: created.id,
+        name: created.name,
+        currency: created.currency,
+        envelope: created.envelope,
+        balance_cents: created.currentBalanceCents,
+      },
+    };
+  } catch (error) {
+    return fail(`Не удалось создать счёт: ${errorText(error)}`);
+  }
+}
+
 async function updateAccountTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
   const accountName = requiredString(args, 'account_name');
   if (!accountName) return fail('Укажите счёт: account_name.');
@@ -2254,16 +2627,50 @@ export const financeTools: Tool[] = [
   {
     name: 'set_budget',
     effect: { kind: 'mutate' },
-    description: 'Установить месячный лимит бюджета по категории расходов (в EUR).',
+    description:
+      'Установить месячный лимит бюджета по категории расходов (в EUR) на указанный месяц (по умолчанию текущий) или скопировать лимиты с прошлого месяца.',
     schema: {
       type: 'object',
       properties: {
         category_name: { type: 'string', description: 'Категория расходов.' },
         limit_amount_eur: { type: 'string', description: 'Лимит на месяц в EUR.' },
+        month: { type: 'string', description: 'Месяц в формате YYYY-MM; по умолчанию текущий.' },
+        copy_from_previous: {
+          type: 'boolean',
+          description: 'Скопировать недостающие лимиты с прошлого месяца.',
+        },
       },
-      required: ['category_name', 'limit_amount_eur'],
+      required: [],
     },
     run: setBudgetTool,
+  },
+  {
+    name: 'delete_budget',
+    effect: { kind: 'mutate' },
+    description: 'Удалить месячный лимит бюджета по категории расходов.',
+    schema: {
+      type: 'object',
+      properties: {
+        category_name: { type: 'string', description: 'Категория расходов.' },
+        month: { type: 'string', description: 'Месяц в формате YYYY-MM; по умолчанию текущий.' },
+      },
+      required: ['category_name'],
+    },
+    run: deleteBudgetTool,
+  },
+  {
+    name: 'get_budget_plan',
+    effect: { kind: 'read' },
+    description:
+      'Показать месячный план бюджета: свободные деньги, обязательные платежи, лимиты по категориям (включая без трат) и остаток сверх плана.',
+    schema: {
+      type: 'object',
+      properties: {
+        month: { type: 'string', description: 'Месяц в формате YYYY-MM; по умолчанию текущий.' },
+      },
+      required: [],
+    },
+    run: getBudgetPlanTool,
   },
   {
     name: 'query_spending',
@@ -2514,6 +2921,26 @@ export const financeTools: Tool[] = [
       required: ['liability_name'],
     },
     run: deleteLiabilityTool,
+  },
+  {
+    name: 'create_account',
+    effect: { kind: 'create' },
+    description: 'Создать новый денежный счёт или карту (валюта, начальный баланс, конверт spendable/reserved).',
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Название счёта или карты.' },
+        currency: { type: 'string', description: 'Валюта (EUR, USD, RUB…); по умолчанию базовая.' },
+        initial_balance: { type: 'string', description: 'Начальный баланс (по умолчанию 0).' },
+        envelope: {
+          type: 'string',
+          enum: ['spendable', 'reserved'],
+          description: 'Конверт: spendable (свободные) или reserved (резерв).',
+        },
+      },
+      required: ['name'],
+    },
+    run: createAccountTool,
   },
   {
     name: 'update_account',

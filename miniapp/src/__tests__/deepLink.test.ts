@@ -56,6 +56,8 @@ describe('parseStartParam', () => {
     expect(parseStartParam('INBOX')).toEqual({ tab: 'notes' });
     expect(parseStartParam('raw')).toEqual({ tab: 'notes', noteCol: 'raw' });
     expect(parseStartParam('RAW')).toEqual({ tab: 'notes', noteCol: 'raw' });
+    expect(parseStartParam('diary')).toEqual({ tab: 'notes', noteCol: 'diary' });
+    expect(parseStartParam('DIARY')).toEqual({ tab: 'notes', noteCol: 'diary' });
     expect(parseStartParam('notes')).toEqual({ tab: 'notes' });
     expect(parseStartParam('Notes')).toEqual({ tab: 'notes' });
     expect(parseStartParam('note_123')).toEqual({ tab: 'notes', noteId: '123' });

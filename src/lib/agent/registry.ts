@@ -87,6 +87,8 @@ export interface Tool {
    * ширина тулсета в прогоне.
    */
   effect: ToolEffect;
+  /** Опциональный условный предикат подтверждения по аргументам (для двухуровневых тулз). */
+  confirmWhen?: (args: ToolArgs) => boolean;
   run(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome | string> | ToolOutcome | string;
 }
 
@@ -190,6 +192,7 @@ export function defineTool(tool: Tool): Tool {
     // Класс возвращается в составе тулзы: раньше флаг молча терялся здесь, и
     // все гейты движка оказывались мёртвым кодом в проде.
     effect: normalizeEffect(name, tool.effect),
+    ...(typeof tool.confirmWhen === 'function' ? { confirmWhen: tool.confirmWhen } : {}),
     run: tool.run,
   };
 }

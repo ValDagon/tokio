@@ -74,10 +74,10 @@ describe('каталог по фокусу', () => {
     }
   });
 
-  it('без фокуса отдаёт все 60 инструментов', () => {
+  it('без фокуса отдаёт все 75 инструментов', () => {
     const prompt = catalog(null);
 
-    expect(summaries).toHaveLength(60);
+    expect(summaries).toHaveLength(75);
     for (const tool of agentTools) {
       expect(prompt).toContain(`- ${tool.name}:`);
     }
@@ -89,5 +89,7 @@ describe('каталог по фокусу', () => {
     expect(filtered).toHaveLength(summaries.length - TOOL_GROUPS.medications.length);
     expect(filtered.some((tool) => tool.name === 'add_task')).toBe(true);
     expect(filtered.some((tool) => tool.name === 'consult_system_docs')).toBe(true);
+    expect(filtered.some((tool) => tool.name === 'get_settings')).toBe(true);
+    expect(filtered.some((tool) => tool.name === 'update_settings')).toBe(true);
   });
 });

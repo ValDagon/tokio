@@ -31,6 +31,7 @@ import {
   resolveItem,
   activateSkill,
   buildSkillSpec,
+  disableSkill,
   listActiveSkills,
   recordSkillRun,
   rejectSkill,
@@ -551,5 +552,25 @@ describe('скиллы: ревизия после трёх неудачных п
     expect(otherRows).toHaveLength(1);
     expect(otherRows[0]?.id).toBe(theirs);
     expect(otherRows[0]?.status).toBe('active');
+  });
+
+  it('disableSkill ставит активный скилл на паузу с повторным включением, а rejected остаётся закрытым', async () => {
+    const first = await createSkill({ body: skillBody('отключаемый') });
+    expect((await activateSkill(USER_A, first)).ok).toBe(true);
+
+    const disabled = await disableSkill(USER_A, first);
+    expect(disabled.ok).toBe(true);
+    if (disabled.ok) expect(disabled.item.status).toBe('disabled');
+    expect(await listActiveSkills(USER_A)).toHaveLength(0);
+
+    // Повторное включение отключённого скилла работает.
+    const reactivated = await activateSkill(USER_A, first);
+    expect(reactivated.ok).toBe(true);
+    expect(await listActiveSkills(USER_A)).toHaveLength(1);
+
+    // Отклонённый скилл по-прежнему не может быть активирован.
+    const second = await createSkill({ key: 'rejected-skill', body: skillBody('отклонённый') });
+    expect((await rejectSkill(USER_A, second)).ok).toBe(true);
+    expect((await activateSkill(USER_A, second)).ok).toBe(false);
   });
 });

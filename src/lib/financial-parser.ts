@@ -40,6 +40,7 @@ import {
 import { getRates } from './dal/fx.js';
 import { createNote } from './dal/notes.js';
 import { getOverlay } from './overlay.js';
+import { loadUserPrefs, type FinancePrefs, type UserPrefs } from './prefs.js';
 import { balanceSummary } from './summary.js';
 import type { CurrencyCode } from './types.js';
 import { formatCents, toCents } from './utils.js';
@@ -233,12 +234,23 @@ const GENERIC_CARD_PATTERNS = ['карт', 'card', 'kartic', 'カード', 'сч�
 export function matchExplicitAccount(
   accountText: string | null | undefined,
   currency: string,
-  options?: { strictBrandOnly?: boolean },
+  options?: { strictBrandOnly?: boolean; userFinancePrefs?: FinancePrefs | null },
 ): string | null {
   if (!accountText) return null;
   const curr = currency.toUpperCase().trim();
   const t = accountText.toLowerCase();
   const { finance } = getOverlay().manifest;
+  const userAliases = options?.userFinancePrefs?.accountAliases ?? [];
+
+  for (const alias of userAliases) {
+    const matchedNonGeneric = alias.patterns.some((p) => {
+      const lp = p.toLowerCase();
+      return !GENERIC_CARD_PATTERNS.includes(lp) && t.includes(lp);
+    });
+    if (matchedNonGeneric) {
+      return alias.account;
+    }
+  }
 
   for (const alias of finance.accountAliases) {
     const matchedNonGeneric = alias.patterns.some((p) => {
@@ -252,9 +264,16 @@ export function matchExplicitAccount(
 
   if (options?.strictBrandOnly) return null;
 
+  for (const alias of userAliases) {
+    if (alias.patterns.some((p) => t.includes(p.toLowerCase()))) {
+      return alias.account;
+    }
+  }
+
   if (GENERIC_CARD_PATTERNS.some((p) => t.includes(p))) {
     return (
       finance.genericCardAccountByCurrency[curr] ??
+      options?.userFinancePrefs?.defaultAccountByCurrency?.[curr] ??
       finance.defaultAccountByCurrency[curr] ??
       'Карта'
     );
@@ -269,13 +288,18 @@ export function matchExplicitAccount(
   return null;
 }
 
-export function resolveAccountFromContext(accountText: string | null | undefined, currency: string): string {
+export function resolveAccountFromContext(
+  accountText: string | null | undefined,
+  currency: string,
+  userFinancePrefs?: FinancePrefs | null,
+): string {
   const curr = currency.toUpperCase().trim();
-  const explicit = matchExplicitAccount(accountText, curr);
+  const explicit = matchExplicitAccount(accountText, curr, { userFinancePrefs });
   if (explicit) return explicit;
 
   const { finance } = getOverlay().manifest;
   return (
+    userFinancePrefs?.defaultAccountByCurrency?.[curr] ??
     finance.defaultAccountByCurrency[curr] ??
     finance.genericCardAccountByCurrency[curr] ??
     'Карта'
@@ -443,7 +467,11 @@ interface BalanceSegment {
   accountFirst: boolean;
 }
 
-function parseBalanceSegment(segment: string, defaultCurrency: string): BalanceSegment | null {
+function parseBalanceSegment(
+  segment: string,
+  defaultCurrency: string,
+  userFinancePrefs?: FinancePrefs | null,
+): BalanceSegment | null {
   // «50€ наличкой», «100$ на крипто», «5000 руб карта»
   const amountFirst = segment.match(
     new RegExp(
@@ -453,7 +481,7 @@ function parseBalanceSegment(segment: string, defaultCurrency: string): BalanceS
   );
   if (amountFirst) {
     const currency = resolveCurr(amountFirst[2], defaultCurrency);
-    const account = matchExplicitAccount(amountFirst[3], currency);
+    const account = matchExplicitAccount(amountFirst[3], currency, { userFinancePrefs });
     if (!account) return null;
     return {
       entry: { account, amount: parseNumber(amountFirst[1]!), currency },
@@ -464,13 +492,13 @@ function parseBalanceSegment(segment: string, defaultCurrency: string): BalanceS
   // «наличными 50€», «крипто 100$»
   const accountFirst = segment.match(
     new RegExp(
-      `^(${ACCOUNT_WORD}?)\\s*[:\-—]?\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*(${CURR_PART})$`,
+      `^(${ACCOUNT_WORD}?)\\s*[:\\-—]?\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*(${CURR_PART})$`,
       'i',
     ),
   );
   if (accountFirst) {
     const currency = resolveCurr(accountFirst[3], defaultCurrency);
-    const account = matchExplicitAccount(accountFirst[1], currency);
+    const account = matchExplicitAccount(accountFirst[1], currency, { userFinancePrefs });
     if (!account) return null;
     return {
       entry: { account, amount: parseNumber(accountFirst[2]!), currency },
@@ -541,6 +569,7 @@ export function buildBalanceIntentFromSegments(
 export function parseBalanceDeclaration(
   text: string,
   defaultCurrency = 'EUR',
+  userFinancePrefs?: FinancePrefs | null,
 ): ParsedFinancialIntent | null {
   const textClean = text.trim();
   if (!textClean || textClean.includes('?')) return null;
@@ -563,7 +592,7 @@ export function parseBalanceDeclaration(
 
   const parsed: BalanceSegment[] = [];
   for (const segment of segments) {
-    const item = parseBalanceSegment(segment, defaultCurrency);
+    const item = parseBalanceSegment(segment, defaultCurrency, userFinancePrefs);
     if (!item) return null;
     parsed.push(item);
   }
@@ -594,6 +623,7 @@ export function parseBalanceDeclaration(
 export function parseFinancialIntent(
   text: string,
   defaultCurrency = 'EUR',
+  userFinancePrefs?: FinancePrefs | null,
 ): ParsedFinancialIntent | null {
   const textClean = text.trim();
   if (!textClean) return null;
@@ -603,7 +633,7 @@ export function parseFinancialIntent(
 
   // 0. Состояние счетов: «У меня 50€ наличкой и 100$ на карте».
   // Проверяется до гейта напоминаний и до правил операций: это не операция.
-  const balanceDeclaration = parseBalanceDeclaration(textClean, defaultCurrency);
+  const balanceDeclaration = parseBalanceDeclaration(textClean, defaultCurrency, userFinancePrefs);
   if (balanceDeclaration) return balanceDeclaration;
 
   const lowerT = textClean.toLowerCase();
@@ -638,7 +668,9 @@ export function parseFinancialIntent(
     ) {
       const amount = rawAmount ? parseNumber(rawAmount) : 0;
       const currency = resolveCurr(rawCurr, defaultCurrency);
-      const account = rawAccount ? resolveAccountFromContext(rawAccount, currency) : null;
+      const account = rawAccount
+        ? resolveAccountFromContext(rawAccount, currency, userFinancePrefs)
+        : null;
       return {
         action: 'liability_pay',
         type: 'expense',
@@ -673,7 +705,9 @@ export function parseFinancialIntent(
     ) {
       const amount = parseNumber(rawAmount!);
       const currency = resolveCurr(rawCurr, defaultCurrency);
-      const account = rawAccount ? resolveAccountFromContext(rawAccount, currency) : null;
+      const account = rawAccount
+        ? resolveAccountFromContext(rawAccount, currency, userFinancePrefs)
+        : null;
       return {
         action: 'liability_pay',
         type: 'expense',
@@ -701,7 +735,7 @@ export function parseFinancialIntent(
     const rawAccount = mBal[1]?.trim() || '';
     const amount = parseNumber(mBal[2]!);
     const currency = resolveCurr(mBal[3], defaultCurrency);
-    const account = resolveAccountFromContext(rawAccount, currency);
+    const account = resolveAccountFromContext(rawAccount, currency, userFinancePrefs);
     return {
       action: 'balance',
       type: 'balance',
@@ -787,7 +821,9 @@ export function parseFinancialIntent(
     const amount = parseNumber(mInc[1]!);
     const currency = resolveCurr(mInc[2], defaultCurrency);
     const rawAccount = mInc[3]?.trim() || null;
-    const account = rawAccount ? resolveAccountFromContext(rawAccount, currency) : null;
+    const account = rawAccount
+      ? resolveAccountFromContext(rawAccount, currency, userFinancePrefs)
+      : null;
     const item = (mInc[4] || mInc[5] || 'Доход').trim();
     const category = detectCategoryFromText(item) === 'Разное' ? 'Доходы' : detectCategoryFromText(item);
     return {
@@ -815,7 +851,9 @@ export function parseFinancialIntent(
     const amount = parseNumber(mExpMinus[1]!);
     const currency = resolveCurr(mExpMinus[2], defaultCurrency);
     const rawAccount = mExpMinus[3]?.trim() || null;
-    const account = rawAccount ? resolveAccountFromContext(rawAccount, currency) : null;
+    const account = rawAccount
+      ? resolveAccountFromContext(rawAccount, currency, userFinancePrefs)
+      : null;
     const item = mExpMinus[4]?.trim() || 'Расход';
     const category = detectCategoryFromText(item);
     return {
@@ -843,7 +881,9 @@ export function parseFinancialIntent(
     const amount = parseNumber(mExpVerb[1]!);
     const currency = resolveCurr(mExpVerb[2], defaultCurrency);
     const rawAccount = mExpVerb[3]?.trim() || null;
-    const account = rawAccount ? resolveAccountFromContext(rawAccount, currency) : null;
+    const account = rawAccount
+      ? resolveAccountFromContext(rawAccount, currency, userFinancePrefs)
+      : null;
     const item = mExpVerb[4]?.trim() || 'Расход';
     const category = detectCategoryFromText(item);
     return {
@@ -871,7 +911,9 @@ export function parseFinancialIntent(
     const amount = parseNumber(mExpAcc[1]!);
     const currency = resolveCurr(mExpAcc[2], defaultCurrency);
     const rawAccount = mExpAcc[3]?.trim() || null;
-    const account = rawAccount ? resolveAccountFromContext(rawAccount, currency) : null;
+    const account = rawAccount
+      ? resolveAccountFromContext(rawAccount, currency, userFinancePrefs)
+      : null;
     const item = mExpAcc[4]?.trim() || 'Расход';
     const category = detectCategoryFromText(item);
     return {
@@ -904,7 +946,9 @@ export function parseFinancialIntent(
 
     if (item && !/^(минут|секунд|час|часа|часов|дней|дня|день|год|года|лет)\b/i.test(item)) {
       const currency = resolveCurr(currMatch, defaultCurrency);
-      const account = rawAccount ? resolveAccountFromContext(rawAccount, currency) : null;
+      const account = rawAccount
+        ? resolveAccountFromContext(rawAccount, currency, userFinancePrefs)
+        : null;
       const category = detectCategoryFromText(item);
       return {
         action: 'expense',
@@ -940,7 +984,9 @@ export function parseFinancialIntent(
       !['привет', 'здравствуй', 'здравствуйте', 'номер', 'глава', 'шаг'].includes(item.toLowerCase())
     ) {
       const currency = resolveCurr(currMatch, defaultCurrency);
-      const account = rawAccount ? resolveAccountFromContext(rawAccount, currency) : null;
+      const account = rawAccount
+        ? resolveAccountFromContext(rawAccount, currency, userFinancePrefs)
+        : null;
       const category = detectCategoryFromText(item);
       return {
         action: 'expense',
@@ -976,7 +1022,11 @@ export async function executeFinancialIntent(
   const desc = intent.description || 'Операция';
 
   // Read rates or provide fallback rates
-  const existingRates = await getRates();
+  const [existingRates, userPrefs] = await Promise.all([
+    getRates(),
+    loadUserPrefs(userId).catch((): UserPrefs => ({})),
+  ]);
+  const userFinancePrefs = userPrefs.finance;
   const rates = { ...DEFAULT_FALLBACK_RATES, ...existingRates };
 
   if (action === 'liability_pay') {
@@ -1005,7 +1055,7 @@ export async function executeFinancialIntent(
 
     const amountCents = amount && amount > 0 ? Math.round(amount * 100) : undefined;
     const accountName = intent.account
-      ? resolveAccountFromContext(intent.account, liability.currency)
+      ? resolveAccountFromContext(intent.account, liability.currency, userFinancePrefs)
       : undefined;
 
     const payRes = await payLiability(userId, {
@@ -1070,7 +1120,11 @@ export async function executeFinancialIntent(
 
   if (action === 'expense' || action === 'income') {
     const kind = action;
-    const accountName = resolveAccountFromContext(intent.account || rawText, currCode);
+    const accountName = resolveAccountFromContext(
+      intent.account || rawText,
+      currCode,
+      userFinancePrefs,
+    );
     const categoryName = intent.category || (kind === 'expense' ? 'Разное' : 'Доходы');
 
     // 1. Ensure or find account
@@ -1161,7 +1215,11 @@ export async function executeFinancialIntent(
         ? intent.balances
         : [
             {
-              account: resolveAccountFromContext(intent.account || rawText, currCode),
+              account: resolveAccountFromContext(
+                intent.account || rawText,
+                currCode,
+                userFinancePrefs,
+              ),
               amount,
               currency: currCode,
             },
@@ -1293,8 +1351,8 @@ export async function executeFinancialIntent(
   }
 
   if (action === 'transfer') {
-    const fromName = resolveAccountFromContext(intent.fromAccount, currCode);
-    const toName = resolveAccountFromContext(intent.toAccount, currCode);
+    const fromName = resolveAccountFromContext(intent.fromAccount, currCode, userFinancePrefs);
+    const toName = resolveAccountFromContext(intent.toAccount, currCode, userFinancePrefs);
 
     let fromAcc = await findAccountByName(userId, fromName, currCode);
     if (!fromAcc) {
@@ -1372,8 +1430,8 @@ export async function executeFinancialIntent(
       return null as unknown as FinancialExecutionResult;
     }
 
-    const fromName = resolveAccountFromContext(intent.fromAccount, fromCurrency);
-    const toName = resolveAccountFromContext(intent.toAccount, toCurrency);
+    const fromName = resolveAccountFromContext(intent.fromAccount, fromCurrency, userFinancePrefs);
+    const toName = resolveAccountFromContext(intent.toAccount, toCurrency, userFinancePrefs);
 
     let fromAcc = await findAccountByName(userId, fromName, fromCurrency);
     if (!fromAcc) {

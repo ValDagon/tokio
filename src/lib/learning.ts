@@ -196,3 +196,157 @@ export const LEARN_USAGE_TEXT =
 
 /** Ответ, когда правил ещё нет. */
 export const NO_RULES_TEXT = 'Персональных правил пока нет. Добавьте первое: /learn <правило>.';
+
+export interface RuleSelector {
+  /** 1-based номер правила из `listLearnedRules`. */
+  index?: number;
+  /** Подстрока или точный текст правила для поиска без учёта регистра. */
+  match?: string;
+}
+
+export interface RuleMutationResult {
+  ok: boolean;
+  error?: string;
+  previous?: string;
+  rule?: string;
+  removed?: string;
+  count: number;
+  rules: string[];
+}
+
+type ResolvedRuleMatch =
+  | { ok: true; index: number; rules: string[]; style: string | null }
+  | { ok: false; error: string; rules: string[] };
+
+async function resolveRuleMatch(
+  userId: number,
+  selector: RuleSelector,
+): Promise<ResolvedRuleMatch> {
+  const chapter = await getChapter(userId, CUSTOM_INSTRUCTIONS_SLUG);
+  const { instructions, style } = splitDirectives(chapter?.content ?? '');
+  const rules = listRuleLines(instructions);
+  if (rules.length === 0) {
+    return { ok: false, error: 'Список персональных правил пуст.', rules };
+  }
+
+  if (typeof selector.index === 'number' && Number.isFinite(selector.index)) {
+    const idx = Math.trunc(selector.index) - 1;
+    if (idx < 0 || idx >= rules.length) {
+      return {
+        ok: false,
+        error: `Правило #${Math.trunc(selector.index)} не найдено (всего правил: ${rules.length}).`,
+        rules,
+      };
+    }
+    return { ok: true, index: idx, rules, style };
+  }
+
+  const rawMatch = typeof selector.match === 'string' ? selector.match.trim() : '';
+  if (!rawMatch) {
+    return {
+      ok: false,
+      error: 'Укажите номер правила (index, с 1) или фрагмент текста (match).',
+      rules,
+    };
+  }
+
+  const needleKey = ruleKey(rawMatch);
+  const exactIdx = rules.findIndex((rule) => ruleKey(rule) === needleKey);
+  if (exactIdx !== -1) {
+    return { ok: true, index: exactIdx, rules, style };
+  }
+
+  const needle = rawMatch.toLowerCase();
+  const matches = rules
+    .map((rule, idx) => ({ rule, idx }))
+    .filter((entry) => entry.rule.toLowerCase().includes(needle));
+
+  if (matches.length === 0) {
+    return {
+      ok: false,
+      error: `Правило по запросу «${rawMatch}» не найдено.`,
+      rules,
+    };
+  }
+  if (matches.length > 1) {
+    const list = matches.map((m) => `${m.idx + 1}. ${m.rule}`).join('\n');
+    return {
+      ok: false,
+      error: `Найдено несколько правил по «${rawMatch}» — уточните номер (index):\n${list}`,
+      rules,
+    };
+  }
+  return { ok: true, index: matches[0]!.idx, rules, style };
+}
+
+/** Точечное редактирование одного правила `/learn`, сохраняя остальные правила и стиль общения. */
+export async function editRule(
+  userId: number,
+  selector: RuleSelector,
+  nextRule: string,
+): Promise<RuleMutationResult> {
+  const clean = truncate(String(nextRule ?? '').trim(), LEARN_RULE_MAX_CHARS);
+  if (!clean) {
+    const current = await listLearnedRules(userId);
+    return {
+      ok: false,
+      error: 'Новый текст правила не может быть пустым.',
+      count: current.length,
+      rules: current,
+    };
+  }
+
+  const resolved = await resolveRuleMatch(userId, selector);
+  if (!resolved.ok) {
+    return { ok: false, error: resolved.error, count: resolved.rules.length, rules: resolved.rules };
+  }
+
+  const nextKey = ruleKey(clean);
+  const duplicate = resolved.rules.some(
+    (existing, idx) => idx !== resolved.index && ruleKey(existing) === nextKey,
+  );
+  if (duplicate) {
+    return {
+      ok: false,
+      error: `Такое правило уже есть в списке: «${clean}».`,
+      count: resolved.rules.length,
+      rules: resolved.rules,
+    };
+  }
+
+  const previous = resolved.rules[resolved.index]!;
+  const nextRules = [...resolved.rules];
+  nextRules[resolved.index] = clean;
+
+  await upsertChapter(userId, {
+    slug: CUSTOM_INSTRUCTIONS_SLUG,
+    title: DIRECTIVES_TITLE,
+    content: joinDirectives(nextRules, resolved.style),
+    isPinned: true,
+  });
+
+  return { ok: true, previous, rule: clean, count: nextRules.length, rules: nextRules };
+}
+
+/** Точечное удаление одного правила `/learn` с сохранением остальных правил и стиля общения. */
+export async function removeRule(
+  userId: number,
+  selector: RuleSelector,
+): Promise<RuleMutationResult> {
+  const resolved = await resolveRuleMatch(userId, selector);
+  if (!resolved.ok) {
+    return { ok: false, error: resolved.error, count: resolved.rules.length, rules: resolved.rules };
+  }
+
+  const removed = resolved.rules[resolved.index]!;
+  const nextRules = resolved.rules.filter((_, idx) => idx !== resolved.index);
+
+  await upsertChapter(userId, {
+    slug: CUSTOM_INSTRUCTIONS_SLUG,
+    title: DIRECTIVES_TITLE,
+    content: joinDirectives(nextRules, resolved.style),
+    isPinned: true,
+  });
+
+  return { ok: true, removed, count: nextRules.length, rules: nextRules };
+}

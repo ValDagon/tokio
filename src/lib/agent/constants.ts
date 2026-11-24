@@ -23,6 +23,14 @@ export function formatAgentQueryWithReply(userText: string, replyContext?: strin
 const FALLBACK_TIMEZONE = 'UTC';
 const pad2 = (value: number): string => String(value).padStart(2, '0');
 
+export interface ExecutiveOverloadThresholds {
+  enabled?: boolean;
+  overdueTaskCount?: number;
+  activeTodoCount?: number;
+  nightStartHour?: number;
+  nightEndHour?: number;
+}
+
 export interface ExecutiveOverloadInput {
   lowStimulationMode?: boolean;
   timezone?: string;
@@ -31,6 +39,7 @@ export interface ExecutiveOverloadInput {
   activeTodoCount?: number;
   missedMedsCount?: number;
   userText?: string;
+  thresholds?: ExecutiveOverloadThresholds;
 }
 
 export interface ExecutiveOverloadFactors {
@@ -41,7 +50,9 @@ export interface ExecutiveOverloadFactors {
 
 export interface ExecutiveOverloadState {
   isOverloaded: boolean;
+  shieldEnabled: boolean;
   lowStimulationMode: boolean;
+  isNightWindow: boolean;
   activeFactorCount: number;
   factors: ExecutiveOverloadFactors;
   matchedMarkers: string[];
@@ -137,6 +148,16 @@ export function computeWorkloadMetrics(
   return { activeTodoCount, overdueTaskCount, missedMedsCount };
 }
 
+/** Проверяет, попадает ли локальный час в ночное окно `[startHour, endHour)`. */
+export function isLocalHourInWindow(hour: number, startHour: number, endHour: number): boolean {
+  const h = Math.trunc(hour);
+  const start = Math.min(23, Math.max(0, Math.trunc(startHour)));
+  const end = Math.min(23, Math.max(0, Math.trunc(endHour)));
+  if (start === end) return false;
+  if (start > end) return h >= start || h < end;
+  return h >= start && h < end;
+}
+
 /**
  * Детерминированно оценивает когнитивный перегруз по трём независимым факторам
  * (WIP, циркадная/терапевтическая нагрузка, речь) и ручному режиму low-stimulation.
@@ -144,6 +165,7 @@ export function computeWorkloadMetrics(
 export function evaluateExecutiveOverload(
   input: ExecutiveOverloadInput,
 ): ExecutiveOverloadState {
+  const shieldEnabled = input.thresholds?.enabled !== false;
   const lowStimulationMode = Boolean(input.lowStimulationMode);
   const timezone = (input.timezone ?? '').trim() || FALLBACK_TIMEZONE;
   const now =
@@ -156,9 +178,15 @@ export function evaluateExecutiveOverload(
   const activeTodoCount = nonNegativeInt(input.activeTodoCount);
   const missedMedsCount = nonNegativeInt(input.missedMedsCount);
 
-  const wipOverload = overdueTaskCount >= 3 || activeTodoCount >= 12;
-  const circadianOrTherapyLoad =
-    localHour >= 21 || localHour < 6 || missedMedsCount >= 1;
+  const overdueThreshold = Math.max(1, Math.trunc(input.thresholds?.overdueTaskCount ?? 3));
+  const activeTodoThreshold = Math.max(1, Math.trunc(input.thresholds?.activeTodoCount ?? 12));
+  const nightStartHour = Math.min(23, Math.max(0, Math.trunc(input.thresholds?.nightStartHour ?? 21)));
+  const nightEndHour = Math.min(23, Math.max(0, Math.trunc(input.thresholds?.nightEndHour ?? 6)));
+
+  const wipOverload =
+    overdueTaskCount >= overdueThreshold || activeTodoCount >= activeTodoThreshold;
+  const isNightWindow = isLocalHourInWindow(localHour, nightStartHour, nightEndHour);
+  const circadianOrTherapyLoad = isNightWindow || missedMedsCount >= 1;
   const matchedMarkers = detectOverloadMarkers(input.userText);
   const emotionalDistressMarker = matchedMarkers.length > 0;
 
@@ -169,14 +197,17 @@ export function evaluateExecutiveOverload(
   ].filter(Boolean).length;
 
   const isOverloaded =
-    lowStimulationMode ||
-    activeFactorCount >= 2 ||
-    (emotionalDistressMarker &&
-      (overdueTaskCount > 0 || activeTodoCount > 0 || missedMedsCount > 0));
+    shieldEnabled &&
+    (lowStimulationMode ||
+      activeFactorCount >= 2 ||
+      (emotionalDistressMarker &&
+        (overdueTaskCount > 0 || activeTodoCount > 0 || missedMedsCount > 0)));
 
   return {
     isOverloaded,
+    shieldEnabled,
     lowStimulationMode,
+    isNightWindow,
     activeFactorCount,
     factors: {
       wipOverload,
@@ -205,7 +236,8 @@ export function formatOverloadReasons(
   }
   if (state?.factors.circadianOrTherapyLoad) {
     const parts: string[] = [];
-    if (state.localHour >= 21 || state.localHour < 6) {
+    const nightActive = state.isNightWindow ?? (state.localHour >= 21 || state.localHour < 6);
+    if (nightActive) {
       parts.push(`позднее/ночное время (${pad2(state.localHour)}:00)`);
     }
     if (state.missedMedsCount >= 1) {

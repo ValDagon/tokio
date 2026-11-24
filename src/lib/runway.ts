@@ -15,6 +15,7 @@
 import { BASE_CURRENCY, type RateTable, convert, getRates, hasRate } from './dal/fx';
 import { listAccounts, listLiabilities, listTransactions } from './dal/finances';
 import { getUser } from './dal/users';
+import { loadUserPrefs, type UserPrefs } from './prefs';
 import { addDays, dateKey, monthKey, zonedParts } from './utils';
 
 /**
@@ -189,28 +190,34 @@ async function expensesSince(userId: number, from: Date, to: Date, timeZone: str
  * Дневное прожигание: среднее по расходам за 30 дней, но не меньше 15 €.
  * Если транзакций нет — 20 €. Значение в целых EUR-центах.
  */
-function computeDailyBurn(stats: BurnStats, now: Date): number {
-  if (stats.count === 0 || stats.earliest === null) return SEED_DAILY_BURN_CENTS;
+function computeDailyBurn(
+  stats: BurnStats,
+  now: Date,
+  params: { burnWindowDays: number; minDailyBurnCents: number; seedDailyBurnCents: number },
+): number {
+  if (stats.count === 0 || stats.earliest === null) return params.seedDailyBurnCents;
 
   const msPerDay = 86_400_000;
   const observedDays = Math.max(1, Math.floor((now.getTime() - stats.earliest.getTime()) / msPerDay) + 1);
-  const divisor = Math.min(BURN_WINDOW_DAYS, observedDays);
+  const divisor = Math.min(params.burnWindowDays, observedDays);
   const observed = Math.round(stats.spentCents / divisor);
 
-  return Math.max(Math.max(observed, MIN_DAILY_BURN_CENTS), HARD_MIN_DAILY_BURN_CENTS);
+  return Math.max(Math.max(observed, params.minDailyBurnCents), HARD_MIN_DAILY_BURN_CENTS);
 }
 
 export async function calculateRunway(userId: number, opts: RunwayOptions = {}): Promise<RunwayResult> {
   const now = opts.now ?? new Date();
-  const user = await getUser(userId);
-  const timeZone = user?.timezone ?? 'UTC';
-  const baseCurrencyPreference = user?.baseCurrency ?? BASE_CURRENCY;
-
-  const [accounts, liabilities, rates] = await Promise.all([
+  const [user, prefs, accounts, liabilities, rates] = await Promise.all([
+    getUser(userId),
+    loadUserPrefs(userId).catch((): UserPrefs => ({})),
     listAccounts(userId),
     listLiabilities(userId, 'active'),
     getRates(),
   ]);
+  const timeZone = user?.timezone ?? 'UTC';
+  const baseCurrencyPreference = user?.baseCurrency ?? BASE_CURRENCY;
+  const runwayPrefs = prefs.finance?.runway;
+  const extraReserveCents = Math.max(0, Math.round(prefs.finance?.reserveCents ?? 0));
 
   const parts = zonedParts(now, timeZone);
   const month = monthKey(now, timeZone);
@@ -218,9 +225,10 @@ export async function calculateRunway(userId: number, opts: RunwayOptions = {}):
   // --- горизонт ------------------------------------------------------------
   const daysRemaining = Math.max(1, daysInMonth(parts.year, parts.month) - parts.day + 1);
 
+  const configuredHorizon = opts.horizonDays ?? runwayPrefs?.horizonDays ?? undefined;
   let horizonDays: number;
-  if (opts.horizonDays !== undefined) {
-    horizonDays = Math.max(1, Math.trunc(opts.horizonDays));
+  if (configuredHorizon !== undefined && configuredHorizon !== null) {
+    horizonDays = Math.max(1, Math.trunc(configuredHorizon));
   } else if (daysRemaining <= 1) {
     // Последний день месяца: планируем сразу на весь следующий месяц.
     const nextYear = parts.month === 12 ? parts.year + 1 : parts.year;
@@ -293,6 +301,13 @@ export async function calculateRunway(userId: number, opts: RunwayOptions = {}):
     }
   }
 
+  // Пользовательский целевой резерв в EUR-центах (из `user_prefs.finance.reserveCents`)
+  if (extraReserveCents > 0 && spendableCents > 0) {
+    const appliedExtraReserve = Math.min(spendableCents, extraReserveCents);
+    spendableCents -= appliedExtraReserve;
+    reservedCents += appliedExtraReserve;
+  }
+
   // --- метрики по обязательствам ------------------------------------------
   let totalMonthlyObligationsCents = 0;
   let pendingThisMonthCents = 0;
@@ -345,13 +360,22 @@ export async function calculateRunway(userId: number, opts: RunwayOptions = {}):
   });
 
   // --- прожигание ----------------------------------------------------------
+  const effectiveBurnOverride =
+    opts.dailyBurnOverrideCents ?? runwayPrefs?.dailyBurnOverrideCents ?? undefined;
   let burnCents: number;
-  if (opts.dailyBurnOverrideCents !== undefined) {
-    burnCents = Math.max(HARD_MIN_DAILY_BURN_CENTS, Math.round(opts.dailyBurnOverrideCents));
+  if (effectiveBurnOverride !== undefined && effectiveBurnOverride !== null) {
+    burnCents = Math.max(HARD_MIN_DAILY_BURN_CENTS, Math.round(effectiveBurnOverride));
   } else {
-    const from = addDays(now, -BURN_WINDOW_DAYS);
+    const burnWindowDays = runwayPrefs?.burnWindowDays ?? BURN_WINDOW_DAYS;
+    const minDailyBurnCents = runwayPrefs?.minDailyBurnCents ?? MIN_DAILY_BURN_CENTS;
+    const seedDailyBurnCents = runwayPrefs?.seedDailyBurnCents ?? SEED_DAILY_BURN_CENTS;
+    const from = addDays(now, -burnWindowDays);
     const stats = await expensesSince(userId, from, now, timeZone);
-    burnCents = computeDailyBurn(stats, now);
+    burnCents = computeDailyBurn(stats, now, {
+      burnWindowDays,
+      minDailyBurnCents,
+      seedDailyBurnCents,
+    });
   }
 
   // --- деньги к тратам -----------------------------------------------------

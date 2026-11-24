@@ -18,10 +18,13 @@ import {
   diaryStorageKey,
   getOrCreateDailyDiary,
   getTodayCompletedTasks,
+  listDiaryDates,
+  parseDiaryPrefix,
   readDailyDiary,
 } from '../src/lib/diary';
 import { createTask, updateTask } from '../src/lib/dal/tasks';
 import { ensureUser } from '../src/lib/dal/users';
+import { saveUserPrefs } from '../src/lib/prefs';
 import { dateKey } from '../src/lib/utils';
 
 const USER = 1;
@@ -207,5 +210,83 @@ describe('алиасы и шаблон', () => {
 
     expect(diary.created).toBe(true);
     expect(diary.content).toContain('# Дневник:');
+  });
+});
+
+describe('appendReflection includeTasks, parseDiaryPrefix & listDiaryDates', () => {
+  it('appendReflection при создании дневника подтягивает выполненные за день задачи', async () => {
+    await ensureUser(USER);
+    const task = await createTask(USER, { title: 'Закрытая задача дня' });
+    await updateTask(USER, task.id, { status: 'done' });
+
+    const { content } = await appendReflection(USER, 'Вечерняя запись');
+
+    expect(content).toContain(`[x] [Разное] ${task.title}`);
+    expect(content).toContain('Вечерняя запись');
+  });
+
+  it('parseDiaryPrefix распознаёт префиксы и не срабатывает на однокоренные слова', () => {
+    expect(parseDiaryPrefix('дневник')).toEqual({ matched: true, body: '' });
+    expect(parseDiaryPrefix('Дневник, сегодня спокойно')).toEqual({
+      matched: true,
+      body: 'сегодня спокойно',
+    });
+    expect(parseDiaryPrefix('в дневник: устал после созвона')).toEqual({
+      matched: true,
+      body: 'устал после созвона',
+    });
+    expect(parseDiaryPrefix('Diary — felt steady today')).toEqual({
+      matched: true,
+      body: 'felt steady today',
+    });
+    expect(parseDiaryPrefix('дневника не было')).toEqual({ matched: false, body: '' });
+    expect(parseDiaryPrefix('дневниковый формат')).toEqual({ matched: false, body: '' });
+    expect(parseDiaryPrefix('сегодня вел дневник')).toEqual({ matched: false, body: '' });
+  });
+
+  it('listDiaryDates возвращает записи пользователя по убыванию даты с превью и энергией', async () => {
+    await ensureUser(USER);
+    await ensureUser(USER2);
+    await appendReflection(USER, 'Первая запись дня', {
+      date: '2026-11-01',
+      now: NOW,
+      energy: 6,
+    });
+    await appendReflection(USER, 'Вторая запись новее', {
+      date: '2026-11-05',
+      now: NOW,
+      energy: 8,
+    });
+    await appendReflection(USER2, 'Чужой дневник', { date: '2026-11-06', now: NOW });
+
+    const list = await listDiaryDates(USER);
+    expect(list.map((item) => item.date)).toEqual(['2026-11-05', '2026-11-01']);
+    expect(list[0]).toEqual({
+      date: '2026-11-05',
+      preview: 'Вторая запись новее',
+      energy: '8',
+    });
+    expect(list[1]?.energy).toBe('6');
+  });
+
+  it('Волна 2: использует кастомные секции, заголовок и includeTasks из user_prefs.diary', async () => {
+    await ensureUser(USER);
+    const task = await createTask(USER, { title: 'Скрываемая задача' });
+    await updateTask(USER, task.id, { status: 'done' });
+
+    await saveUserPrefs(USER, {
+      diary: {
+        headerTemplate: '# Лог дня {date} [{weekday}]',
+        sections: ['Фокус', 'Благодарность', 'Вечерняя заметка'],
+        includeTasks: false,
+      },
+    });
+
+    const created = await appendReflection(USER, 'Спокойный вечер', { date: '2026-11-06', now: NOW });
+    expect(created.content).toContain('# Лог дня 2026-11-06 [Пт]');
+    expect(created.content).toContain('## 1. Фокус');
+    expect(created.content).toContain('## 2. Благодарность');
+    expect(created.content).toContain('Спокойный вечер');
+    expect(created.content).not.toContain('Скрываемая задача');
   });
 });

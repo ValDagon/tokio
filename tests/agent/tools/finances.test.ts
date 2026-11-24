@@ -78,17 +78,20 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('financeTools: состав', () => {
-  it('экспортирует 25 тулз с уникальными именами', () => {
-    expect(financeTools).toHaveLength(25);
+  it('экспортирует 28 тулз с уникальными именами', () => {
+    expect(financeTools).toHaveLength(28);
     const names = financeTools.map((item) => item.name);
     expect(new Set(names).size).toBe(names.length);
     expect(names).toEqual(
       expect.arrayContaining([
+        'create_account',
         'add_expense',
         'add_income',
         'add_transfer',
         'add_exchange',
         'set_budget',
+        'delete_budget',
+        'get_budget_plan',
         'query_spending',
         'can_i_afford',
         'get_fin_balances',
@@ -1409,5 +1412,75 @@ describe('операции: list_transactions / delete_transaction', () => {
     expect(removedByQuery.ok).toBe(true);
     expect(await balanceOf(USER_A, main.id)).toBe(10_000);
     expect(await listTransactions(USER_A)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// set_budget (month/copy_from_previous) / delete_budget / get_budget_plan
+// ---------------------------------------------------------------------------
+
+describe('месячное планирование бюджета: set_budget / delete_budget / get_budget_plan', () => {
+  it('set_budget ставит лимит на указанный месяц и копирует недостающие с прошлого месяца', async () => {
+    await run('set_budget', { category_name: 'Еда', limit_amount_eur: '300', month: '2026-02' }, ctxA);
+    await run('set_budget', { category_name: 'Транспорт', limit_amount_eur: '80', month: '2026-02' }, ctxA);
+    await run('set_budget', { category_name: 'Еда', limit_amount_eur: '350', month: '2026-03' }, ctxA);
+
+    const copied = await run(
+      'set_budget',
+      { month: '2026-03', copy_from_previous: true },
+      ctxA,
+    );
+    expect(copied.ok).toBe(true);
+    expect(copied.content).toContain('Транспорт');
+
+    const plan = await run('get_budget_plan', { month: '2026-03' }, ctxA);
+    expect(plan.ok).toBe(true);
+    const data = plan.data as {
+      total_budgeted_cents: number;
+      budgeted_spent_cents: number;
+      categories: Array<{ category_name: string; limit_cents: number; spent_cents: number }>;
+    };
+    // Еда осталась 35000 (не перезаписана), Транспорт скопировался как 8000 -> итого 43000.
+    expect(data.total_budgeted_cents).toBe(43_000);
+    const food = data.categories.find((c) => c.category_name === 'Еда');
+    const transport = data.categories.find((c) => c.category_name === 'Транспорт');
+    expect(food?.limit_cents).toBe(35_000);
+    expect(transport?.limit_cents).toBe(8_000);
+    expect(transport?.spent_cents).toBe(0);
+  });
+
+  it('delete_budget удаляет лимит только у владельца и get_budget_plan учитывает траты и 0-spend категории', async () => {
+    const { main } = await seedAccounts(USER_A, 100_000); // spendable Main 1000 EUR + Cash 0 EUR
+    await run('set_budget', { category_name: 'Еда', limit_amount_eur: '200', month: '2026-03' }, ctxA);
+    await run('set_budget', { category_name: 'Аренда', limit_amount_eur: '500', month: '2026-03' }, ctxA);
+    await createTransaction(USER_A, {
+      kind: 'expense',
+      accountId: main.id,
+      amountCents: 5_000,
+      categoryName: 'Еда',
+      occurredAt: '2026-03-10T12:00:00Z',
+    });
+
+    const plan = await run('get_budget_plan', { month: '2026-03' }, ctxA);
+    expect(plan.ok).toBe(true);
+    const data = plan.data as {
+      total_budgeted_cents: number;
+      budgeted_spent_cents: number;
+      budgeted_remaining_cents: number;
+    };
+    expect(data.total_budgeted_cents).toBe(70_000);
+    expect(data.budgeted_spent_cents).toBe(5_000);
+    expect(data.budgeted_remaining_cents).toBe(65_000);
+
+    // Другой пользователь не может удалить чужой лимит.
+    const foreignDelete = await run('delete_budget', { category_name: 'Аренда', month: '2026-03' }, ctxB);
+    expect(foreignDelete.ok).toBe(false);
+
+    const deleted = await run('delete_budget', { category_name: 'Аренда', month: '2026-03' }, ctxA);
+    expect(deleted.ok).toBe(true);
+    expect(deleted.content).toContain('Аренда');
+
+    const afterDelete = await run('get_budget_plan', { month: '2026-03' }, ctxA);
+    expect((afterDelete.data as { total_budgeted_cents: number }).total_budgeted_cents).toBe(20_000);
   });
 });

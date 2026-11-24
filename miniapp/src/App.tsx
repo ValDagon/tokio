@@ -22,6 +22,8 @@ import type {
   RunwayInfo,
   TransactionItem,
   Note,
+  DiaryEntrySummary,
+  DiaryEntryDetail,
   Medication,
   Liability,
   DocChapterSummary,
@@ -48,10 +50,13 @@ import {
   fetchRunway,
   fetchTransactions,
   setBudget,
+  deleteBudget,
   fetchNotes,
   createNote,
   updateNote,
   deleteNote,
+  fetchDiaryList,
+  fetchDiaryEntry,
   fetchMedications,
   createMedication,
   takeMedication,
@@ -90,6 +95,7 @@ import {
   getTargetDateForGroup,
   getNoteSummary,
   findDocSectionMatches,
+  matchesAccountThemePattern,
   showAlert,
   showConfirm,
   type TaskDayGroup,
@@ -108,6 +114,7 @@ interface PersonaPreset {
   title: string;
   desc: string;
   instruction: string;
+  isCustom?: boolean;
 }
 
 const CALM_MODE_STORAGE_KEY = 'tokio_calm_mode';
@@ -135,8 +142,8 @@ export function App() {
     [t]
   );
 
-  const personaPresets: readonly PersonaPreset[] = React.useMemo(
-    () => [
+  const personaPresets: readonly PersonaPreset[] = React.useMemo(() => {
+    const builtins: PersonaPreset[] = [
       {
         id: 'mentor',
         title: t('personas.mentorTitle'),
@@ -161,9 +168,19 @@ export function App() {
         desc: t('personas.conciseDesc'),
         instruction: t('personas.conciseInstruction'),
       },
-    ],
-    [t]
-  );
+    ];
+    const builtinIds = new Set(builtins.map((b) => b.id));
+    const customList: PersonaPreset[] = (uiConfig.personas ?? [])
+      .filter((p) => !builtinIds.has(p.id))
+      .map((p) => ({
+        id: p.id,
+        title: p.name,
+        desc: p.description,
+        instruction: p.instructions,
+        isCustom: true,
+      }));
+    return [...builtins, ...customList];
+  }, [t, uiConfig.personas]);
 
   // Tasks state
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -234,6 +251,13 @@ export function App() {
   const [dataSource, setDataSource] = useState<ApiSource>(getDataSource());
   useEffect(() => subscribeDataSource(setDataSource), []);
 
+  useEffect(() => {
+    const title = uiConfig.brand.assistantName || 'Tokio';
+    if (typeof document !== 'undefined') {
+      document.title = title;
+    }
+  }, [uiConfig.brand.assistantName]);
+
   // Finances state
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [activeBankName, setActiveBankName] = useState<string | null>(null);
@@ -246,8 +270,14 @@ export function App() {
   const [liabilities, setLiabilities] = useState<Liability[]>([]);
   const [activeLiabilityQueue, setActiveLiabilityQueue] = useState<string | null>(null);
 
-  // Notes state
+  // Notes & Diary state
   const [notes, setNotes] = useState<Note[]>([]);
+  const [diaryEntries, setDiaryEntries] = useState<DiaryEntrySummary[]>([]);
+  const [diaryLoading, setDiaryLoading] = useState(false);
+  const [diaryLoaded, setDiaryLoaded] = useState(false);
+  const [activeDiaryDate, setActiveDiaryDate] = useState<string | null>(null);
+  const [activeDiaryDetail, setActiveDiaryDetail] = useState<DiaryEntryDetail | null>(null);
+  const [loadingDiaryDetail, setLoadingDiaryDetail] = useState(false);
   const [selectedNoteCol, setSelectedNoteCol] = useState<string | null>(null);
   const [pendingDeepLinkNoteId, setPendingDeepLinkNoteId] = useState<string | null>(null);
   const [newNoteText, setNewNoteText] = useState('');
@@ -383,8 +413,9 @@ export function App() {
   useEffect(() => {
     if (activeTab === 'finances' && accounts.length === 0) {
       loadFinances();
-    } else if (activeTab === 'notes' && notes.length === 0) {
-      loadNotes();
+    } else if (activeTab === 'notes') {
+      if (notes.length === 0) loadNotes();
+      if (!diaryLoaded && !diaryLoading) loadDiaryEntries();
     } else if (activeTab === 'assistant') {
       if (userSettings?.role === 'admin') {
         if (!lifeContext) loadAssistantData();
@@ -392,7 +423,17 @@ export function App() {
       }
       if (medications.length === 0) loadMedications();
     }
-  }, [activeTab, accounts.length, notes.length, medications.length, lifeContext, docChapters.length, userSettings?.role]);
+  }, [
+    activeTab,
+    accounts.length,
+    notes.length,
+    diaryLoaded,
+    diaryLoading,
+    medications.length,
+    lifeContext,
+    docChapters.length,
+    userSettings?.role,
+  ]);
 
   // Resolve deep-linked note once notes finish loading
   useEffect(() => {
@@ -411,6 +452,7 @@ export function App() {
 
     const isReaderOpen =
       activeReaderNoteId !== null ||
+      activeDiaryDate !== null ||
       selectedChapterSlug !== null ||
       showDossierReader ||
       activeReaderSkill !== null;
@@ -421,6 +463,9 @@ export function App() {
         triggerHaptic('light');
         if (activeReaderSkill !== null) {
           setActiveReaderSkill(null);
+        } else if (activeDiaryDate !== null) {
+          setActiveDiaryDate(null);
+          setActiveDiaryDetail(null);
         } else if (activeReaderNoteId !== null) {
           setActiveReaderNoteId(null);
         } else if (selectedChapterSlug !== null) {
@@ -462,10 +507,88 @@ export function App() {
     showTrashModal,
     budgetModalCategory,
     activeReaderNoteId,
+    activeDiaryDate,
     selectedChapterSlug,
     showDossierReader,
     activeReaderSkill,
   ]);
+
+  function applySettingsAndUi(settings: UserSettings, fetchedUiConfig: UiConfig) {
+    setUiConfig(fetchedUiConfig);
+    const allowedTabs = fetchedUiConfig.miniapp.tabs.map((k) =>
+      k === 'system' ? 'assistant' : k
+    );
+    if (allowedTabs.length > 0) {
+      setActiveTab((prev) => {
+        if (allowedTabs.includes(prev)) return prev;
+        const firstAllowed = allowedTabs[0];
+        if (
+          firstAllowed === 'today' ||
+          firstAllowed === 'tasks' ||
+          firstAllowed === 'finances' ||
+          firstAllowed === 'notes' ||
+          firstAllowed === 'assistant'
+        ) {
+          return firstAllowed;
+        }
+        return prev;
+      });
+    }
+    setUserSettings(settings);
+    if (settings.language) {
+      applyLocale(normalizeLocale(settings.language));
+    }
+    setLowStimulation(settings.low_stimulation_mode);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(CALM_MODE_STORAGE_KEY, String(settings.low_stimulation_mode));
+    }
+    if (settings.custom_instructions !== undefined) {
+      setCustomInstructions(settings.custom_instructions);
+    }
+    if (settings.persona_style) {
+      setPersonaStyle(settings.persona_style);
+    }
+    if (settings.low_stimulation_mode) {
+      document.body.classList.add('low-stimulation');
+    } else {
+      document.body.classList.remove('low-stimulation');
+    }
+  }
+
+  async function refreshSettingsAndConfig(updatedSettings?: UserSettings) {
+    if (updatedSettings) {
+      setUserSettings(updatedSettings);
+      if (updatedSettings.language) {
+        applyLocale(normalizeLocale(updatedSettings.language));
+      }
+      setLowStimulation(updatedSettings.low_stimulation_mode);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(CALM_MODE_STORAGE_KEY, String(updatedSettings.low_stimulation_mode));
+      }
+      if (updatedSettings.custom_instructions !== undefined) {
+        setCustomInstructions(updatedSettings.custom_instructions);
+      }
+      if (updatedSettings.persona_style) {
+        setPersonaStyle(updatedSettings.persona_style);
+      }
+      if (updatedSettings.low_stimulation_mode) {
+        document.body.classList.add('low-stimulation');
+      } else {
+        document.body.classList.remove('low-stimulation');
+      }
+      fetchUiConfig()
+        .then((fetchedUiConfig) => applySettingsAndUi(updatedSettings, fetchedUiConfig))
+        .catch(() => {});
+      fetchRunway().then(setRunway).catch(() => {});
+      return;
+    }
+    const [settings, fetchedUiConfig] = await Promise.all([
+      fetchSettings(),
+      fetchUiConfig(),
+    ]);
+    applySettingsAndUi(settings, fetchedUiConfig);
+    fetchRunway().then(setRunway).catch(() => {});
+  }
 
   async function loadInitialData() {
     try {
@@ -479,54 +602,18 @@ export function App() {
         fetchUiConfig(),
       ]);
 
-      setUiConfig(fetchedUiConfig);
-      const allowedTabs = fetchedUiConfig.miniapp.tabs.map((k) =>
-        k === 'system' ? 'assistant' : k
-      );
-      if (allowedTabs.length > 0 && !allowedTabs.includes(activeTab)) {
-        const firstAllowed = allowedTabs[0];
-        if (
-          firstAllowed === 'today' ||
-          firstAllowed === 'tasks' ||
-          firstAllowed === 'finances' ||
-          firstAllowed === 'notes' ||
-          firstAllowed === 'assistant'
-        ) {
-          setActiveTab(firstAllowed);
-        }
-      }
-      setUserSettings(settings);
-      if (settings.language) {
-        applyLocale(normalizeLocale(settings.language));
-      }
+      applySettingsAndUi(settings, fetchedUiConfig);
       setCategories(cats);
       if (cats.length > 0 && !newTaskCat) {
         setNewTaskCat(cats[0].name);
       }
       setTasks(todoList);
       setCompletedTasks(doneList);
-      setLowStimulation(settings.low_stimulation_mode);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(CALM_MODE_STORAGE_KEY, String(settings.low_stimulation_mode));
-      }
 
       // Non-blocking background prefetches for TodayTab & Header
       fetchTrash().then(setTrashData).catch(() => {});
       fetchRunway().then(setRunway).catch(() => {});
       fetchLiabilities().then(setLiabilities).catch(() => {});
-
-      if (settings.custom_instructions !== undefined) {
-        setCustomInstructions(settings.custom_instructions);
-      }
-      if (settings.persona_style) {
-        setPersonaStyle(settings.persona_style);
-      }
-
-      if (settings.low_stimulation_mode) {
-        document.body.classList.add('low-stimulation');
-      } else {
-        document.body.classList.remove('low-stimulation');
-      }
     } catch (err: unknown) {
       console.error('Failed to load initial data:', err);
       const msg = err instanceof Error ? err.message : t('errors.networkError');
@@ -654,6 +741,33 @@ export function App() {
     }
   }
 
+  async function loadDiaryEntries() {
+    try {
+      setDiaryLoading(true);
+      const entries = await fetchDiaryList();
+      setDiaryEntries(entries);
+    } catch (err) {
+      console.error('Failed to load diary entries:', err);
+    } finally {
+      setDiaryLoading(false);
+      setDiaryLoaded(true);
+    }
+  }
+
+  async function handleOpenDiaryEntry(date: string) {
+    setActiveDiaryDate(date);
+    setActiveDiaryDetail({ date, content: '' });
+    setLoadingDiaryDetail(true);
+    try {
+      const detail = await fetchDiaryEntry(date);
+      setActiveDiaryDetail(detail);
+    } catch (err) {
+      console.error('Failed to load diary entry:', err);
+    } finally {
+      setLoadingDiaryDetail(false);
+    }
+  }
+
   const toggleLowStimulation = async () => {
     const nextVal = !lowStimulation;
     setLowStimulation(nextVal);
@@ -667,7 +781,8 @@ export function App() {
       document.body.classList.remove('low-stimulation');
     }
     try {
-      await updateSettings({ low_stimulation_mode: nextVal });
+      const updated = await updateSettings({ low_stimulation_mode: nextVal });
+      setUserSettings(updated);
     } catch (err) {
       console.error('Failed to sync low-stimulation mode:', err);
     }
@@ -937,6 +1052,18 @@ export function App() {
       await loadFinances();
     } catch (err) {
       console.error('Failed to set budget:', err);
+    }
+  };
+
+  const handleDeleteBudget = async (categoryId: string) => {
+    triggerHaptic('medium');
+    try {
+      await deleteBudget(categoryId, finSummary?.month);
+      setBudgetModalCategory(null);
+      setBudgetLimitInput('');
+      await loadFinances();
+    } catch (err) {
+      console.error('Failed to delete budget:', err);
     }
   };
 
@@ -1362,6 +1489,11 @@ export function App() {
     return notes.find(n => n.id === activeReaderNoteId) || null;
   }, [notes, activeReaderNoteId]);
 
+  const activeDiaryIndex = React.useMemo(() => {
+    if (!activeDiaryDate) return -1;
+    return diaryEntries.findIndex((e) => e.date === activeDiaryDate);
+  }, [diaryEntries, activeDiaryDate]);
+
   const activeDocIndex = React.useMemo(() => {
     if (!selectedChapterSlug) return -1;
     const list = filteredDocChapters.length > 0 ? filteredDocChapters : docChapters;
@@ -1393,7 +1525,7 @@ export function App() {
   const getAccountThemeClass = (name: string) => {
     const lower = name.toLowerCase();
     for (const rule of uiConfig.miniapp.accountThemes) {
-      if (rule.pattern && lower.includes(rule.pattern.toLowerCase())) {
+      if (matchesAccountThemePattern(name, rule.pattern)) {
         return `account-theme-${rule.theme}`;
       }
     }
@@ -1517,14 +1649,18 @@ export function App() {
             { id: 'notes', label: t('nav.notes'), icon: <FileText size={17} strokeWidth={1.75} /> },
             { id: 'assistant', label: t('nav.system'), icon: <Brain size={17} strokeWidth={1.75} /> },
           ];
-          const normalizedEnabled = new Set(
-            uiConfig.miniapp.tabs.map((k) => (k === 'system' ? 'assistant' : k))
-          );
-          const visibleTabs =
-            normalizedEnabled.size > 0
-              ? ALL_TABS.filter((tab) => normalizedEnabled.has(tab.id))
-              : ALL_TABS;
-          const renderedTabs = visibleTabs.length > 0 ? visibleTabs : ALL_TABS;
+          const tabMap = new Map(ALL_TABS.map((tab) => [tab.id, tab] as const));
+          const seenTabs = new Set<NavKey>();
+          const orderedTabs: { id: NavKey; label: string; icon: React.ReactNode }[] = [];
+          for (const rawKey of uiConfig.miniapp.tabs) {
+            const mapped = (rawKey === 'system' ? 'assistant' : rawKey) as NavKey;
+            const tabItem = tabMap.get(mapped);
+            if (tabItem && !seenTabs.has(mapped)) {
+              seenTabs.add(mapped);
+              orderedTabs.push(tabItem);
+            }
+          }
+          const renderedTabs = orderedTabs.length > 0 ? orderedTabs : ALL_TABS;
           return renderedTabs.map((tab) => (
             <button
               key={tab.id}
@@ -1559,6 +1695,7 @@ export function App() {
           triggerHaptic={triggerHaptic}
           baseCurrency={userSettings?.base_currency}
           reserveAmount={uiConfig.finance.reserveAmount}
+          focusLimit={uiConfig.adhd?.focusLimit ?? undefined}
         />
       )}
 
@@ -1647,6 +1784,7 @@ export function App() {
           budgetLimitInput={budgetLimitInput}
           setBudgetLimitInput={setBudgetLimitInput}
           handleSaveBudget={handleSaveBudget}
+          handleDeleteBudget={handleDeleteBudget}
           transactions={transactions}
           undoLastTransaction={undoLastTransaction}
           resetFinances={resetFinances}
@@ -1679,6 +1817,9 @@ export function App() {
           handleMoveNote={handleMoveNote}
           handleConvertNoteToTask={handleConvertNoteToTask}
           onOpenNoteReader={n => setActiveReaderNoteId(n.id)}
+          diaryEntries={diaryEntries}
+          diaryLoading={diaryLoading}
+          onOpenDiaryEntry={handleOpenDiaryEntry}
         />
       )}
 
@@ -1734,6 +1875,7 @@ export function App() {
           handleDeleteMedication={handleDeleteMedication}
           userSettings={userSettings}
           onReloadSettings={loadInitialData}
+          onRefreshConfig={refreshSettingsAndConfig}
           backupPrefix={uiConfig.brand.backupPrefix}
           feedbackEnabled={uiConfig.features.feedbackEnabled}
         />
@@ -1768,6 +1910,34 @@ export function App() {
             activeReaderNoteIndex >= 0
               ? `${activeReaderNoteIndex + 1} / ${displayedNotesForReader.length}`
               : undefined
+          }
+        />
+      )}
+
+      {activeDiaryDate && (
+        <ReaderSheet
+          mode="diary"
+          onClose={() => {
+            setActiveDiaryDate(null);
+            setActiveDiaryDetail(null);
+          }}
+          triggerHaptic={triggerHaptic}
+          fontScale={readerFontScale}
+          onChangeFontScale={handleChangeFontScale}
+          diaryEntry={activeDiaryDetail}
+          loadingDiary={loadingDiaryDetail}
+          onPrevDiary={
+            activeDiaryIndex > 0
+              ? () => handleOpenDiaryEntry(diaryEntries[activeDiaryIndex - 1].date)
+              : null
+          }
+          onNextDiary={
+            activeDiaryIndex >= 0 && activeDiaryIndex < diaryEntries.length - 1
+              ? () => handleOpenDiaryEntry(diaryEntries[activeDiaryIndex + 1].date)
+              : null
+          }
+          diaryPositionLabel={
+            activeDiaryIndex >= 0 ? `${activeDiaryIndex + 1} / ${diaryEntries.length}` : undefined
           }
         />
       )}

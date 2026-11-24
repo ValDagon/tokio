@@ -18,17 +18,21 @@
 import { BASE_CURRENCY, type RateTable, convert, getRates, hasRate, toEurCents } from './dal/fx';
 import { listAccounts, listLiabilities, listTransactions } from './dal/finances';
 import { listDoses } from './dal/medications';
-import { kvGetJson, readLastModelFailure, readTurnTrace, type TurnTrace } from './dal/misc';
 import {
   CLOCK_STALL_AFTER_MINUTES,
   clockHeartbeatKey,
+  kvGetJson,
+  readLastModelFailure,
+  readTurnTrace,
   type ClockHeartbeat,
-} from './jobs';
+  type TurnTrace,
+} from './dal/misc';
 import { listCategories, listTasks } from './dal/tasks';
 import { getUser } from './dal/users';
 import { listFailureAggregates, type FailureAggregate } from './evolution';
 import { t, type LocaleCode } from './i18n';
 import { getAssistantName, getOverlay } from './overlay';
+import { loadUserPrefs, type UserPrefs } from './prefs';
 import { calculateRunway } from './runway';
 import {
   addDays,
@@ -624,8 +628,9 @@ export async function quickSummary(userId: number, opts: SummaryOptions = {}): P
   const window = monthWindow(now, timeZone);
   const today = dateKey(now, timeZone);
 
-  const [user, accounts, rates, runway, totals, liabilities, tasks, doses, categories] = await Promise.all([
+  const [user, prefs, accounts, rates, runway, totals, liabilities, tasks, doses, categories] = await Promise.all([
     getUser(userId),
+    loadUserPrefs(userId).catch((): UserPrefs => ({})),
     listAccounts(userId),
     getRates(),
     calculateRunway(userId, { now }),
@@ -637,7 +642,8 @@ export async function quickSummary(userId: number, opts: SummaryOptions = {}): P
   ]);
 
   const locale = opts.locale ?? user?.language ?? getOverlay().manifest.defaultLocale;
-  const assistantName = getAssistantName(locale);
+  const assistantName = prefs.assistantName?.trim() || getAssistantName(locale);
+  const focusLimit = prefs.adhd?.focusLimit ?? QUICK_FOCUS_LIMIT;
   const lines: string[] = [];
 
   lines.push(`📊 **Сводка ${assistantName} на ${formatDate(now, timeZone)}**`);
@@ -709,7 +715,7 @@ export async function quickSummary(userId: number, opts: SummaryOptions = {}): P
         task.parentId === null && task.dueAt !== null && dateKey(new Date(task.dueAt), timeZone) === today,
     )
     .sort(byDueThenCreated)
-    .slice(0, QUICK_FOCUS_LIMIT);
+    .slice(0, focusLimit);
 
   if (focus.length === 0) {
     lines.push('• На сегодня жёстких дедлайнов нет — работаем спокойно по ресурсу 🌱');
@@ -998,9 +1004,10 @@ export async function tasksSummary(userId: number, opts: SummaryOptions = {}): P
   const today = dateKey(now, timeZone);
   const distantLimit = dateKey(addDays(now, DISTANT_HORIZON_DAYS), timeZone);
 
-  const [tasks, categories] = await Promise.all([
+  const [tasks, categories, prefs] = await Promise.all([
     listTasks(userId, { status: 'todo', limit: 500 }),
     listCategories(userId),
+    loadUserPrefs(userId).catch((): UserPrefs => ({})),
   ]);
 
   const roots = tasks.filter((task) => task.parentId === null);
@@ -1014,10 +1021,11 @@ export async function tasksSummary(userId: number, opts: SummaryOptions = {}): P
     return category ? category.position : 999;
   };
 
+  const focusLimit = prefs.adhd?.focusLimit ?? 3;
   const focus = roots
     .filter((task) => task.dueAt !== null && dateKey(new Date(task.dueAt), timeZone) <= today)
     .sort(byDueThenCreated)
-    .slice(0, 3);
+    .slice(0, focusLimit);
 
   const backlog = [...roots].sort(byDueThenCreated);
   const isDistant = (task: TaskRow): boolean =>

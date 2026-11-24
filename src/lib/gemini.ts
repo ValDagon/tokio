@@ -201,6 +201,22 @@ export async function resolveApiKey(
   return { apiKey, byok: false };
 }
 
+/**
+ * Проверяет доступность рабочего API-ключа (BYOK или продуктового) для провайдера
+ * без раскрытия значения ключа.
+ */
+export async function isProviderKeyAvailable(
+  userId: number | undefined,
+  provider: ProviderId,
+): Promise<boolean> {
+  try {
+    const resolved = await resolveApiKey(userId, provider);
+    return Boolean(resolved.apiKey);
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Чат: типы
 // ---------------------------------------------------------------------------
@@ -442,13 +458,20 @@ export async function chat(
   }
 
   const chain = await resolveModelChain(options, providerId);
+  const preferredHead =
+    typeof options.model === 'string' &&
+    options.model.trim() !== '' &&
+    !(options.models && options.models.length > 0)
+      ? options.model.trim()
+      : null;
   const { apiKey, byok } = await resolveApiKey(options.userId, providerId);
   const modelsTried: string[] = [];
 
   let lastStatus = 0;
   let lastBody = '';
 
-  for (const model of chain) {
+  for (let index = 0; index < chain.length; index += 1) {
+    const model = chain[index]!;
     const request = adapter.buildChatRequest(model, messages, apiKey, options);
 
     let response: FetchResponse;
@@ -473,7 +496,13 @@ export async function chat(
       modelsTried.push(model);
       lastStatus = response.status;
       lastBody = text;
-      if (shouldTryNextModel(response.status)) continue;
+      const preferredFallback =
+        index === 0 &&
+        preferredHead !== null &&
+        model === preferredHead &&
+        chain.length > 1 &&
+        (response.status === 400 || response.status === 404);
+      if (preferredFallback || shouldTryNextModel(response.status)) continue;
       throw new GeminiError(
         `${providerId}: ${model} answered ${response.status}: ${errorMessage(parsed ?? text)}`,
         { status: response.status, model, body: text, retryable: false, modelsTried },

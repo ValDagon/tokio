@@ -118,6 +118,7 @@
     "diagnostics": "Failure log: what broke",
     "skills": "Procedures: show, enable, reject",
     "learn": "Remember a standing rule",
+    "talk": "Free talk mode without saving to DB",
     "backlog": "Backlog of ideas and bugs",
     "lang": "Change interface language",
     "byok": "Connect your Gemini API key",
@@ -290,5 +291,19 @@
     "deadline_irreversible_hint": "Irreversible actions cannot be undone — please check the result.",
     "deadline_gathered_header": "What I managed to gather:",
     "deadline_tail": "The rest — in the next message."
+  },
+  "diary": {
+    "emptyToday": "📔 Today's diary is still empty. Write or dictate \"Diary, ...\" and I will save a clean entry.",
+    "savedHeader": "📔 <b>Saved to diary for {{date}}</b>",
+    "energyLine": "🔋 Energy: <b>{{energy}}/10</b>"
+  },
+  "talk": {
+    "enabled": "💬 Talk mode is on for 30 minutes. Let's just chat — I won't save anything to notes or the database. Exit: /talk off or \"end talk\".",
+    "disabled": "✅ Exited talk mode. Back to regular assistant mode.",
+    "alreadyOn": "💬 Talk mode is already active (timer refreshed for 30 minutes). Exit: /talk off or \"end talk\".",
+    "alreadyOff": "💬 Talk mode is currently off. Send /talk or say \"let's just talk\" to start.",
+    "statusOn": "💬 Talk mode is currently active (conversation only, read-only). Exit: /talk off or \"end talk\".",
+    "statusOff": "💬 Regular mode is active (tasks, finances, and notes enabled). Start talk mode with /talk.",
+    "fallbackError": "I couldn't reply right now, but talk mode is still active — nothing was saved as a note. Try again in a moment or exit with /talk off."
   }
 }

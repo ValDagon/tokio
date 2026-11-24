@@ -1069,11 +1069,49 @@ export async function updateCategory(
   return updated;
 }
 
-/** Удаляет категорию, только если она не используется в транзакциях и бюджетах. */
-export async function deleteCategory(userId: number, categoryId: number): Promise<boolean> {
+/** Считает количество транзакций и бюджетов, использующих финансовую категорию. */
+export async function countCategoryUsage(
+  userId: number,
+  categoryId: number,
+): Promise<{ transactions: number; budgets: number }> {
+  const uid = assertUserId(userId);
+  const row = await db.get<{ tx_count: number; b_count: number }>(sql`
+    SELECT
+      (SELECT COUNT(*) FROM transactions WHERE user_id = ${uid} AND category_id = ${categoryId}) AS tx_count,
+      (SELECT COUNT(*) FROM budgets WHERE user_id = ${uid} AND category_id = ${categoryId}) AS b_count
+  `);
+  return {
+    transactions: Number(row?.tx_count ?? 0),
+    budgets: Number(row?.b_count ?? 0),
+  };
+}
+
+/**
+ * Удаляет финансовую категорию. По умолчанию бросает, если категория используется;
+ * при `options.unlink = true` отвязывает транзакции (`category_id = NULL`) и удаляет бюджеты категории.
+ */
+export async function deleteCategory(
+  userId: number,
+  categoryId: number,
+  options?: { unlink?: boolean },
+): Promise<boolean> {
   const uid = assertUserId(userId);
   const category = await getCategory(uid, categoryId);
   if (!category) return false;
+
+  if (options?.unlink === true) {
+    return withTransaction(async () => {
+      await db.run(sql`
+        UPDATE transactions SET category_id = NULL
+        WHERE user_id = ${uid} AND category_id = ${categoryId}
+      `);
+      await db.run(sql`
+        DELETE FROM budgets WHERE user_id = ${uid} AND category_id = ${categoryId}
+      `);
+      await db.run(sql`DELETE FROM fin_categories WHERE id = ${categoryId} AND user_id = ${uid}`);
+      return true;
+    });
+  }
 
   const used = await db.get<{ c: number }>(sql`
     SELECT

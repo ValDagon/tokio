@@ -73,6 +73,77 @@ export interface Category {
   subcategories?: Subcategory[];
 }
 
+export interface UserPrefsSummary {
+  has_overrides: boolean;
+  history_count: number;
+  ai: {
+    preferred_model: string | null;
+    max_steps: number | null;
+    temperature: number | null;
+  };
+  adhd: {
+    overload_shield_enabled: boolean;
+    overload_overdue_threshold: number | null;
+    overload_active_todo_threshold: number | null;
+    overload_night_window: string | null;
+    focus_limit: number | null;
+    stale_after_days: number | null;
+  };
+  finance: {
+    reserve_eur: number;
+    aliases_count: number;
+    default_accounts_count: number;
+    has_runway_overrides: boolean;
+  };
+  diary: {
+    has_overrides: boolean;
+    include_tasks: boolean;
+    sections_count: number;
+    header_template: string | null;
+  };
+  proactive: {
+    quiet_hours_enabled: boolean;
+    quiet_hours_start: string | null;
+    quiet_hours_end: string | null;
+    disabled_jobs: string[];
+  };
+  brain: {
+    custom_personas_count: number;
+    disabled_builtin_skills: string[];
+  };
+  miniapp: {
+    tabs: string[] | null;
+    account_themes_count: number;
+  };
+}
+
+export interface CustomPersonaSummary {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface SettingsPresetItem {
+  id: string;
+  name: string;
+  description?: string;
+  updated_at: string;
+}
+
+export interface CustomRoutineItem {
+  id: string;
+  name: string;
+  enabled: boolean;
+  kind: 'text' | 'summary' | 'ai';
+  schedule: 'daily' | 'weekly' | 'monthly';
+  time: string;
+  weekdays?: number[];
+  day_of_month?: number;
+  summary_kind?: string;
+  tool_access?: 'read-only' | 'allow_writes';
+  respect_quiet_hours: boolean;
+}
+
 export interface UserSettings {
   name?: string;
   language?: 'ru' | 'en' | 'sr' | 'ja';
@@ -88,6 +159,41 @@ export interface UserSettings {
   daily_msg_limit?: number;
   daily_msg_used?: number;
   has_byok_key?: boolean;
+  assistant_name?: string | null;
+  prefs_summary?: UserPrefsSummary;
+  custom_personas?: CustomPersonaSummary[];
+  presets?: SettingsPresetItem[];
+  routines?: CustomRoutineItem[];
+}
+
+export interface RoutineToggleResponse {
+  ok: boolean;
+  routine_id: string;
+  enabled: boolean;
+  settings: UserSettings;
+}
+
+export interface PresetApplyResponse {
+  ok: boolean;
+  preset_id: string;
+  preset_name: string;
+  diff: string;
+  settings: UserSettings;
+}
+
+export interface SettingsResetResponse {
+  ok: boolean;
+  section: string;
+  diff: string;
+  settings: UserSettings;
+}
+
+export interface SettingsRollbackResponse {
+  ok: boolean;
+  restored_summary: string | null;
+  remaining_history: number;
+  diff: string;
+  settings: UserSettings;
 }
 
 export interface UiConfigAccountTheme {
@@ -95,6 +201,30 @@ export interface UiConfigAccountTheme {
   theme: 'primary' | 'secondary' | 'accent' | 'neutral';
   shortName?: string;
   roleLabel?: string;
+}
+
+export interface UiConfigAccountAlias {
+  account: string;
+  patterns: string[];
+}
+
+export interface UiConfigCustomPersona {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+}
+
+export interface UiConfigAdhd {
+  focusLimit: number | null;
+  staleAfterDays: number | null;
+  overloadShieldEnabled: boolean;
+}
+
+export interface UiConfigSummary {
+  activeRoutinesCount: number;
+  totalRoutinesCount: number;
+  presetsCount: number;
 }
 
 export interface UiConfig {
@@ -110,11 +240,16 @@ export interface UiConfig {
   };
   finance: {
     reserveAmount: number;
+    accountAliases?: UiConfigAccountAlias[];
+    defaultAccountByCurrency?: Record<string, string>;
   };
   miniapp: {
     tabs: string[];
     accountThemes: UiConfigAccountTheme[];
   };
+  adhd?: UiConfigAdhd;
+  personas?: UiConfigCustomPersona[];
+  summary?: UiConfigSummary;
 }
 
 export interface AccessInfo {
@@ -207,6 +342,8 @@ export interface FinanceSummary {
   month: string;
   total_spent_eur: number;
   total_income_eur: number;
+  total_budgeted_eur?: number;
+  total_budgeted_spent_eur?: number;
   categories: CategorySpending[];
 }
 
@@ -279,6 +416,17 @@ export interface Note {
   column: 'raw' | 'todo' | 'note' | 'idea' | 'archive';
   created_at: string;
   updated_at: string;
+}
+
+export interface DiaryEntrySummary {
+  date: string;
+  preview: string;
+  energy: string | null;
+}
+
+export interface DiaryEntryDetail {
+  date: string;
+  content: string;
 }
 
 export interface MedicationTodayLog {
@@ -362,6 +510,7 @@ export interface OverlaySkillItem {
   description: string;
   triggers: string[];
   body: string;
+  disabled?: boolean;
 }
 
 export interface UserSkillItem {
