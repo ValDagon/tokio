@@ -9,7 +9,7 @@ export interface DeepLinkTarget {
   taskId?: Task['id'];
   liabilityQueue?: LiabilityQueueKey;
   bankName?: string;
-  noteCol?: Note['column'];
+  noteCol?: Note['column'] | 'diary';
   noteId?: Note['id'];
   openDossier?: boolean;
   systemSection?: 'directives' | 'skills' | 'diagnostics' | 'docs' | 'trash';
@@ -71,6 +71,10 @@ export function parseStartParam(raw: string | null | undefined): DeepLinkTarget 
 
   if (lower === 'raw') {
     return { tab: 'notes', noteCol: 'raw' };
+  }
+
+  if (lower === 'diary') {
+    return { tab: 'notes', noteCol: 'diary' };
   }
 
   if (lower.startsWith('note_')) {

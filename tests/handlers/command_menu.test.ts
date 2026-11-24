@@ -49,6 +49,7 @@ const PROBE_MENU = [
   'diagnostics',
   'skills',
   'learn',
+  'talk',
   'backlog',
   'lang',
   'byok',
@@ -79,6 +80,7 @@ const DECLARED_ORDER = [
   'lang',
   'skills',
   'learn',
+  'talk',
 ];
 
 function message(text: string): Message {

@@ -51,6 +51,14 @@ import { getTableDef } from './db/tables.js';
 import { ensureUser, updateUser } from './dal/users.js';
 import type { UserPatch } from './dal/users.js';
 import { withTransaction } from './dal/finances.js';
+import { diaryStorageKey } from './diary.js';
+import { normalizeLocale } from './i18n.js';
+import {
+  normalizeUserPrefs,
+  userPrefsHistoryKey,
+  userPrefsKey,
+  type UserPrefs,
+} from './prefs.js';
 import { nowIso } from './utils.js';
 
 // ---------------------------------------------------------------------------
@@ -100,6 +108,7 @@ export type BackupTableName = (typeof BACKUP_TABLES)[number];
 /** Колонки профиля, которые переживают экспорт/импорт. */
 export const PROFILE_COLUMNS = [
   'name',
+  'language',
   'base_currency',
   'timezone',
   'summary_time',
@@ -108,6 +117,11 @@ export const PROFILE_COLUMNS = [
 
 /** Сырая строка таблицы (snake_case, как в SQLite) — без преобразований. */
 export type BackupRow = Record<string, unknown>;
+
+export interface BackupDiaryEntry {
+  date: string;
+  content: string;
+}
 
 export interface BackupFile {
   format: typeof BACKUP_FORMAT;
@@ -122,6 +136,8 @@ export interface BackupFile {
   /** Таблица → количество строк (дублирует длины массивов, читается глазами). */
   counts: Record<string, number>;
   fx_rates?: BackupRow[];
+  diary?: BackupDiaryEntry[];
+  preferences?: UserPrefs;
 }
 
 export type BackupMode = 'merge' | 'replace';
@@ -269,6 +285,37 @@ export async function exportUserData(userId: number): Promise<BackupFile> {
     counts[tableName] = rows.length;
   }
 
+  const diaryPrefix = `diary:${uid}:`;
+  const diaryPattern = `${diaryPrefix.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+  const diaryKeyRe = new RegExp(`^diary:${uid}:(\\d{4}-\\d{2}-\\d{2})$`);
+  const diaryKvRows = await db.all<{ key: string; value: string }>(sql`
+    SELECT "key", value FROM kv
+     WHERE "key" LIKE ${diaryPattern} ESCAPE '\\'
+     ORDER BY "key"
+  `);
+  const diary: BackupDiaryEntry[] = [];
+  for (const row of diaryKvRows) {
+    const match = diaryKeyRe.exec(row.key);
+    if (match?.[1] && typeof row.value === 'string') {
+      diary.push({ date: match[1], content: row.value });
+    }
+  }
+  counts.diary = diary.length;
+
+  const prefsRow = await db.get<{ value: string }>(sql`
+    SELECT value FROM kv WHERE "key" = ${userPrefsKey(uid)} LIMIT 1
+  `);
+  let preferences: UserPrefs | undefined;
+  if (prefsRow && typeof prefsRow.value === 'string') {
+    try {
+      const parsed = normalizeUserPrefs(JSON.parse(prefsRow.value));
+      if (Object.keys(parsed).length > 0) preferences = parsed;
+    } catch {
+      // ignore invalid JSON in kv
+    }
+  }
+  counts.preferences = preferences ? 1 : 0;
+
   return {
     format: BACKUP_FORMAT,
     version: BACKUP_VERSION,
@@ -277,6 +324,8 @@ export async function exportUserData(userId: number): Promise<BackupFile> {
     profile,
     tables,
     counts,
+    diary,
+    ...(preferences ? { preferences } : {}),
   };
 }
 
@@ -336,6 +385,21 @@ export function parseBackupFile(input: unknown): BackupFile {
   const fxRates = Array.isArray((raw as any).fx_rates)
     ? ((raw as any).fx_rates as unknown[]).filter(isPlainObject)
     : undefined;
+  const diaryEntries = Array.isArray((raw as any).diary)
+    ? ((raw as any).diary as unknown[])
+        .filter(isPlainObject)
+        .filter(
+          (entry): entry is Record<string, unknown> & { date: string; content: string } =>
+            typeof entry.date === 'string' &&
+            /^\d{4}-\d{2}-\d{2}$/.test(entry.date) &&
+            typeof entry.content === 'string',
+        )
+        .map((entry) => ({ date: entry.date, content: entry.content }))
+    : undefined;
+
+  const rawPreferences = (raw as Record<string, unknown>).preferences;
+  const preferences = isPlainObject(rawPreferences) ? normalizeUserPrefs(rawPreferences) : undefined;
+  const hasPreferences = preferences !== undefined && Object.keys(preferences).length > 0;
 
   return {
     format: BACKUP_FORMAT,
@@ -346,6 +410,8 @@ export function parseBackupFile(input: unknown): BackupFile {
     tables,
     counts: Object.fromEntries(Object.entries(tables).map(([name, rows]) => [name, rows.length])),
     ...(fxRates ? { fx_rates: fxRates } : {}),
+    ...(diaryEntries ? { diary: diaryEntries } : {}),
+    ...(hasPreferences ? { preferences } : {}),
   };
 }
 
@@ -560,6 +626,9 @@ async function importProfile(
   if (Object.hasOwn(profile, 'name') && (profile.name === null || typeof profile.name === 'string')) {
     patch.name = profile.name as string | null;
   }
+  if (typeof profile.language === 'string' && profile.language.trim() !== '') {
+    patch.language = normalizeLocale(profile.language, 'ru');
+  }
   if (typeof profile.base_currency === 'string' && profile.base_currency.trim() !== '') {
     patch.baseCurrency = profile.base_currency;
   }
@@ -618,6 +687,16 @@ async function clearUserData(uid: number): Promise<void> {
       DELETE FROM ${sql.raw(quoteIdent(tableName))} WHERE user_id = ${uid}
     `);
   }
+  const diaryPrefix = `diary:${uid}:`;
+  const diaryPattern = `${diaryPrefix.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+  const routinePrefix = `routine_run:${uid}:`;
+  const routinePattern = `${routinePrefix.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+  await db.run(sql`
+    DELETE FROM kv WHERE "key" LIKE ${diaryPattern} ESCAPE '\\' OR "key" LIKE ${routinePattern} ESCAPE '\\'
+  `);
+  await db.run(sql`
+    DELETE FROM kv WHERE "key" = ${userPrefsKey(uid)} OR "key" = ${userPrefsHistoryKey(uid)}
+  `);
 }
 
 /**
@@ -739,6 +818,65 @@ export async function importBackup(
         }
       }
       result.tables['fx_rates'] = { inserted: fxCount, skipped: 0 };
+    }
+
+    if (Array.isArray(backup.diary) && backup.diary.length > 0) {
+      const diaryStats: TableImportStats = { inserted: 0, skipped: 0 };
+      const now = nowIso();
+      for (const entry of backup.diary) {
+        const key = diaryStorageKey(uid, entry.date);
+        if (mode === 'replace') {
+          await db.run(sql`
+            INSERT INTO kv ("key", value, updated_at)
+            VALUES (${key}, ${entry.content}, ${now})
+            ON CONFLICT ("key") DO UPDATE SET
+              value = excluded.value,
+              updated_at = excluded.updated_at
+          `);
+          diaryStats.inserted += 1;
+        } else {
+          const res = await db.run(sql`
+            INSERT INTO kv ("key", value, updated_at)
+            VALUES (${key}, ${entry.content}, ${now})
+            ON CONFLICT ("key") DO NOTHING
+          `);
+          if (res.rowsAffected > 0) {
+            diaryStats.inserted += 1;
+          } else {
+            diaryStats.skipped += 1;
+            result.skipped.push({ table: 'diary', reason: `diary ${entry.date} already exists` });
+          }
+        }
+      }
+      result.tables['diary'] = diaryStats;
+    }
+
+    if (backup.preferences && Object.keys(backup.preferences).length > 0) {
+      const prefsKey = userPrefsKey(uid);
+      const prefsValue = JSON.stringify(normalizeUserPrefs(backup.preferences));
+      const now = nowIso();
+      if (mode === 'replace') {
+        await db.run(sql`
+          INSERT INTO kv ("key", value, updated_at)
+          VALUES (${prefsKey}, ${prefsValue}, ${now})
+          ON CONFLICT ("key") DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        `);
+        result.tables['preferences'] = { inserted: 1, skipped: 0 };
+      } else {
+        const res = await db.run(sql`
+          INSERT INTO kv ("key", value, updated_at)
+          VALUES (${prefsKey}, ${prefsValue}, ${now})
+          ON CONFLICT ("key") DO NOTHING
+        `);
+        if (res.rowsAffected > 0) {
+          result.tables['preferences'] = { inserted: 1, skipped: 0 };
+        } else {
+          result.tables['preferences'] = { inserted: 0, skipped: 1 };
+          result.skipped.push({ table: 'preferences', reason: 'user preferences already exist' });
+        }
+      }
     }
   });
 

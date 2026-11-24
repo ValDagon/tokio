@@ -35,6 +35,7 @@ import {
   embed,
   getGeminiApiKey,
   isGeminiConfigured,
+  isProviderKeyAvailable,
   normalizeApiKey,
   normalizeEmbeddingText,
   parseJsonContent,
@@ -509,5 +510,39 @@ describe('embed', () => {
     resetFetch();
     setFetchMock((url) => makeResponse(200, { embedding: { values: [0.5] } }, url));
     expect(await tryEmbed('привет')).toEqual([0.5]);
+  });
+});
+
+describe('anti-lockout preferred model fallback и проверка доступности провайдера', () => {
+  it('явная предпочтительная модель с 400 или 404 откатывается на дефолтную цепочку', async () => {
+    setFetchMock((url, init) => {
+      const parsed = JSON.parse(String(init?.body ?? '{}')) as { model?: string };
+      if (parsed.model === 'typo-model') {
+        return makeResponse(400, { error: { message: 'invalid model name' } }, url);
+      }
+      return makeResponse(
+        200,
+        {
+          model: 'model-a',
+          choices: [{ message: { content: 'сработало через fallback' }, finish_reason: 'stop' }],
+        },
+        url,
+      );
+    });
+
+    const result = await chat([{ role: 'user', content: 'привет' }], { model: 'typo-model' });
+    expect(result.content).toBe('сработало через fallback');
+    expect(result.modelsTried).toEqual(['typo-model']);
+    expect(fetch.calls).toHaveLength(2);
+  });
+
+  it('isProviderKeyAvailable не раскрывает ключ и видит BYOK и системные ключи', async () => {
+    await ensureUser(123);
+    expect(await isProviderKeyAvailable(123, 'gemini')).toBe(true);
+    expect(await isProviderKeyAvailable(123, 'openai')).toBe(false);
+
+    const sealed = await sealByok(123, 'sk-test-openai-secret-key-12345');
+    await updateUser(123, { byok: sealed, modelProvider: 'openai' });
+    expect(await isProviderKeyAvailable(123, 'openai')).toBe(true);
   });
 });

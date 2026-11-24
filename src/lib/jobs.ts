@@ -9,6 +9,11 @@
  * и будущего внешнего тика.
  */
 
+import { api, BotApiError } from 'sdk';
+
+import { runAgent, type AgentChatFn } from './agent/engine.js';
+import { listTools } from './agent/registry.js';
+import { checkSpendLimit } from './billing.js';
 import {
   hasJobHandler,
   registerJobHandler,
@@ -16,12 +21,43 @@ import {
   unregisterJobHandler,
   type RunDueJobsResult,
 } from './dal/due_jobs.js';
-import { kvGet, kvGetJson, kvSet, kvSetJson } from './dal/misc.js';
+import {
+  CLOCK_STALL_AFTER_MINUTES,
+  clockHeartbeatKey,
+  kvDelete,
+  kvGet,
+  kvGetJson,
+  kvSet,
+  kvSetIfAbsent,
+  kvSetJson,
+  type ClockHeartbeat,
+  type ReminderClockSource,
+  type ReminderClockStatus,
+} from './dal/misc.js';
+import { getUser } from './dal/users.js';
+
+export {
+  CLOCK_STALL_AFTER_MINUTES,
+  clockHeartbeatKey,
+  type ClockHeartbeat,
+  type ReminderClockSource,
+  type ReminderClockStatus,
+};
 import {
   runNightlyConsolidation,
   scheduleNightlyConsolidation,
   type ConsolidationResult,
 } from './consolidation.js';
+import { buildMorningDigest } from './digest.js';
+import { markdownToTelegramHtml, splitMessageChunks } from './markdown.js';
+import {
+  evaluateRoutineSchedule,
+  isInQuietHours,
+  loadUserPrefs,
+  routineRunKey,
+  type CustomRoutine,
+  type UserPrefs,
+} from './prefs.js';
 import {
   deliverDueReminders,
   deliverLiabilityWarnings,
@@ -30,7 +66,15 @@ import {
   pruneStaleKvLabels,
   type KvLabelPruneResult,
 } from './reminders.js';
+import {
+  balanceSummary,
+  debtsSummary,
+  medsSummary,
+  quickSummary,
+  tasksSummary,
+} from './summary.js';
 import { recordFailure } from './evolution.js';
+import { toIso } from './utils.js';
 import type { DueJobRow } from '../types.js';
 
 export interface EnsureJobHandlersOptions {
@@ -64,15 +108,15 @@ export async function runDailyKvPrune(
   return result;
 }
 
-export type ReminderClockSource = 'touch' | 'rpc' | 'external';
-
 export interface ReminderClockOptions {
-  /** Момент, общий для всех четырёх доставщиков: доза или сводка не пересекает полночь между вызовами. */
+  /** Момент, общий для всех доставщиков: доза или сводка не пересекает полночь между вызовами. */
   now?: Date | string;
   source?: ReminderClockSource;
+  /** Чат для доставки (по умолчанию — личный `userId`). */
+  chatId?: number;
+  /** Тестовая подмена LLM-функции для AI-рутин. */
+  chatFn?: AgentChatFn;
 }
-
-export type ReminderClockStatus = 'delivered' | 'skipped' | 'failed';
 
 export interface ReminderClockKindOutcome {
   status: ReminderClockStatus;
@@ -95,36 +139,7 @@ export interface ReminderClockOutcome {
     liability_warning: ReminderClockKindOutcome;
     medication_reminder: ReminderClockKindOutcome;
     morning_digest: ReminderClockKindOutcome;
-  };
-}
-
-/**
- * Порог тревоги «внешние часы молчат», в минутах.
- *
- * GitHub Actions отдаёт лишь часть запусков расписания: при шаге 15 минут наблюдаемый
- * такт — 2–6 запусков в сутки, а разрывы 4–9 часов штатны (замер 22.11.2026,
- * `.scratch/incident-2211/infra-clock-facts.md`). Порог в 45 минут объявлял
- * тревогу на каждом обычном ходе и врал о причине. Сутки — примерно 2.5 худшего
- * наблюдённого разрыва: тревога означает реальную остановку, а не троттлинг.
- */
-export const CLOCK_STALL_AFTER_MINUTES = 24 * 60;
-
-export function clockHeartbeatKey(userId: number): string {
-  return `clock:v1:${userId}`;
-}
-
-export interface ClockHeartbeat {
-  lastTouchAt: string | null;
-  lastExternalAttemptAt: string | null;
-  lastExternalSuccessAt: string | null;
-  source: ReminderClockSource;
-  delivered: number;
-  failed: number;
-  kinds: {
-    task_reminder: ReminderClockStatus;
-    liability_warning: ReminderClockStatus;
-    medication_reminder: ReminderClockStatus;
-    morning_digest: ReminderClockStatus;
+    custom_routines: ReminderClockKindOutcome;
   };
 }
 
@@ -143,6 +158,7 @@ async function writeClockHeartbeat(userId: number, outcome: ReminderClockOutcome
     liability_warning: o.kinds.liability_warning.status,
     medication_reminder: o.kinds.medication_reminder.status,
     morning_digest: o.kinds.morning_digest.status,
+    custom_routines: o.kinds.custom_routines.status,
   });
   const next: ClockHeartbeat = {
     lastTouchAt: previous?.lastTouchAt ?? null,
@@ -212,12 +228,216 @@ async function journalDeliveryFailure(
   }
 }
 
+const BACKGROUND_ROUTINE_FORBIDDEN_TOOLS: ReadonlySet<string> = new Set([
+  'manage_routines',
+  'reset_or_rollback_settings',
+]);
+
+async function renderSummaryRoutine(
+  userId: number,
+  routine: CustomRoutine,
+  now: Date,
+): Promise<string> {
+  switch (routine.summaryKind) {
+    case 'balance':
+      return balanceSummary(userId, { now });
+    case 'debts':
+      return debtsSummary(userId, { now });
+    case 'tasks':
+      return tasksSummary(userId, { now });
+    case 'meds':
+      return medsSummary(userId, { now });
+    case 'digest':
+      return buildMorningDigest(userId, { now });
+    case 'quick':
+    default:
+      return quickSummary(userId, { now });
+  }
+}
+
+async function renderRoutineMessage(
+  userId: number,
+  routine: CustomRoutine,
+  now: Date,
+  chatFn?: AgentChatFn,
+): Promise<string> {
+  if (routine.kind === 'text') {
+    return `⏰ **${routine.name}**\n\n${routine.message ?? ''}`.trim();
+  }
+  if (routine.kind === 'summary') {
+    const body = await renderSummaryRoutine(userId, routine, now);
+    return `⏰ **${routine.name}**\n\n${body}`;
+  }
+
+  const allowWrites = routine.toolAccess === 'allow_writes';
+  const allTools = listTools();
+  const allowedTools = allowWrites
+    ? allTools.filter(
+        (tool) => tool.effect.kind !== 'destroy' && !BACKGROUND_ROUTINE_FORBIDDEN_TOOLS.has(tool.name),
+      )
+    : allTools.filter((tool) => tool.effect.kind === 'read');
+
+  const agentResult = await runAgent({
+    userId,
+    text: routine.prompt ?? routine.name,
+    mode: 'auto',
+    maxSteps: 4,
+    turnBudgetMs: 12_000,
+    store: null,
+    tools: allowedTools,
+    toolAccess: allowWrites ? 'full' : 'read-only',
+    background: true,
+    backgroundDirective:
+      'Это фоновый запуск регулярной рутины по расписанию (без истории диалога). ' +
+      'Не задавай уточняющих вопросов, используй только доступные инструменты и сразу сформируй короткое полезное сообщение для Telegram.',
+    now,
+    ...(chatFn ? { chatFn } : {}),
+  });
+
+  if (agentResult.stopReason === 'llm_error' || !agentResult.reply.trim()) {
+    throw new Error(`AI routine ${routine.id} failed (${agentResult.stopReason})`);
+  }
+
+  return `🤖 **${routine.name}**\n\n${agentResult.reply.trim()}`;
+}
+
+export interface CustomRoutineDeliveryResult {
+  delivered: number;
+  failed: number;
+  skipped: number;
+  expired: number;
+}
+
 /**
- * Один проход напоминаний: задачи, обязательства, дозы, утренняя сводка.
+ * Доставка кастомных регулярных рутин из `user_prefs.proactive.routines`.
+ * Выполняется в общем цикле `runReminderClock`: уважает `quietHours`, дедуплицирует
+ * срабатывания через `kv` (`routine_run:<uid>:<id>:<triggerDayKey>`), не пускает
+ * AI-рутины с `rpc`-источника и ограничивает `touch` 1 AI-рутиной за проход.
+ */
+export async function deliverCustomRoutines(
+  userId: number,
+  options: {
+    now?: Date | string;
+    source?: ReminderClockSource;
+    chatId?: number;
+    chatFn?: AgentChatFn;
+  } = {},
+): Promise<CustomRoutineDeliveryResult> {
+  const result: CustomRoutineDeliveryResult = {
+    delivered: 0,
+    failed: 0,
+    skipped: 0,
+    expired: 0,
+  };
+  const rawNow = options.now ?? new Date();
+  const now = rawNow instanceof Date ? rawNow : new Date(rawNow);
+  if (Number.isNaN(now.getTime())) return result;
+
+  const [user, prefs] = await Promise.all([
+    getUser(userId).catch(() => null),
+    loadUserPrefs(userId).catch((): UserPrefs => ({})),
+  ]);
+  const routinesMap = prefs.proactive?.routines;
+  if (!user || !routinesMap) return result;
+
+  const routines = Object.values(routinesMap).sort(
+    (a, b) => a.time.localeCompare(b.time) || a.id.localeCompare(b.id),
+  );
+  if (routines.length === 0) return result;
+
+  const timeZone = user.timezone ?? 'Europe/Berlin';
+  const source: ReminderClockSource = options.source ?? 'touch';
+  const chatId = options.chatId ?? userId;
+  let aiExecutedInPass = 0;
+
+  for (const routine of routines) {
+    const evalResult = evaluateRoutineSchedule(routine, now, timeZone);
+    if (!evalResult.due || !evalResult.triggerDayKey) continue;
+
+    if (
+      routine.respectQuietHours !== false &&
+      isInQuietHours(now, timeZone, prefs.proactive?.quietHours)
+    ) {
+      result.skipped += 1;
+      continue;
+    }
+
+    const key = routineRunKey(userId, routine.id, evalResult.triggerDayKey);
+    if ((await kvGet(key)) !== null) {
+      result.skipped += 1;
+      continue;
+    }
+
+    if (routine.kind === 'ai') {
+      if (source === 'rpc') {
+        result.skipped += 1;
+        continue;
+      }
+      if (source === 'touch' && aiExecutedInPass >= 1) {
+        result.skipped += 1;
+        continue;
+      }
+      const spend = await checkSpendLimit(userId, user.modelProvider ?? 'gemini');
+      if (!spend.allowed) {
+        result.skipped += 1;
+        continue;
+      }
+    }
+
+    const claimed = await kvSetIfAbsent(
+      key,
+      JSON.stringify({
+        triggerDate: evalResult.triggerDayKey,
+        ranAt: toIso(now),
+        kind: routine.kind,
+      }),
+    );
+    if (!claimed) {
+      result.skipped += 1;
+      continue;
+    }
+
+    if (routine.kind === 'ai') {
+      aiExecutedInPass += 1;
+    }
+
+    let sentChunks = 0;
+    try {
+      const markdown = await renderRoutineMessage(userId, routine, now, options.chatFn);
+      const html = markdownToTelegramHtml(markdown);
+      const chunks = splitMessageChunks(html);
+      for (const chunk of chunks) {
+        await api.sendMessage({
+          chat_id: chatId,
+          text: chunk,
+          parse_mode: 'HTML',
+        });
+        sentChunks += 1;
+      }
+      result.delivered += 1;
+    } catch (err) {
+      const permanent = err instanceof BotApiError && (err.code === 400 || err.code === 403);
+      if (!permanent && sentChunks === 0) {
+        try {
+          await kvDelete(key);
+        } catch (deleteErr) {
+          console.warn('jobs: custom routine claim release failed', userId, routine.id, deleteErr);
+        }
+      }
+      result.failed += 1;
+      await journalDeliveryFailure(userId, `deliverCustomRoutines:${routine.id}`, err);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Один проход напоминаний: задачи, обязательства, дозы, утренняя сводка и кастомные рутины.
  *
- * Все четыре вида получают один и тот же `now`, каждый идёт в своём `try`:
+ * Все пять видов получают один и тот же `now`, каждый идёт в своём `try`:
  * сбой одного не гасит остальные. Заглушек и новых уведомлений не появляется —
- * это координация существующих доставщиков, а не второй планировщик.
+ * это координация существующих доставщиков и кастомных рутин пользователя.
  */
 export async function runReminderClock(
   userId: number,
@@ -239,34 +459,57 @@ export async function runReminderClock(
     liability_warning: empty(),
     medication_reminder: empty(),
     morning_digest: empty(),
+    custom_routines: empty(),
   };
 
   try {
-    kinds.task_reminder = countOutcome(await deliverDueReminders(userId, { now }));
+    kinds.task_reminder = countOutcome(
+      await deliverDueReminders(userId, { now, ...(options.chatId !== undefined ? { chatId: options.chatId } : {}) }),
+    );
   } catch (err) {
     kinds.task_reminder = failedOutcome(err);
     await journalDeliveryFailure(userId, 'deliverDueReminders', err);
   }
 
   try {
-    kinds.liability_warning = countOutcome(await deliverLiabilityWarnings(userId, { now }));
+    kinds.liability_warning = countOutcome(
+      await deliverLiabilityWarnings(userId, { now, ...(options.chatId !== undefined ? { chatId: options.chatId } : {}) }),
+    );
   } catch (err) {
     kinds.liability_warning = failedOutcome(err);
     await journalDeliveryFailure(userId, 'deliverLiabilityWarnings', err);
   }
 
   try {
-    kinds.medication_reminder = countOutcome(await deliverMedicationReminders(userId, { now }));
+    kinds.medication_reminder = countOutcome(
+      await deliverMedicationReminders(userId, { now, ...(options.chatId !== undefined ? { chatId: options.chatId } : {}) }),
+    );
   } catch (err) {
     kinds.medication_reminder = failedOutcome(err);
     await journalDeliveryFailure(userId, 'deliverMedicationReminders', err);
   }
 
   try {
-    kinds.morning_digest = countOutcome(await deliverMorningDigest(userId, { now }));
+    kinds.morning_digest = countOutcome(
+      await deliverMorningDigest(userId, { now, ...(options.chatId !== undefined ? { chatId: options.chatId } : {}) }),
+    );
   } catch (err) {
     kinds.morning_digest = failedOutcome(err);
     await journalDeliveryFailure(userId, 'deliverMorningDigest', err);
+  }
+
+  try {
+    kinds.custom_routines = countOutcome(
+      await deliverCustomRoutines(userId, {
+        now,
+        source,
+        ...(options.chatId !== undefined ? { chatId: options.chatId } : {}),
+        ...(options.chatFn ? { chatFn: options.chatFn } : {}),
+      }),
+    );
+  } catch (err) {
+    kinds.custom_routines = failedOutcome(err);
+    await journalDeliveryFailure(userId, 'deliverCustomRoutines', err);
   }
 
   const totals = { delivered: 0, failed: 0, skipped: 0, expired: 0 };
@@ -275,6 +518,7 @@ export async function runReminderClock(
     'liability_warning',
     'medication_reminder',
     'morning_digest',
+    'custom_routines',
   ] as const) {
     const kind = kinds[key];
     totals.delivered += kind.delivered;

@@ -57,6 +57,8 @@ export interface FinanceSummaryResponse {
   month: string;
   total_spent_eur: number;
   total_income_eur: number;
+  total_budgeted_eur: number;
+  total_budgeted_spent_eur: number;
   categories: CategorySpendingResponse[];
 }
 
@@ -101,8 +103,12 @@ export default async function (
   }
 
   const limitByCategory = new Map<number, number>();
+  let totalBudgetedCents = 0;
+  let totalBudgetedSpentCents = 0;
   for (const budget of budgets) {
     limitByCategory.set(budget.categoryId, budget.limitAmountEurCents);
+    totalBudgetedCents += budget.limitAmountEurCents;
+    totalBudgetedSpentCents += spentByCategory.get(budget.categoryId) ?? 0;
   }
 
   const categoryRows: CategorySpendingResponse[] = [];
@@ -125,13 +131,20 @@ export default async function (
     });
   }
 
-  categoryRows.sort((a, b) => b.spent_eur - a.spent_eur);
+  categoryRows.sort(
+    (a, b) =>
+      b.spent_eur - a.spent_eur ||
+      (b.limit_eur ?? 0) - (a.limit_eur ?? 0) ||
+      a.category_name.localeCompare(b.category_name),
+  );
 
   return {
     total_net_worth_eur: round2(netWorthCents / 100),
     month,
     total_spent_eur: round2(totalSpentCents / 100),
     total_income_eur: round2(totalIncomeCents / 100),
+    total_budgeted_eur: round2(totalBudgetedCents / 100),
+    total_budgeted_spent_eur: round2(totalBudgetedSpentCents / 100),
     categories: categoryRows,
   };
 }

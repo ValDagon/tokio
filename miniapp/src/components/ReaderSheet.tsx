@@ -24,6 +24,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import type {
+  DiaryEntryDetail,
   DocChapterDetail,
   DocChapterSummary,
   Note,
@@ -613,7 +614,7 @@ export const RichMarkdown: React.FC<RichMarkdownProps> = ({
 };
 
 export interface ReaderSheetProps {
-  mode: 'note' | 'doc' | 'dossier' | 'skill';
+  mode: 'note' | 'doc' | 'dossier' | 'skill' | 'diary';
   onClose: () => void;
   triggerHaptic: (type?: 'light' | 'medium' | 'success') => void;
 
@@ -650,6 +651,13 @@ export interface ReaderSheetProps {
   skill?: ReaderSkillData | null;
   onActivateSkill?: (skillId: string) => Promise<void>;
   onRejectSkill?: (skillId: string) => Promise<boolean | void>;
+
+  // Diary mode props (read-only)
+  diaryEntry?: DiaryEntryDetail | null;
+  loadingDiary?: boolean;
+  onPrevDiary?: (() => void) | null;
+  onNextDiary?: (() => void) | null;
+  diaryPositionLabel?: string;
 }
 
 const FONT_SCALE_ORDER: readonly ReaderFontScale[] = ['normal', 'large', 'xlarge'];
@@ -687,6 +695,11 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
   skill,
   onActivateSkill,
   onRejectSkill,
+  diaryEntry,
+  loadingDiary,
+  onPrevDiary,
+  onNextDiary,
+  diaryPositionLabel,
 }) => {
   const { locale, t, formatDate } = useI18n();
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -711,6 +724,8 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
       ? docChapter?.slug
       : mode === 'skill'
       ? `skill-${skill?.source}-${skill?.id}`
+      : mode === 'diary'
+      ? `diary-${diaryEntry?.date}`
       : 'dossier';
 
   useEffect(() => {
@@ -744,8 +759,11 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
     if (mode === 'skill' && skill) {
       return skill.body || '';
     }
+    if (mode === 'diary' && diaryEntry) {
+      return diaryEntry.content || '';
+    }
     return '';
-  }, [mode, note, docChapter, dossierContent, skill]);
+  }, [mode, note, docChapter, dossierContent, skill, diaryEntry]);
 
   const tocHeadings = useMemo(() => {
     const all = extractTocHeadings(fullMarkdown);
@@ -824,6 +842,8 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
       ? noteColumns.find((c) => c.id === note.column)?.name || note.column
       : mode === 'doc'
       ? t('reader.docsBadge')
+      : mode === 'diary'
+      ? t('reader.diaryBadge')
       : mode === 'skill' && skill
       ? skill.source === 'builtin'
         ? t('skills.builtinBadge')
@@ -835,6 +855,8 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
       ? getNoteSummary(fullMarkdown, locale)
       : mode === 'doc' && docChapter
       ? docChapter.title
+      : mode === 'diary' && diaryEntry
+      ? formatDate(diaryEntry.date, { day: 'numeric', month: 'long', year: 'numeric' })
       : mode === 'skill' && skill
       ? skill.title
       : t('reader.dossierTitle');
@@ -874,10 +896,30 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
     };
   }, [mode, note, fullMarkdown, headerTitle, locale]);
 
-  const prevHandler = mode === 'note' ? onPrevNote : mode === 'doc' ? onPrevDoc : null;
-  const nextHandler = mode === 'note' ? onNextNote : mode === 'doc' ? onNextDoc : null;
+  const prevHandler =
+    mode === 'note'
+      ? onPrevNote
+      : mode === 'doc'
+      ? onPrevDoc
+      : mode === 'diary'
+      ? onPrevDiary
+      : null;
+  const nextHandler =
+    mode === 'note'
+      ? onNextNote
+      : mode === 'doc'
+      ? onNextDoc
+      : mode === 'diary'
+      ? onNextDiary
+      : null;
   const positionLabel =
-    mode === 'note' ? notePositionLabel : mode === 'doc' ? docPositionLabel : undefined;
+    mode === 'note'
+      ? notePositionLabel
+      : mode === 'doc'
+      ? docPositionLabel
+      : mode === 'diary'
+      ? diaryPositionLabel
+      : undefined;
 
   return (
     <div
@@ -1046,6 +1088,11 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
                 <BookOpen size={12} />
                 <span>{docChapter?.filename || 'docs/system'}</span>
               </span>
+            ) : mode === 'diary' ? (
+              <span className="reader-source-badge">
+                <BookOpen size={12} />
+                <span className="tabular-nums">{diaryEntry?.date || t('reader.diaryBadge')}</span>
+              </span>
             ) : mode === 'skill' && skill ? (
               <>
                 <span className="reader-source-badge">
@@ -1120,10 +1167,10 @@ export const ReaderSheet: React.FC<ReaderSheetProps> = ({
         )}
 
         {/* Content or Note Editor */}
-        {loadingDocDetail && !fullMarkdown ? (
+        {(loadingDocDetail || loadingDiary) && !fullMarkdown ? (
           <div className="empty-state" style={{ padding: 48 }}>
             <Sparkles size={28} color="var(--accent-color)" />
-            <p>{t('reader.loadingChapter')}</p>
+            <p>{loadingDiary ? t('reader.loadingDiary') : t('reader.loadingChapter')}</p>
           </div>
         ) : isEditingNote && mode === 'note' && note ? (
           <div className="reader-note-editor">

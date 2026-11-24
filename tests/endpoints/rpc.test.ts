@@ -12,7 +12,10 @@ import { setConfigOverrides } from '../../src/lib/config';
 import { getAgentState, saveThread } from '../../src/lib/dal/agentState';
 import { addItem, buildSkillSpec } from '../../src/lib/evolution';
 import { createNote, getNote } from '../../src/lib/dal/notes';
-import { createTask } from '../../src/lib/dal/tasks';
+import { appendReflection } from '../../src/lib/diary';
+import { getOverlay } from '../../src/lib/overlay';
+import { saveUserPrefs, captureSettingsState, buildPresetPayloadFromState } from '../../src/lib/prefs';
+import { createTask, ensureSystemCategories } from '../../src/lib/dal/tasks';
 
 import type { ToolContext, ToolOutcome } from '../../src/lib/agent/registry';
 import type { LiabilityQueue } from '../../src/lib/types';
@@ -1482,6 +1485,8 @@ describe('RPC: неизвестные маршруты вместо фиктив
       { path: '/api/system/session/reset', method: 'GET' },
       { path: '/api/finances/fx', method: 'DELETE' },
       { path: '/api/docs/search', method: 'POST' },
+      { path: '/api/diary', method: 'POST' },
+      { path: '/api/diary/2026-11-24', method: 'DELETE' },
     ];
     for (const req of checks) {
       const err = await catchEndpointError(rpcEndpoint(req, mockCtx));
@@ -1490,5 +1495,434 @@ describe('RPC: неизвестные маршруты вместо фиктив
         status: 405,
       });
     }
+  });
+
+  it('GET /api/diary и GET /api/diary/:date отдают список и запись, проверяют формат и 404', async () => {
+    await ensureUser(TEST_USER);
+    await appendReflection(TEST_USER, 'Мысль в дневник', { date: '2026-11-20', energy: 7 });
+
+    const listRes = (await rpcEndpoint({ path: '/api/diary', method: 'GET' }, mockCtx)) as {
+      entries: Array<{ date: string; preview: string; energy: string | null }>;
+    };
+    expect(listRes.entries).toHaveLength(1);
+    expect(listRes.entries[0]).toMatchObject({
+      date: '2026-11-20',
+      preview: 'Мысль в дневник',
+      energy: '7',
+    });
+
+    const detailRes = (await rpcEndpoint(
+      { path: '/api/diary/2026-11-20', method: 'GET' },
+      mockCtx,
+    )) as { date: string; content: string };
+    expect(detailRes.date).toBe('2026-11-20');
+    expect(detailRes.content).toContain('Мысль в дневник');
+
+    const badDate = await catchEndpointError(
+      rpcEndpoint({ path: '/api/diary/bad-date', method: 'GET' }, mockCtx),
+    );
+    expect(badDate.parameters).toMatchObject({ code: 'BAD_REQUEST' });
+
+    const missing = await catchEndpointError(
+      rpcEndpoint({ path: '/api/diary/2026-11-19', method: 'GET' }, mockCtx),
+    );
+    expect(missing.parameters).toMatchObject({ code: 'NOT_FOUND', status: 404 });
+  });
+
+  it('DELETE /api/finances/budgets/:categoryId удаляет лимит, проверяет 400/404 и 405 на GET', async () => {
+    await ensureUser(TEST_USER);
+    await rpcEndpoint(
+      {
+        path: '/api/finances/budgets',
+        method: 'POST',
+        body: { category_name: 'Кафе', limit_amount_eur: 150, month: '2026-11' },
+      },
+      mockCtx,
+    );
+
+    const cats = await listCategories(TEST_USER, 'expense');
+    const cafe = cats.find((c) => c.name === 'Кафе');
+    expect(cafe).toBeDefined();
+
+    const wrongMethod = await catchEndpointError(
+      rpcEndpoint({ path: `/api/finances/budgets/${cafe!.id}`, method: 'GET' }, mockCtx),
+    );
+    expect(wrongMethod.parameters).toMatchObject({ code: 'METHOD_NOT_ALLOWED', status: 405 });
+
+    const badMonth = await catchEndpointError(
+      rpcEndpoint({ path: `/api/finances/budgets/${cafe!.id}?month=2026-13`, method: 'DELETE' }, mockCtx),
+    );
+    expect(badMonth.parameters).toMatchObject({ code: 'BAD_REQUEST' });
+
+    const deleted = (await rpcEndpoint(
+      { path: `/api/finances/budgets/${cafe!.id}?month=2026-11`, method: 'DELETE' },
+      mockCtx,
+    )) as { deleted: boolean; category_id: string };
+    expect(deleted.deleted).toBe(true);
+    expect(deleted.category_id).toBe(String(cafe!.id));
+
+    const notFound = await catchEndpointError(
+      rpcEndpoint({ path: `/api/finances/budgets/${cafe!.id}?month=2026-11`, method: 'DELETE' }, mockCtx),
+    );
+    expect(notFound.parameters).toMatchObject({ code: 'NOT_FOUND', status: 404 });
+  });
+
+  it('POST /api/tasks и PATCH /api/tasks/:id возвращают category_name и subcategory_name и сбрасывают при null', async () => {
+    await ensureSystemCategories(TEST_USER);
+    const cats = (await rpcEndpoint({ path: '/api/categories', method: 'GET' }, mockCtx)) as Array<{
+      id: string;
+      name: string;
+      subcategories: Array<{ id: string; name: string }>;
+    }>;
+    const hobby = cats.find((c) => c.name === 'Хобби');
+    const yt = hobby?.subcategories.find((s) => s.name === 'YouTube');
+    const byt = cats.find((c) => c.name === 'Быт');
+    const clean = byt?.subcategories.find((s) => s.name === 'Гигиена и уборка');
+    expect(hobby && yt && byt && clean).toBeTruthy();
+
+    const created = (await rpcEndpoint(
+      {
+        path: '/api/tasks',
+        method: 'POST',
+        body: {
+          title: 'Смонтировать выпуск',
+          category_id: hobby!.id,
+          subcategory_id: yt!.id,
+        },
+      },
+      mockCtx,
+    )) as { category_id?: string; category_name?: string; subcategory_id?: string; subcategory_name?: string; id: string };
+    expect(created.category_name).toBe('Хобби');
+    expect(created.subcategory_id).toBe(yt!.id);
+    expect(created.subcategory_name).toBe('YouTube');
+
+    const moved = (await rpcEndpoint(
+      {
+        path: `/api/tasks/${created.id}`,
+        method: 'PATCH',
+        body: { category_id: byt!.id, subcategory_id: clean!.id },
+      },
+      mockCtx,
+    )) as { category_name?: string; subcategory_name?: string };
+    expect(moved.category_name).toBe('Быт');
+    expect(moved.subcategory_name).toBe('Гигиена и уборка');
+
+    const cleared = (await rpcEndpoint(
+      {
+        path: `/api/tasks/${created.id}`,
+        method: 'PATCH',
+        body: { subcategory_id: null },
+      },
+      mockCtx,
+    )) as { category_name?: string; subcategory_id?: string; subcategory_name?: string };
+    expect(cleared.category_name).toBe('Быт');
+    expect(cleared.subcategory_id).toBeUndefined();
+    expect(cleared.subcategory_name).toBeUndefined();
+  });
+
+  it('GET /api/config/ui применяет оверрайды UserPrefs поверх манифеста оверлея', async () => {
+    await ensureUser(TEST_USER, 'Тест');
+    const manifest = getOverlay().manifest;
+
+    const baseUi = (await rpcEndpoint({ path: '/api/config/ui', method: 'GET' }, mockCtx)) as {
+      brand: { assistantName: string };
+      finance: { reserveAmount: number };
+      miniapp: { tabs: string[]; accountThemes: Array<{ pattern: string; theme: string }> };
+      personas: Array<{ id: string }>;
+      summary: { activeRoutinesCount: number; totalRoutinesCount: number; presetsCount: number };
+    };
+    expect(baseUi.brand.assistantName).toBe(manifest.brand.assistantName);
+    expect(baseUi.miniapp.tabs).toEqual(manifest.miniapp.tabs);
+    expect(baseUi.personas).toEqual([]);
+
+    await saveUserPrefs(TEST_USER, {
+      assistantName: 'Atlas',
+      adhd: { focusLimit: 2 },
+      finance: {
+        reserveCents: 30_000,
+        accountAliases: [{ account: 'Main Card', patterns: ['main', 'card'] }],
+      },
+      brain: {
+        customPersonas: {
+          zen: {
+            id: 'zen',
+            name: 'Zen',
+            description: 'Calm helper',
+            instructions: 'Speak softly.',
+            updatedAt: '2026-11-24T12:00:00Z',
+          },
+        },
+      },
+      proactive: {
+        routines: {
+          r1: {
+            id: 'r1',
+            name: 'Check-in',
+            enabled: true,
+            kind: 'text',
+            schedule: 'daily',
+            time: '10:00',
+            message: 'Ping',
+            updatedAt: '2026-11-24T12:00:00Z',
+          },
+        },
+      },
+      miniapp: {
+        tabs: ['finances', 'today', 'system'],
+        accountThemes: [
+          { pattern: 'Main Card', theme: 'primary', shortName: 'Main', roleLabel: 'Daily' },
+        ],
+      },
+    });
+
+    const overriddenUi = (await rpcEndpoint({ path: '/api/config/ui', method: 'GET' }, mockCtx)) as {
+      brand: { assistantName: string; localizedNames: Record<string, string> };
+      finance: { reserveAmount: number; accountAliases: Array<{ account: string }> };
+      miniapp: { tabs: string[]; accountThemes: Array<{ pattern: string; shortName?: string }> };
+      adhd: { focusLimit: number | null };
+      personas: Array<{ id: string; name: string }>;
+      summary: { activeRoutinesCount: number; totalRoutinesCount: number; presetsCount: number };
+    };
+    expect(overriddenUi.brand.assistantName).toBe('Atlas');
+    expect(overriddenUi.brand.localizedNames.ru).toBe('Atlas');
+    expect(overriddenUi.finance.reserveAmount).toBe(300);
+    expect(overriddenUi.finance.accountAliases[0]?.account).toBe('Main Card');
+    expect(overriddenUi.miniapp.tabs).toEqual(['finances', 'today', 'system']);
+    expect(overriddenUi.miniapp.accountThemes[0]).toMatchObject({
+      pattern: 'Main Card',
+      shortName: 'Main',
+    });
+    expect(overriddenUi.adhd.focusLimit).toBe(2);
+    expect(overriddenUi.personas).toHaveLength(1);
+    expect(overriddenUi.summary).toEqual({
+      activeRoutinesCount: 1,
+      totalRoutinesCount: 1,
+      presetsCount: 0,
+    });
+  });
+
+  it('управляет рутинами, пресетами, сбросом, откатом и флагом disabled в /api/skills через RPC', async () => {
+    await ensureUser(TEST_USER, 'Тест');
+    const baseState = await captureSettingsState(TEST_USER);
+    const focusSnapshot = buildPresetPayloadFromState({
+      ...baseState,
+      profile: { ...baseState.profile, lowStimulationMode: true },
+      directives: { ...baseState.directives, style: 'concise' },
+      prefs: { ...baseState.prefs, assistantName: 'FocusBot', adhd: { focusLimit: 2 } },
+    });
+    const openaiSnapshot = buildPresetPayloadFromState({
+      ...baseState,
+      profile: { ...baseState.profile, modelProvider: 'openai' },
+    });
+
+    await saveUserPrefs(TEST_USER, {
+      brain: {
+        disabledBuiltinSkills: ['daily-focus'],
+      },
+      proactive: {
+        routines: {
+          ping: {
+            id: 'ping',
+            name: 'Утренний пинг',
+            enabled: true,
+            kind: 'text',
+            schedule: 'daily',
+            time: '08:30',
+            message: 'Доброе утро',
+            updatedAt: '2026-11-24T12:00:00Z',
+          },
+          ai_1: {
+            id: 'ai_1',
+            name: 'AI 1',
+            enabled: true,
+            kind: 'ai',
+            schedule: 'daily',
+            time: '09:00',
+            prompt: 'P1',
+            updatedAt: '2026-11-24T12:00:00Z',
+          },
+          ai_2: {
+            id: 'ai_2',
+            name: 'AI 2',
+            enabled: true,
+            kind: 'ai',
+            schedule: 'daily',
+            time: '10:00',
+            prompt: 'P2',
+            updatedAt: '2026-11-24T12:00:00Z',
+          },
+          ai_3: {
+            id: 'ai_3',
+            name: 'AI 3',
+            enabled: true,
+            kind: 'ai',
+            schedule: 'daily',
+            time: '11:00',
+            prompt: 'P3',
+            updatedAt: '2026-11-24T12:00:00Z',
+          },
+          ai_4: {
+            id: 'ai_4',
+            name: 'AI 4',
+            enabled: false,
+            kind: 'ai',
+            schedule: 'daily',
+            time: '12:00',
+            prompt: 'P4',
+            updatedAt: '2026-11-24T12:00:00Z',
+          },
+        },
+      },
+      presets: {
+        sprint: {
+          id: 'sprint',
+          name: 'Спринт',
+          description: 'Фокус-режим',
+          snapshot: focusSnapshot,
+          updatedAt: '2026-11-24T12:00:00Z',
+        },
+        needs_openai: {
+          id: 'needs_openai',
+          name: 'OpenAI Preset',
+          snapshot: openaiSnapshot,
+          updatedAt: '2026-11-24T12:00:00Z',
+        },
+      },
+    });
+
+    // 1. GET /api/settings возвращает summary, пресеты и рутины без секретов
+    const settingsRes = (await rpcEndpoint({ path: '/api/settings', method: 'GET' }, mockCtx)) as {
+      prefs_summary: { has_overrides: boolean; history_count: number };
+      presets: Array<{ id: string }>;
+      routines: Array<{ id: string; enabled: boolean }>;
+    };
+    expect(settingsRes.prefs_summary.has_overrides).toBe(true);
+    expect(settingsRes.presets.map((p) => p.id)).toContain('sprint');
+    expect(settingsRes.routines.find((r) => r.id === 'ping')?.enabled).toBe(true);
+    expect(JSON.stringify(settingsRes)).not.toContain('masterKey');
+
+    // 2. GET /api/skills помечает отключённые встроенные скиллы
+    const skillsRes = (await rpcEndpoint({ path: '/api/skills', method: 'GET' }, mockCtx)) as {
+      builtin: Array<{ id: string; disabled?: boolean }>;
+    };
+    const disabledSkill = skillsRes.builtin.find((s) => s.id === 'daily-focus');
+    expect(disabledSkill).toBeDefined();
+    expect(disabledSkill?.disabled).toBe(true);
+
+    // 3. PATCH /api/settings/routines/:id — 405 на GET, 404 на неизвестный ID, 400 на лимит 3 AI-рутин, успех на ping
+    const routineGetErr = await catchEndpointError(
+      rpcEndpoint({ path: '/api/settings/routines/ping', method: 'GET' }, mockCtx),
+    );
+    expect(routineGetErr.parameters).toMatchObject({ code: 'METHOD_NOT_ALLOWED', status: 405 });
+
+    const routineMissing = await catchEndpointError(
+      rpcEndpoint({ path: '/api/settings/routines/unknown_id', method: 'PATCH', body: { enabled: false } }, mockCtx),
+    );
+    expect(routineMissing.parameters).toMatchObject({ code: 'NOT_FOUND', status: 404 });
+
+    const aiCapErr = await catchEndpointError(
+      rpcEndpoint({ path: '/api/settings/routines/ai_4', method: 'PATCH', body: { enabled: true } }, mockCtx),
+    );
+    expect(aiCapErr.parameters).toMatchObject({ code: 'BAD_REQUEST' });
+
+    const toggledOff = (await rpcEndpoint(
+      { path: '/api/settings/routines/ping', method: 'PATCH', body: { enabled: false } },
+      mockCtx,
+    )) as { ok: boolean; enabled: boolean; settings: { prefs_summary: { history_count: number } } };
+    expect(toggledOff.ok).toBe(true);
+    expect(toggledOff.enabled).toBe(false);
+    expect(toggledOff.settings.prefs_summary.history_count).toBeGreaterThanOrEqual(1);
+
+    // 4. POST /api/settings/presets/:id/apply — проверка ключа провайдера, 404, 405, и применение пресета
+    const presetGetErr = await catchEndpointError(
+      rpcEndpoint({ path: '/api/settings/presets/sprint/apply', method: 'GET' }, mockCtx),
+    );
+    expect(presetGetErr.parameters).toMatchObject({ code: 'METHOD_NOT_ALLOWED', status: 405 });
+
+    const missingKeyPreset = await catchEndpointError(
+      rpcEndpoint({ path: '/api/settings/presets/needs_openai/apply', method: 'POST' }, mockCtx),
+    );
+    expect(missingKeyPreset.parameters).toMatchObject({ code: 'BAD_REQUEST' });
+
+    const appliedPreset = (await rpcEndpoint(
+      { path: '/api/settings/presets/sprint/apply', method: 'POST' },
+      mockCtx,
+    )) as { ok: boolean; settings: { assistant_name: string; persona_style: string; low_stimulation_mode: boolean } };
+    expect(appliedPreset.ok).toBe(true);
+    expect(appliedPreset.settings.assistant_name).toBe('FocusBot');
+    expect(appliedPreset.settings.persona_style).toBe('concise');
+    expect(appliedPreset.settings.low_stimulation_mode).toBe(true);
+
+    // 5. POST /api/settings/reset и POST /api/settings/rollback
+    const badSection = await catchEndpointError(
+      rpcEndpoint({ path: '/api/settings/reset', method: 'POST', body: { section: 'invalid' } }, mockCtx),
+    );
+    expect(badSection.parameters).toMatchObject({ code: 'BAD_REQUEST' });
+
+    const resetRes = (await rpcEndpoint(
+      { path: '/api/settings/reset', method: 'POST', body: { section: 'all' } },
+      mockCtx,
+    )) as { ok: boolean; settings: { assistant_name: string | null; presets: Array<{ id: string }> } };
+    expect(resetRes.ok).toBe(true);
+    expect(resetRes.settings.assistant_name).toBeNull();
+    // Пресеты сохраняются при сбросе all
+    expect(resetRes.settings.presets.map((p) => p.id)).toContain('sprint');
+
+    const rolledBack = (await rpcEndpoint(
+      { path: '/api/settings/rollback', method: 'POST', body: { steps: 1 } },
+      mockCtx,
+    )) as { ok: boolean; settings: { assistant_name: string | null } };
+    expect(rolledBack.ok).toBe(true);
+    expect(rolledBack.settings.assistant_name).toBe('FocusBot');
+
+    // Повторный вызов с неверным шагом -> 400
+    const badSteps = await catchEndpointError(
+      rpcEndpoint({ path: '/api/settings/rollback', method: 'POST', body: { steps: 99 } }, mockCtx),
+    );
+    expect(badSteps.parameters).toMatchObject({ code: 'BAD_REQUEST' });
+
+    const arraySteps = await catchEndpointError(
+      rpcEndpoint({ path: '/api/settings/rollback', method: 'POST', body: { steps: [2] } }, mockCtx),
+    );
+    expect(arraySteps.parameters).toMatchObject({ code: 'BAD_REQUEST' });
+
+    // 6. Защита от prototype lookup (constructor) и битого percent-encoding, плюс 403 при whitelist
+    const protoRoutine = await catchEndpointError(
+      rpcEndpoint(
+        { path: '/api/settings/routines/constructor', method: 'PATCH', body: { enabled: true } },
+        mockCtx,
+      ),
+    );
+    expect(protoRoutine.parameters).toMatchObject({ code: 'NOT_FOUND', status: 404 });
+
+    const protoPreset = await catchEndpointError(
+      rpcEndpoint({ path: '/api/settings/presets/constructor/apply', method: 'POST' }, mockCtx),
+    );
+    expect(protoPreset.parameters).toMatchObject({ code: 'NOT_FOUND', status: 404 });
+
+    const malformedUri = await catchEndpointError(
+      rpcEndpoint(
+        { path: '/api/settings/routines/%E0%A4%A', method: 'PATCH', body: { enabled: false } },
+        mockCtx,
+      ),
+    );
+    expect(malformedUri.parameters).toMatchObject({ code: 'BAD_REQUEST' });
+
+    setConfigOverrides({
+      masterKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      adminIds: [999999998],
+    });
+    const deniedConfigUi = await catchEndpointError(
+      rpcEndpoint({ path: '/api/config/ui', method: 'GET' }, { initData: { user: { id: 888888887 } } }),
+    );
+    expect(deniedConfigUi.parameters).toMatchObject({ code: 'FORBIDDEN', status: 403 });
+
+    const deniedReset = await catchEndpointError(
+      rpcEndpoint(
+        { path: '/api/settings/reset', method: 'POST', body: { section: 'all' } },
+        { initData: { user: { id: 888888887 } } },
+      ),
+    );
+    expect(deniedReset.parameters).toMatchObject({ code: 'FORBIDDEN', status: 403 });
   });
 });

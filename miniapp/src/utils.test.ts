@@ -6,6 +6,7 @@ import {
   formatTaskDate,
   formatTaskCreatedDate,
   getCurrencySymbol,
+  matchesAccountThemePattern,
 } from './utils';
 import type { Task } from './types';
 
@@ -582,6 +583,17 @@ describe('groupTasksByDay', () => {
       expect(getCurrencySymbol(undefined)).toBe('€');
       expect(getCurrencySymbol('')).toBe('€');
       expect(getCurrencySymbol('GBP')).toBe('GBP');
+    });
+  });
+
+  describe('matchesAccountThemePattern', () => {
+    it('matches single tokens and pipe-delimited patterns case-insensitively', () => {
+      expect(matchesAccountThemePattern('Main Card', 'main')).toBe(true);
+      expect(matchesAccountThemePattern('Travel Card', 'карт|card|kartic|カード')).toBe(true);
+      expect(matchesAccountThemePattern('  Накопительный счёт  ', ' saving | накоп ')).toBe(true);
+      expect(matchesAccountThemePattern('Savings EUR', 'card|crypto')).toBe(false);
+      expect(matchesAccountThemePattern('', 'card')).toBe(false);
+      expect(matchesAccountThemePattern('Main Card', '')).toBe(false);
     });
   });
 });

@@ -19,6 +19,7 @@ import { monthUsage } from './dal/misc';
 import { listNotes } from './dal/notes';
 import { listCategories, listTasks } from './dal/tasks';
 import { getUser } from './dal/users';
+import { DIGEST_SECTION_IDS, loadUserPrefs, type DigestSectionId, type UserPrefs } from './prefs';
 import { calculateRunway } from './runway';
 import type { LiabilityRow } from './types';
 import {
@@ -199,22 +200,35 @@ function shorten(text: string): string {
 
 export async function buildMorningDigest(userId: number, opts: DigestOptions = {}): Promise<string> {
   const now = opts.now ?? new Date();
-  const user = await getUser(userId);
+  const [user, prefs] = await Promise.all([
+    getUser(userId),
+    loadUserPrefs(userId).catch((): UserPrefs => ({})),
+  ]);
   const timeZone = user?.timezone ?? 'UTC';
   const today = dateKey(now, timeZone);
-  const parts = zonedParts(now, timeZone);
 
-  const [tasks, categories, medications, accounts, runway, spentCents, inboxCount, idea, usage] =
+  const enabledSections = new Set<DigestSectionId>(
+    prefs.proactive?.jobs?.morning_digest?.sections ?? DIGEST_SECTION_IDS,
+  );
+  const focusLimit = prefs.adhd?.focusLimit ?? FOCUS_LIMIT;
+
+  const hasFocus = enabledSections.has('focus');
+  const hasMeds = enabledSections.has('medications');
+  const hasFinance = enabledSections.has('finance');
+  const hasInbox = enabledSections.has('inbox');
+  const hasTelemetry = enabledSections.has('telemetry');
+  const hasCoaching = enabledSections.has('coaching');
+
+  const [tasks, categories, medications, runway, spentCents, inboxCount, idea, usage] =
     await Promise.all([
-      listTasks(userId, { status: 'todo', limit: 500 }),
-      listCategories(userId),
-      listMedications(userId),
-      listAccounts(userId),
-      calculateRunway(userId, { now }),
-      spentThisMonth(userId, now, timeZone),
-      unprocessedCount(userId),
-      latestIdea(userId, now),
-      monthUsage(userId),
+      hasFocus ? listTasks(userId, { status: 'todo', limit: 500 }) : Promise.resolve([]),
+      hasFocus ? listCategories(userId) : Promise.resolve([]),
+      hasMeds ? listMedications(userId) : Promise.resolve([]),
+      hasFinance ? calculateRunway(userId, { now }) : Promise.resolve(null),
+      hasFinance ? spentThisMonth(userId, now, timeZone) : Promise.resolve(0),
+      hasInbox ? unprocessedCount(userId) : Promise.resolve(0),
+      hasInbox ? latestIdea(userId, now) : Promise.resolve(null),
+      hasTelemetry ? monthUsage(userId) : Promise.resolve({ calls: 0, promptTokens: 0, completionTokens: 0, costMicros: 0 }),
     ]);
 
   const categoriesById = categoryIndex(categories);
@@ -222,65 +236,67 @@ export async function buildMorningDigest(userId: number, opts: DigestOptions = {
 
   // --- заголовок -----------------------------------------------------------
   lines.push(`☀️ **Доброе утро! Сводка на ${longDate(now, timeZone)}**`);
-  lines.push('');
 
   // --- фокус дня -----------------------------------------------------------
-  lines.push('🎯 **Фокус дня (максимум 2 сферы):**');
+  if (hasFocus) {
+    lines.push('');
+    lines.push('🎯 **Фокус дня (максимум 2 сферы):**');
 
-  const dueToday = tasks
-    .filter((task) => task.dueAt !== null && dateKey(new Date(task.dueAt), timeZone) === today)
-    .sort((a, b) => compareIso(a.createdAt, b.createdAt))
-    .slice(0, FOCUS_LIMIT);
+    const dueToday = tasks
+      .filter((task) => task.dueAt !== null && dateKey(new Date(task.dueAt), timeZone) === today)
+      .sort((a, b) => compareIso(a.createdAt, b.createdAt))
+      .slice(0, focusLimit);
 
-  if (dueToday.length > 0) {
-    for (const task of dueToday) {
-      lines.push(`• ${task.title}${taskCategoryTag(task, categoriesById)}`);
-    }
-  } else {
-    // Fallback: корневые задачи со сроком сегодня/просроченным/без срока.
-    const todayTs = `${today}T00:00:00.000Z`;
-    const fallback = tasks
-      .filter((task) => task.parentId === null)
-      .map((task) => {
-        const dueKey = task.dueAt ? dateKey(new Date(task.dueAt), timeZone) : null;
-        const bucket = dueKey === null ? 1 : dueKey === today ? 0 : dueKey < today ? 0 : 2;
-        return { task, bucket };
-      })
-      .filter((entry) => entry.bucket <= 1 || entry.task.dueAt !== null)
-      .filter((entry) => {
-        // Только «сегодня и раньше, либо без срока» — будущее в фокус не берём.
-        if (entry.task.dueAt === null) return true;
-        return dateKey(new Date(entry.task.dueAt), timeZone) <= today;
-      })
-      .sort((a, b) => {
-        if (a.bucket !== b.bucket) return a.bucket - b.bucket;
-        const dueDiff = compareIso(a.task.dueAt ?? todayTs, b.task.dueAt ?? todayTs);
-        if (dueDiff !== 0) return dueDiff;
-        return compareIso(a.task.createdAt, b.task.createdAt);
-      })
-      .slice(0, FOCUS_LIMIT);
-
-    if (fallback.length > 0) {
-      for (const entry of fallback) {
-        lines.push(`• ${entry.task.title}${taskCategoryTag(entry.task, categoriesById)}`);
+    if (dueToday.length > 0) {
+      for (const task of dueToday) {
+        lines.push(`• ${task.title}${taskCategoryTag(task, categoriesById)}`);
       }
     } else {
-      lines.push('• Все приоритетные задачи закрыты! Свободный день или восстановление ресурса.');
+      // Fallback: корневые задачи со сроком сегодня/просроченным/без срока.
+      const todayTs = `${today}T00:00:00.000Z`;
+      const fallback = tasks
+        .filter((task) => task.parentId === null)
+        .map((task) => {
+          const dueKey = task.dueAt ? dateKey(new Date(task.dueAt), timeZone) : null;
+          const bucket = dueKey === null ? 1 : dueKey === today ? 0 : dueKey < today ? 0 : 2;
+          return { task, bucket };
+        })
+        .filter((entry) => entry.bucket <= 1 || entry.task.dueAt !== null)
+        .filter((entry) => {
+          // Только «сегодня и раньше, либо без срока» — будущее в фокус не берём.
+          if (entry.task.dueAt === null) return true;
+          return dateKey(new Date(entry.task.dueAt), timeZone) <= today;
+        })
+        .sort((a, b) => {
+          if (a.bucket !== b.bucket) return a.bucket - b.bucket;
+          const dueDiff = compareIso(a.task.dueAt ?? todayTs, b.task.dueAt ?? todayTs);
+          if (dueDiff !== 0) return dueDiff;
+          return compareIso(a.task.createdAt, b.task.createdAt);
+        })
+        .slice(0, focusLimit);
+
+      if (fallback.length > 0) {
+        for (const entry of fallback) {
+          lines.push(`• ${entry.task.title}${taskCategoryTag(entry.task, categoriesById)}`);
+        }
+      } else {
+        lines.push('• Все приоритетные задачи закрыты! Свободный день или восстановление ресурса.');
+      }
     }
-  }
 
-  const overdueCount = tasks.filter(
-    (task) => task.parentId === null && task.dueAt !== null && dateKey(new Date(task.dueAt), timeZone) < today,
-  ).length;
+    const overdueCount = tasks.filter(
+      (task) => task.parentId === null && task.dueAt !== null && dateKey(new Date(task.dueAt), timeZone) < today,
+    ).length;
 
-  if (overdueCount > 0) {
-    lines.push(
-      `_⚠️ Отложенных дел в бэклоге: ||${overdueCount} шт.|| (разберём, когда будет ресурс)_`,
-    );
+    if (overdueCount > 0) {
+      lines.push(
+        `_⚠️ Отложенных дел в бэклоге: ||${overdueCount} шт.|| (разберём, когда будет ресурс)_`,
+      );
+    }
   }
 
   // --- препараты -----------------------------------------------------------
-  if (medications.length > 0) {
+  if (hasMeds && medications.length > 0) {
     const scheduled = [...medications]
       .map((medication) => ({
         medication,
@@ -303,52 +319,56 @@ export async function buildMorningDigest(userId: number, opts: DigestOptions = {
   }
 
   // --- финансы -------------------------------------------------------------
-  lines.push('');
-  lines.push('💰 **Финансы:**');
+  if (hasFinance && runway) {
+    lines.push('');
+    lines.push('💰 **Финансы:**');
 
-  if (runway.accounts.length > 0) {
-    lines.push(
-      `• 🪙 **Можно тратить:** ~${Math.round(runway.safeDailyCents / 100)} €/день ` +
-        `(свободно ${Math.round(runway.spendableCents / 100)} € на ${runway.horizonDays} дн.)`,
-    );
-    lines.push(
-      `• 🔒 **Уже распределено** (кредиты, аренда, подписки): ` +
-        `${Math.round(runway.reservedCents / 100)} € — это не бюджет`,
-    );
-
-    if (runway.reservedGapCents < 0) {
+    if (runway.accounts.length > 0) {
       lines.push(
-        `• 🧭 Под платежи ближайших ${runway.horizonDays} дн. не хватает ` +
-          `~${Math.round(Math.abs(runway.reservedGapCents) / 100)} € — обсудим в диалоге`,
+        `• 🪙 **Можно тратить:** ~${Math.round(runway.safeDailyCents / 100)} €/день ` +
+          `(свободно ${Math.round(runway.spendableCents / 100)} € на ${runway.horizonDays} дн.)`,
       );
+      lines.push(
+        `• 🔒 **Уже распределено** (кредиты, аренда, подписки): ` +
+          `${Math.round(runway.reservedCents / 100)} € — это не бюджет`,
+      );
+
+      if (runway.reservedGapCents < 0) {
+        lines.push(
+          `• 🧭 Под платежи ближайших ${runway.horizonDays} дн. не хватает ` +
+            `~${Math.round(Math.abs(runway.reservedGapCents) / 100)} € — обсудим в диалоге`,
+        );
+      }
+
+      const nearest = runway.upcomingPayments[0];
+      if (nearest) {
+        lines.push(
+          `• 💳 **Ближайший платёж:** ${escapeHtml(nearest.name)} — ` +
+            `${formatCents(nearest.monthlyPaymentCents).replace(/,00$/, '')} ${nearest.currency}` +
+            (nearest.paymentDay !== null ? ` (${nearest.paymentDay}-е число)` : ''),
+        );
+      }
     }
 
-    const nearest = runway.upcomingPayments[0];
-    if (nearest) {
-      lines.push(
-        `• 💳 **Ближайший платёж:** ${escapeHtml(nearest.name)} — ` +
-          `${formatCents(nearest.monthlyPaymentCents).replace(/,00$/, '')} ${nearest.currency}` +
-          (nearest.paymentDay !== null ? ` (${nearest.paymentDay}-е число)` : ''),
-      );
-    }
+    lines.push(`• 📊 **Расходы с 1-го числа:** ~${formatCents(spentCents)} €`);
   }
-
-  lines.push(`• 📊 **Расходы с 1-го числа:** ~${formatCents(spentCents)} €`);
 
   // --- инбокс и идеи -------------------------------------------------------
-  lines.push('');
-  lines.push('📥 **Инбокс и идеи:**');
-  if (inboxCount === 0) {
-    lines.push('• 📦 Инбокс чист и разобран ✅');
-  } else {
-    lines.push(`• 📦 В инбоксе: **${inboxCount}** необработанных заметок / чеков (разберём здесь)`);
-  }
-  if (idea) {
-    lines.push(`• 💡 *Идея в копилке:* ${idea}`);
+  if (hasInbox) {
+    lines.push('');
+    lines.push('📥 **Инбокс и идеи:**');
+    if (inboxCount === 0) {
+      lines.push('• 📦 Инбокс чист и разобран ✅');
+    } else {
+      lines.push(`• 📦 В инбоксе: **${inboxCount}** необработанных заметок / чеков (разберём здесь)`);
+    }
+    if (idea) {
+      lines.push(`• 💡 *Идея в копилке:* ${idea}`);
+    }
   }
 
   // --- телеметрия ----------------------------------------------------------
-  if (usage.calls > 0) {
+  if (hasTelemetry && usage.calls > 0) {
     const cost = usage.costMicros / 1_000_000;
     lines.push('');
     lines.push('<blockquote expandable>');
@@ -361,11 +381,13 @@ export async function buildMorningDigest(userId: number, opts: DigestOptions = {
   }
 
   // --- коуч ----------------------------------------------------------------
-  lines.push('');
-  lines.push(
-    '🌱 _Сегодня держим моно-фокус на 2 сферах без распыления. ' +
-      'Если ресурса мало — начни с ультра-микрошага на 5 минут._ 🌱',
-  );
+  if (hasCoaching) {
+    lines.push('');
+    lines.push(
+      '🌱 _Сегодня держим моно-фокус на 2 сферах без распыления. ' +
+        'Если ресурса мало — начни с ультра-микрошага на 5 минут._ 🌱',
+    );
+  }
 
   return lines.join('\n');
 }

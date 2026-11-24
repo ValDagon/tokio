@@ -72,6 +72,14 @@ export interface AgentProfile {
   locale?: LocaleCode;
   personaStyle: PersonaStyle | string | null;
   customInstructions: string | null;
+  /** Переопределённое имя ассистента из `user_prefs`. */
+  assistantName?: string | null;
+  /** Пользовательские персоны из `user_prefs`. */
+  customPersonas?: Readonly<
+    Record<string, { name: string; description?: string; instructions: string }>
+  > | null;
+  /** Идентификаторы отключённых встроенных `.md`-скиллов. */
+  disabledBuiltinSkills?: readonly string[] | null;
   /**
    * Включённые владельцем процедуры (`status='active'`). Загружаются один раз
    * на прогон вместе с остальным профилем: включение посреди прогона видно
@@ -79,6 +87,7 @@ export interface AgentProfile {
    */
   activeSkills?: readonly ActiveSkill[] | null;
   lowStimulationMode?: boolean;
+  overloadShieldEnabled?: boolean;
   overdueTaskCount?: number;
   activeTodoCount?: number;
   missedMedsCount?: number;
@@ -103,6 +112,8 @@ export interface SystemPromptOptions {
   now?: Date;
   /** Состояние когнитивного перегруза для динамического щита в хвосте промпта. */
   executiveOverload?: ExecutiveOverloadState;
+  /** Активен разговорный режим (/talk): только свободный диалог, без записи в БД. */
+  talkMode?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +202,7 @@ const THOUGHT_PARTNER_MARKERS: readonly RegExp[] = [
   /стратеги|приоритет|план(?:ы)? на|перспектив/i,
   /хватит ли|на сколько (?:хватит|денег)|финансов\w* (?:план|горизонт)/i,
   /как (?:устроен|работает) (?:мой|моя)|мо(?:и|я) (?:деньги|бюджет|долг)/i,
+  /устал|выгорел|тревож|пережива|тяжело|грустно|нет\s+сил|не\s+могу\s+собраться|не\s+знаю\s+с\s+чего|чувствую\s+себя|хочется\s+выговориться|просто\s+делюсь|поделюсь/i,
 ];
 
 const SYSTEM_EXPERT_MARKERS: readonly RegExp[] = [
@@ -343,13 +355,28 @@ export const READ_ONLY_DIRECTIVE = `ОГРАНИЧЕНИЕ ЭТОГО ХОДА (
 - Если просят данные (балансы, задачи, заметки, лекарства, расходы) — используй инструменты чтения.
 - Если просят действие (записать, удалить, напомнить, перевести, изменить) — честно скажи, что действие не выполнено, и попроси прислать просьбу отдельным сообщением. Не выдумывай результат и никогда не пиши, что действие выполнено, если инструмент не вызывался.`;
 
-/** Нормализует стиль общения; неизвестное значение уходит в свободный текст. */
+export const TALK_MODE_DIRECTIVE = `РЕЖИМ СВОБОДНОГО РАЗГОВОРА (/talk):
+Сейчас активен разговорный режим: пользователь хочет просто поговорить, поразмышлять или выговориться.
+- Отвечай тепло, по-человечески и бережно как Life Thought Partner, без давления продуктивностью и без навязывания списков дел.
+- Не сохраняй реплики пользователя в заметки и не изменяй данные в базе.
+- Если пользователь просит что-то записать/изменить или хочет вернуться к обычному управлению — подскажи, что из режима можно выйти командой /talk off или словом «закончим».`;
+
+/** Нормализует стиль общения; поддерживает кастомные персоны и свободный текст. */
 export function resolvePersonaStyle(
   style: PersonaStyle | string | null | undefined,
   locale: LocaleCode = 'ru',
+  customPersonas?: Readonly<
+    Record<string, { name: string; description?: string; instructions: string }>
+  > | null,
 ): string | null {
   const value = typeof style === 'string' ? style.trim() : '';
   if (!value) return null;
+  if (customPersonas && Object.hasOwn(customPersonas, value)) {
+    const custom = customPersonas[value];
+    if (custom?.instructions?.trim()) {
+      return `${custom.name || value}: ${custom.instructions.trim()}`;
+    }
+  }
   const known = getPersonaStyleText(value, locale);
   if (known) return known;
   return value;
@@ -442,6 +469,12 @@ function profileBlock(options: SystemPromptOptions): string {
 
 function overloadShieldBlock(options: SystemPromptOptions): string {
   if (!getOverlay().manifest.features.overloadShield) return '';
+  if (
+    options.executiveOverload?.shieldEnabled === false ||
+    options.profile?.overloadShieldEnabled === false
+  ) {
+    return '';
+  }
   const state = options.executiveOverload;
   const manualCalm = Boolean(state?.lowStimulationMode || options.profile?.lowStimulationMode);
   if (!state?.isOverloaded && !manualCalm) return '';
@@ -505,7 +538,10 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): string {
     'ru',
   );
   const defaultName = getAssistantName(locale) || DEFAULT_ASSISTANT_NAME;
-  const name = String(options.assistantName ?? defaultName).trim() || defaultName;
+  const profileAssistantName =
+    typeof options.profile?.assistantName === 'string' ? options.profile.assistantName.trim() : '';
+  const name =
+    String(options.assistantName ?? (profileAssistantName || defaultName)).trim() || defaultName;
   const mode = options.mode ?? null;
   const maxSteps = Math.max(1, Math.floor(options.maxSteps ?? 8));
 
@@ -529,13 +565,19 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): string {
   const profile = profileBlock(options);
   if (profile) blocks.push(profile);
 
-  const overlaySkillCatalog = renderOverlaySkillCatalog(getOverlaySkills());
+  const disabledSet = new Set(options.profile?.disabledBuiltinSkills ?? []);
+  const enabledOverlaySkills = getOverlaySkills().filter((skill) => !disabledSet.has(skill.id));
+  const overlaySkillCatalog = renderOverlaySkillCatalog(enabledOverlaySkills);
   if (overlaySkillCatalog) blocks.push(overlaySkillCatalog);
 
   const skills = renderSkillBlock(options.profile?.activeSkills ?? []);
   if (skills) blocks.push(skills);
 
-  const style = resolvePersonaStyle(options.profile?.personaStyle, locale);
+  const style = resolvePersonaStyle(
+    options.profile?.personaStyle,
+    locale,
+    options.profile?.customPersonas,
+  );
   if (style) blocks.push(`ТЕКУЩИЙ СТИЛЬ ОБЩЕНИЯ:\nСтиль общения: ${style}`);
 
   const custom =
@@ -555,6 +597,8 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): string {
 
   const shield = overloadShieldBlock(options);
   if (shield) blocks.push(shield);
+
+  if (options.talkMode) blocks.push(TALK_MODE_DIRECTIVE);
 
   return blocks.join('\n\n');
 }

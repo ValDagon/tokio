@@ -48,6 +48,7 @@ import { registerJobHandler, schedule } from './dal/due_jobs.js';
 import { listNotes, updateNote } from './dal/notes.js';
 import { getUser } from './dal/users.js';
 import { recordFailure } from './evolution.js';
+import { loadUserPrefs, type UserPrefs } from './prefs.js';
 import { addDays, dateKey, nowIso, startOfLocalDay, truncate } from './utils.js';
 
 // ---------------------------------------------------------------------------
@@ -409,6 +410,20 @@ export async function runNightlyConsolidation(
     : dateKey(now, await resolveUserTimezone(userId));
   const markerKey = consolidationMarkerKey(userId, day);
 
+  const prefs = await loadUserPrefs(userId).catch((): UserPrefs => ({}));
+  const ncPrefs = prefs.proactive?.jobs?.nightly_consolidation;
+  if (options.force !== true && ncPrefs?.enabled === false) {
+    return {
+      status: 'skipped',
+      message: 'Ночная консолидация отключена в настройках.',
+      processedCount: 0,
+      dateKey: day,
+      noteIds: [],
+      entitiesUpserted: 0,
+      relationsAdded: 0,
+    };
+  }
+
   if (options.force !== true) {
     const existing = await kvGet(markerKey);
     if (existing !== null) {
@@ -424,7 +439,7 @@ export async function runNightlyConsolidation(
     }
   }
 
-  const limit = Math.max(1, Math.trunc(options.limit ?? DEFAULT_NOTE_LIMIT));
+  const limit = Math.max(1, Math.trunc(options.limit ?? ncPrefs?.noteLimit ?? DEFAULT_NOTE_LIMIT));
 
   try {
     const notes = await pendingNotes(userId, limit);
@@ -612,7 +627,12 @@ export async function scheduleNightlyConsolidation(
 ): Promise<DueJobRow> {
   const now = options.now ?? new Date();
   const timeZone = options.timeZone ?? (await resolveUserTimezone(userId));
-  const hour = Math.min(23, Math.max(0, Math.trunc(options.hour ?? NIGHTLY_HOUR)));
+  let configuredHour: number | undefined;
+  if (options.hour === undefined) {
+    const prefs = await loadUserPrefs(userId).catch((): UserPrefs => ({}));
+    configuredHour = prefs.proactive?.jobs?.nightly_consolidation?.hour;
+  }
+  const hour = Math.min(23, Math.max(0, Math.trunc(options.hour ?? configuredHour ?? NIGHTLY_HOUR)));
   return schedule(userId, 'nightly_consolidation', nextNightlyAt(now, hour, timeZone), { hour });
 }
 

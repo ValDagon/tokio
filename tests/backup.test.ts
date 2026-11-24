@@ -37,6 +37,8 @@ import {
   stringifyBackup,
 } from '../src/lib/backup';
 import type { BackupFile } from '../src/lib/backup';
+import { routineRunKey, saveUserPrefs } from '../src/lib/prefs';
+import { kvGet, kvSet } from '../src/lib/dal/misc';
 
 type Row = Record<string, unknown>;
 
@@ -259,6 +261,7 @@ describe('exportUserData', () => {
 
     expect(backup.profile).toEqual({
       name: null,
+      language: 'ru',
       base_currency: 'EUR',
       timezone: 'UTC',
       summary_time: '07:00',
@@ -864,5 +867,146 @@ describe('restoreFromJson', () => {
       /unknown format/,
     );
     expect(await countRows('tasks', TARGET)).toBe(0);
+  });
+
+  it('экспортирует и восстанавливает записи дневника в режимах merge и replace', async () => {
+    await ensureUser(USER);
+    await ensureUser(TARGET);
+    await db.run(
+      `INSERT INTO kv ("key", value) VALUES (:k, :v)`,
+      { k: `diary:${USER}:2026-11-10`, v: '# Дневник: 2026-11-10\n\nМысль А' },
+    );
+    await db.run(
+      `INSERT INTO kv ("key", value) VALUES (:k, :v)`,
+      { k: `diary:${USER}:2026-11-11`, v: '# Дневник: 2026-11-11\n\nМысль Б' },
+    );
+    await db.run(
+      `INSERT INTO kv ("key", value) VALUES (:k, :v)`,
+      { k: `diary:${TARGET}:2026-11-10`, v: '# Дневник: 2026-11-10\n\nСтарая цель' },
+    );
+    await db.run(
+      `INSERT INTO kv ("key", value) VALUES (:k, :v)`,
+      { k: `diary:${TARGET}:2026-11-01`, v: '# Дневник: 2026-11-01\n\nУдалится при replace' },
+    );
+
+    const backup = await exportUserData(USER);
+    expect(backup.counts.diary).toBe(2);
+    expect(backup.diary).toHaveLength(2);
+
+    const mergeRes = await importBackup(TARGET, backup, { mode: 'merge' });
+    expect(mergeRes.tables.diary).toEqual({ inserted: 1, skipped: 1 });
+    const targetNov10Merged = await db.get<{ value: string }>(
+      `SELECT value FROM kv WHERE "key" = :k`,
+      { k: `diary:${TARGET}:2026-11-10` },
+    );
+    expect(targetNov10Merged?.value).toContain('Старая цель');
+
+    const replaceRes = await importBackup(TARGET, backup, { mode: 'replace' });
+    expect(replaceRes.tables.diary).toEqual({ inserted: 2, skipped: 0 });
+    const targetNov10Replaced = await db.get<{ value: string }>(
+      `SELECT value FROM kv WHERE "key" = :k`,
+      { k: `diary:${TARGET}:2026-11-10` },
+    );
+    const targetNov01 = await db.get<{ value: string }>(
+      `SELECT value FROM kv WHERE "key" = :k`,
+      { k: `diary:${TARGET}:2026-11-01` },
+    );
+    expect(targetNov10Replaced?.value).toContain('Мысль А');
+    expect(targetNov01).toBeNull();
+  });
+
+  it('экспортирует и восстанавливает language профиля и user_prefs в режимах merge и replace', async () => {
+    await ensureUser(USER);
+    await ensureUser(TARGET);
+    await db.run(`UPDATE users SET language = :lang WHERE id = :id`, { lang: 'sr', id: USER });
+    await db.run(
+      `INSERT INTO kv ("key", value) VALUES (:k, :v)`,
+      {
+        k: `user_prefs:v1:${USER}`,
+        v: JSON.stringify({ assistantName: 'Jarvis', ai: { maxSteps: 12, temperature: 0.3 } }),
+      },
+    );
+    await db.run(
+      `INSERT INTO kv ("key", value) VALUES (:k, :v)`,
+      {
+        k: `user_prefs:v1:${TARGET}`,
+        v: JSON.stringify({ assistantName: 'OldBot' }),
+      },
+    );
+
+    const backup = await exportUserData(USER);
+    expect(backup.profile?.language).toBe('sr');
+    expect(backup.counts.preferences).toBe(1);
+    expect(backup.preferences?.assistantName).toBe('Jarvis');
+
+    const parsed = parseBackupFile(stringifyBackup(backup));
+    expect(parsed.preferences?.ai?.maxSteps).toBe(12);
+
+    const mergeRes = await importBackup(TARGET, backup, { mode: 'merge' });
+    expect(mergeRes.tables.preferences).toEqual({ inserted: 0, skipped: 1 });
+    const targetAfterMerge = await db.get<{ value: string }>(
+      `SELECT value FROM kv WHERE "key" = :k`,
+      { k: `user_prefs:v1:${TARGET}` },
+    );
+    expect(JSON.parse(targetAfterMerge?.value ?? '{}').assistantName).toBe('OldBot');
+
+    const replaceRes = await importBackup(TARGET, backup, { mode: 'replace' });
+    expect(replaceRes.tables.preferences).toEqual({ inserted: 1, skipped: 0 });
+    const targetAfterReplace = await db.get<{ value: string }>(
+      `SELECT value FROM kv WHERE "key" = :k`,
+      { k: `user_prefs:v1:${TARGET}` },
+    );
+    const targetUser = await db.get<{ language: string }>(`SELECT language FROM users WHERE id = :id`, {
+      id: TARGET,
+    });
+    expect(targetUser?.language).toBe('sr');
+    expect(JSON.parse(targetAfterReplace?.value ?? '{}')).toMatchObject({
+      assistantName: 'Jarvis',
+      ai: { maxSteps: 12, temperature: 0.3 },
+    });
+  });
+
+  it('Волна 2: сохраняет все новые секции prefs и чистит routine_run: цели при replace', async () => {
+    await ensureUser(USER);
+    await ensureUser(TARGET);
+
+    await saveUserPrefs(USER, {
+      adhd: { focusLimit: 5, staleAfterDays: 4, overloadShield: { enabled: true, overdueTaskCount: 4 } },
+      finance: {
+        reserveCents: 120_000,
+        accountAliases: [{ account: 'Main', patterns: ['основной'] }],
+        defaultAccountByCurrency: { EUR: 'Main' },
+        runway: { dailyBurnOverrideCents: 3_500, horizonDays: 20 },
+      },
+      diary: { sections: ['Фокус', 'Итоги'], includeTasks: false, headerTemplate: '# {date}' },
+      proactive: {
+        quietHours: { enabled: true, start: '23:00', end: '07:00' },
+        jobs: { morning_digest: { sections: ['focus', 'finance'], windowMinutes: 120 } },
+        routines: {
+          water: {
+            id: 'water',
+            name: 'Вода',
+            enabled: true,
+            kind: 'text',
+            schedule: 'daily',
+            time: '15:00',
+            message: 'Стакан воды',
+            updatedAt: '2026-11-24T10:00:00.000Z',
+          },
+        },
+      },
+    });
+
+    const staleTargetRoutineKey = routineRunKey(TARGET, 'old_r', '2026-11-20');
+    await kvSet(staleTargetRoutineKey, JSON.stringify({ triggerDate: '2026-11-20', ranAt: '2026-11-20T10:00:00.000Z' }));
+
+    const exported = await exportUserData(USER);
+    expect(exported.preferences?.adhd?.focusLimit).toBe(5);
+    expect(exported.preferences?.finance?.reserveCents).toBe(120_000);
+    expect(exported.preferences?.proactive?.routines?.water?.name).toBe('Вода');
+
+    const res = await importBackup(TARGET, exported, { mode: 'replace' });
+    expect(res.tables.preferences).toEqual({ inserted: 1, skipped: 0 });
+    expect(await kvGet(staleTargetRoutineKey)).toBeNull();
   });
 });

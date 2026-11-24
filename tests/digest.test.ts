@@ -30,6 +30,7 @@ import { createTask } from '../src/lib/dal/tasks';
 import { recordUsage } from '../src/lib/dal/misc';
 import { ensureUser } from '../src/lib/dal/users';
 import { markdownToTelegramHtml } from '../src/lib/markdown';
+import { saveUserPrefs } from '../src/lib/prefs';
 import type { LiabilityQueue } from '../src/types';
 
 const USER = 1;
@@ -561,5 +562,30 @@ describe('shorten / morningDigest', () => {
     expect(await morningDigest(USER, { now: NOW })).toBe(
       await buildMorningDigest(USER, { now: NOW }),
     );
+  });
+
+  it('Волна 2: фильтрует секции дайджеста и применяет adhd.focusLimit', async () => {
+    await ensureUser(USER);
+    await createAccount(USER, { name: 'Main', currency: 'EUR', initialBalanceCents: 100_000 });
+    await createMedication(USER, { name: 'D3', dosage: '2000 IU', times: ['08:00'] });
+    for (let i = 1; i <= 4; i += 1) {
+      await createTask(USER, { title: `Фокус-${i}`, dueAt: NOW.toISOString() });
+    }
+
+    await saveUserPrefs(USER, {
+      adhd: { focusLimit: 4 },
+      proactive: {
+        jobs: {
+          morning_digest: { sections: ['focus', 'medications'] },
+        },
+      },
+    });
+
+    const filtered = await buildMorningDigest(USER, { now: NOW });
+    expect(filtered).toContain('Фокус-4');
+    expect(filtered).toContain('Препараты');
+    expect(filtered).not.toContain('Финансы');
+    expect(filtered).not.toContain('Инбокс');
+    expect(filtered).not.toContain('микрошага');
   });
 });

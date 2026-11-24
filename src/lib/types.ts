@@ -102,7 +102,8 @@ export type EvolutionStatus =
   | 'shipped'
   | 'rejected'
   | 'active'
-  | 'superseded';
+  | 'superseded'
+  | 'disabled';
 
 export type EvolutionPriority = 'low' | 'medium' | 'high';
 

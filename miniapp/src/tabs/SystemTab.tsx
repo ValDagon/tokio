@@ -29,6 +29,9 @@ import {
   Bug,
   Lightbulb,
   RotateCcw,
+  SlidersHorizontal,
+  Layers,
+  Undo2,
 } from 'lucide-react';
 import {
   SUPPORTED_LOCALES,
@@ -47,6 +50,7 @@ import type {
   DiagnosticsResponse,
   DocSearchResult,
   ReaderSkillData,
+  CustomRoutineItem,
 } from '../types';
 import {
   saveByokKey,
@@ -61,6 +65,10 @@ import {
   fetchDiagnostics,
   resetAgentSession,
   searchDocs,
+  toggleSettingsRoutine,
+  applySettingsPreset,
+  resetSettingsToDefault,
+  rollbackSettingsChange,
 } from '../api';
 import { findDocSectionMatches, stripMarkdownInline } from '../utils';
 
@@ -71,6 +79,7 @@ export interface PersonaPreset {
   title: string;
   desc: string;
   instruction: string;
+  isCustom?: boolean;
 }
 
 export interface SystemTabProps {
@@ -113,6 +122,7 @@ export interface SystemTabProps {
   userSettings?: UserSettings | null;
   accessInfo?: AccessInfo | null;
   onReloadSettings?: () => Promise<void> | void;
+  onRefreshConfig?: (updatedSettings?: UserSettings) => Promise<void> | void;
   backupPrefix?: string;
   feedbackEnabled?: boolean;
 
@@ -174,8 +184,18 @@ function getPresetIcon(id: string) {
   }
 }
 
-function getPresetBadge(id: string, t: (key: string) => string): string {
-  switch (id) {
+const SUPPORTS_NATIVE_SWITCH =
+  typeof HTMLInputElement !== 'undefined' && 'switch' in HTMLInputElement.prototype;
+
+function bindNativeSwitchAttr(el: HTMLInputElement | null): void {
+  if (el && SUPPORTS_NATIVE_SWITCH && !el.hasAttribute('switch')) {
+    el.setAttribute('switch', '');
+  }
+}
+
+function getPresetBadge(preset: PersonaPreset, t: (key: string) => string): string {
+  if (preset.isCustom) return t('system.customPersonaBadge');
+  switch (preset.id) {
     case 'mentor':
       return t('badges.calmMode');
     case 'strategist':
@@ -187,6 +207,129 @@ function getPresetBadge(id: string, t: (key: string) => string): string {
     default:
       return '';
   }
+}
+
+function formatRoutineScheduleLabel(
+  routine: CustomRoutineItem,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string {
+  switch (routine.schedule) {
+    case 'weekly':
+      return t('system.routineScheduleWeekly');
+    case 'monthly':
+      return t('system.routineScheduleMonthly');
+    default:
+      return t('system.routineScheduleDaily');
+  }
+}
+
+function formatRoutineKindLabel(
+  routine: CustomRoutineItem,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string {
+  switch (routine.kind) {
+    case 'summary':
+      return t('system.routineKindSummary');
+    case 'ai':
+      return t('system.routineKindAi');
+    default:
+      return t('system.routineKindText');
+  }
+}
+
+function buildActiveOverrideChips(
+  userSettings: UserSettings | null | undefined,
+  t: (key: string, params?: Record<string, string | number>) => string,
+  formatNumber: (value: number, options?: Intl.NumberFormatOptions) => string,
+): string[] {
+  if (!userSettings) return [];
+  const chips: string[] = [];
+  const summary = userSettings.prefs_summary;
+
+  if (userSettings.assistant_name) {
+    chips.push(t('system.overrideChipAssistant', { value: userSettings.assistant_name }));
+  }
+  if (!summary) return chips;
+
+  if (summary.ai.preferred_model) {
+    chips.push(t('system.overrideChipModel', { value: summary.ai.preferred_model }));
+  } else if (userSettings.model_provider && userSettings.model_provider !== 'gemini') {
+    chips.push(t('system.overrideChipModel', { value: userSettings.model_provider }));
+  }
+  if (summary.ai.max_steps !== null) {
+    chips.push(t('system.overrideChipSteps', { value: summary.ai.max_steps }));
+  }
+  if (summary.ai.temperature !== null) {
+    chips.push(t('system.overrideChipTemp', { value: summary.ai.temperature }));
+  }
+
+  if (!summary.adhd.overload_shield_enabled) {
+    chips.push(t('system.overrideChipShieldOff'));
+  } else if (
+    summary.adhd.overload_overdue_threshold !== null ||
+    summary.adhd.overload_active_todo_threshold !== null ||
+    summary.adhd.overload_night_window !== null
+  ) {
+    chips.push(t('system.overrideChipShieldCustom'));
+  }
+  if (summary.adhd.focus_limit !== null) {
+    chips.push(t('system.overrideChipFocus', { value: summary.adhd.focus_limit }));
+  }
+  if (summary.adhd.stale_after_days !== null) {
+    chips.push(t('system.overrideChipStale', { value: summary.adhd.stale_after_days }));
+  }
+
+  if (summary.finance.reserve_eur > 0) {
+    chips.push(
+      t('system.overrideChipReserve', {
+        value: formatNumber(summary.finance.reserve_eur, { maximumFractionDigits: 0 }),
+      }),
+    );
+  }
+  if (summary.finance.aliases_count > 0) {
+    chips.push(t('system.overrideChipAliases', { count: summary.finance.aliases_count }));
+  }
+  if (summary.finance.default_accounts_count > 0) {
+    chips.push(t('system.overrideChipDefaults', { count: summary.finance.default_accounts_count }));
+  }
+  if (summary.finance.has_runway_overrides) {
+    chips.push(t('system.overrideChipRunway'));
+  }
+
+  if (summary.diary.has_overrides) {
+    chips.push(t('system.overrideChipDiary'));
+  }
+  if (summary.proactive.quiet_hours_enabled) {
+    chips.push(
+      t('system.overrideChipQuietHours', {
+        start: summary.proactive.quiet_hours_start || '23:00',
+        end: summary.proactive.quiet_hours_end || '07:00',
+      }),
+    );
+  }
+  if (summary.proactive.disabled_jobs.length > 0) {
+    chips.push(
+      t('system.overrideChipDisabledJobs', { count: summary.proactive.disabled_jobs.length }),
+    );
+  }
+  if (summary.brain.custom_personas_count > 0) {
+    chips.push(t('system.overrideChipPersonas', { count: summary.brain.custom_personas_count }));
+  }
+  if (summary.brain.disabled_builtin_skills.length > 0) {
+    chips.push(
+      t('system.overrideChipDisabledSkills', {
+        count: summary.brain.disabled_builtin_skills.length,
+      }),
+    );
+  }
+  if (summary.miniapp.tabs && summary.miniapp.tabs.length > 0) {
+    chips.push(t('system.overrideChipTabs', { count: summary.miniapp.tabs.length }));
+  }
+  if (summary.miniapp.account_themes_count > 0) {
+    chips.push(t('system.overrideChipAccountRoles', { count: summary.miniapp.account_themes_count }));
+  }
+
+  return chips;
 }
 
 export const SystemTab: React.FC<SystemTabProps> = ({
@@ -237,6 +380,7 @@ export const SystemTab: React.FC<SystemTabProps> = ({
   handleDeleteMedication,
   accessInfo,
   onReloadSettings,
+  onRefreshConfig,
   backupPrefix = 'tokio-backup',
   feedbackEnabled = true,
 }) => {
@@ -302,6 +446,109 @@ export const SystemTab: React.FC<SystemTabProps> = ({
 
   // Server-side Docs Search state
   const [docSearchResult, setDocSearchResult] = useState<DocSearchResult | null>(null);
+
+  // Active Settings, Presets & Routines card state
+  const [togglingRoutineId, setTogglingRoutineId] = useState<string | null>(null);
+  const [applyingPresetId, setApplyingPresetId] = useState<string | null>(null);
+  const [prefsBusyAction, setPrefsBusyAction] = useState<'reset' | 'rollback' | null>(null);
+  const [prefsToast, setPrefsToast] = useState<string | null>(null);
+  const prefsToastTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (prefsToastTimerRef.current) clearTimeout(prefsToastTimerRef.current);
+    };
+  }, []);
+
+  const showPrefsToast = React.useCallback((message: string) => {
+    if (prefsToastTimerRef.current) clearTimeout(prefsToastTimerRef.current);
+    setPrefsToast(message);
+    prefsToastTimerRef.current = setTimeout(() => {
+      setPrefsToast(null);
+    }, 3200);
+  }, []);
+
+  const refreshActiveConfig = React.useCallback(
+    async (updatedSettings?: UserSettings) => {
+      if (onRefreshConfig) {
+        await onRefreshConfig(updatedSettings);
+      } else if (onReloadSettings) {
+        await onReloadSettings();
+      }
+    },
+    [onRefreshConfig, onReloadSettings],
+  );
+
+  const isPrefsMutating =
+    prefsBusyAction !== null || togglingRoutineId !== null || applyingPresetId !== null;
+
+  const handleToggleRoutine = async (routineId: string, name: string, nextEnabled: boolean) => {
+    if (isPrefsMutating) return;
+    try {
+      setTogglingRoutineId(routineId);
+      triggerHaptic('light');
+      const res = await toggleSettingsRoutine(routineId, nextEnabled);
+      await refreshActiveConfig(res.settings);
+      showPrefsToast(
+        nextEnabled
+          ? t('system.routineEnabledToast', { name })
+          : t('system.routinePausedToast', { name }),
+      );
+    } catch (err: unknown) {
+      if (showAlert) await showAlert(err instanceof Error ? err.message : t('common.error'));
+    } finally {
+      setTogglingRoutineId(null);
+    }
+  };
+
+  const handleApplyPreset = async (presetId: string, name: string) => {
+    if (isPrefsMutating) return;
+    try {
+      setApplyingPresetId(presetId);
+      triggerHaptic('medium');
+      const res = await applySettingsPreset(presetId);
+      await refreshActiveConfig(res.settings);
+      triggerHaptic('success');
+      showPrefsToast(t('system.presetAppliedToast', { name }));
+    } catch (err: unknown) {
+      if (showAlert) await showAlert(err instanceof Error ? err.message : t('common.error'));
+    } finally {
+      setApplyingPresetId(null);
+    }
+  };
+
+  const handleRollbackPrefs = async () => {
+    if (isPrefsMutating) return;
+    try {
+      setPrefsBusyAction('rollback');
+      triggerHaptic('medium');
+      const res = await rollbackSettingsChange(1);
+      await refreshActiveConfig(res.settings);
+      triggerHaptic('success');
+      showPrefsToast(t('system.prefsRolledBackToast'));
+    } catch (err: unknown) {
+      if (showAlert) await showAlert(err instanceof Error ? err.message : t('common.error'));
+    } finally {
+      setPrefsBusyAction(null);
+    }
+  };
+
+  const handleResetAllPrefs = async () => {
+    if (isPrefsMutating) return;
+    if (showConfirm && !(await showConfirm(t('system.prefsResetConfirm')))) return;
+    try {
+      setPrefsBusyAction('reset');
+      triggerHaptic('medium');
+      const res = await resetSettingsToDefault('all');
+      await refreshActiveConfig(res.settings);
+      triggerHaptic('success');
+      showPrefsToast(t('system.prefsResetToast'));
+    } catch (err: unknown) {
+      if (showAlert) await showAlert(err instanceof Error ? err.message : t('common.error'));
+    } finally {
+      setPrefsBusyAction(null);
+    }
+  };
 
   const loadSkillsAndBacklog = React.useCallback(async () => {
     try {
@@ -643,6 +890,150 @@ export const SystemTab: React.FC<SystemTabProps> = ({
 
       {/* SECTION 0: Feedback */}
       {feedbackEnabled && <FeedbackPanel isAdmin={isAdmin} />}
+
+      {/* Compact Active Settings, Presets & Routines Card */}
+      {(() => {
+        const overrideChips = buildActiveOverrideChips(userSettings, t, formatNumber);
+        const presets = userSettings?.presets ?? [];
+        const routines = userSettings?.routines ?? [];
+        const historyCount = userSettings?.prefs_summary?.history_count ?? 0;
+        const hasOverrides = Boolean(userSettings?.prefs_summary?.has_overrides) || overrideChips.length > 0;
+        const activeRoutinesCount = routines.filter((r) => r.enabled).length;
+        const isDefaultOnly =
+          !hasOverrides && presets.length === 0 && routines.length === 0 && historyCount === 0;
+
+        return (
+          <section className="system-accordion-card prefs-overview-card" aria-label={t('system.activeConfigTitle')}>
+            <div className="prefs-overview-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <SlidersHorizontal size={18} strokeWidth={1.75} color="var(--accent-color)" style={{ flexShrink: 0 }} />
+                <span className="prefs-overview-title">{t('system.activeConfigTitle')}</span>
+              </div>
+              <span className={`prefs-overview-badge tabular-nums ${overrideChips.length > 0 ? 'has-overrides' : ''}`}>
+                {overrideChips.length > 0
+                  ? t('system.activeConfigOverridesBadge', { count: overrideChips.length })
+                  : t('system.activeConfigDefaultBadge')}
+              </span>
+            </div>
+
+            {prefsToast && (
+              <div className="prefs-inline-toast" role="status">
+                <Check size={13} strokeWidth={2.25} />
+                <span>{prefsToast}</span>
+              </div>
+            )}
+
+            {isDefaultOnly && (
+              <p className="prefs-default-hint">{t('system.activeConfigDefaultHint')}</p>
+            )}
+
+            {overrideChips.length > 0 && (
+              <div className="prefs-overrides-wrap">
+                {overrideChips.map((chip) => (
+                  <span key={chip} className="prefs-override-chip tabular-nums">
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {presets.length > 0 && (
+              <div className="prefs-subsection">
+                <div className="prefs-subsection-label">
+                  <Layers size={13.5} strokeWidth={1.75} color="var(--accent-color)" />
+                  <span>{t('system.presetsSectionLabel')}</span>
+                </div>
+                <div className="prefs-presets-row">
+                  {presets.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      className="prefs-preset-chip"
+                      disabled={isPrefsMutating}
+                      onClick={() => void handleApplyPreset(preset.id, preset.name)}
+                      title={preset.description || preset.name}
+                    >
+                      <span>{applyingPresetId === preset.id ? t('common.loading') : preset.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {routines.length > 0 && (
+              <div className="prefs-subsection">
+                <div className="prefs-subsection-label">
+                  <Clock size={13.5} strokeWidth={1.75} color="var(--accent-color)" />
+                  <span>{t('system.routinesSectionLabel')}</span>
+                  <span className="prefs-subsection-count tabular-nums">
+                    {activeRoutinesCount}/{routines.length}
+                  </span>
+                </div>
+                <div className="prefs-routines-list">
+                  {routines.map((routine) => (
+                    <div key={routine.id} className={`prefs-routine-row ${routine.enabled ? '' : 'is-paused'}`}>
+                      <div className="prefs-routine-info">
+                        <div className="prefs-routine-name">{routine.name}</div>
+                        <div className="prefs-routine-meta tabular-nums">
+                          <span>
+                            {formatRoutineScheduleLabel(routine, t)} · {routine.time} ·{' '}
+                            {formatRoutineKindLabel(routine, t)}
+                          </span>
+                          {routine.tool_access === 'allow_writes' && (
+                            <span className="prefs-routine-writes-badge">{t('system.routineWritesBadge')}</span>
+                          )}
+                        </div>
+                      </div>
+                      <label className="prefs-switch-label">
+                        <input
+                          ref={bindNativeSwitchAttr}
+                          type="checkbox"
+                          className="prefs-switch-input"
+                          role="switch"
+                          aria-checked={routine.enabled}
+                          aria-label={t('system.routineToggleAria', { name: routine.name })}
+                          checked={routine.enabled}
+                          disabled={isPrefsMutating}
+                          onChange={() => void handleToggleRoutine(routine.id, routine.name, !routine.enabled)}
+                        />
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(hasOverrides || routines.length > 0 || historyCount > 0) && (
+              <div className="prefs-footer-actions">
+                {historyCount > 0 && (
+                  <button
+                    type="button"
+                    className="prefs-action-btn"
+                    disabled={isPrefsMutating}
+                    onClick={() => void handleRollbackPrefs()}
+                  >
+                    <Undo2 size={13.5} strokeWidth={1.75} />
+                    <span className="tabular-nums">
+                      {t('system.prefsRollbackBtn', { count: historyCount })}
+                    </span>
+                  </button>
+                )}
+                {(hasOverrides || routines.length > 0) && (
+                  <button
+                    type="button"
+                    className="prefs-action-btn danger"
+                    disabled={isPrefsMutating}
+                    onClick={() => void handleResetAllPrefs()}
+                  >
+                    <RotateCcw size={13.5} strokeWidth={1.75} />
+                    <span>{t('system.prefsResetBtn')}</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </section>
+        );
+      })()}
 
       {/* SECTION 1: Thinking Style & Directives + Profile */}
       <div className="system-accordion-card">
@@ -1059,7 +1450,7 @@ export const SystemTab: React.FC<SystemTabProps> = ({
                 {personaPresets.map((preset) => {
                   const isActive = personaStyle === preset.id;
                   const cleanTitle = preset.title.replace(/^[^\p{L}\p{N}]+\s*/u, '');
-                  const badge = getPresetBadge(preset.id, t);
+                  const badge = getPresetBadge(preset, t);
                   return (
                     <button
                       key={preset.id}
@@ -1460,6 +1851,9 @@ export const SystemTab: React.FC<SystemTabProps> = ({
                         <div className="doc-chapter-header">
                           <span className="doc-chapter-title">{sk.name}</span>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {sk.disabled && (
+                              <span className="doc-chapter-badge">{t('skills.disabledBadge')}</span>
+                            )}
                             <span className="doc-chapter-badge">{t('skills.builtinBadge')}</span>
                             <ChevronRight size={14} color="var(--text-muted)" />
                           </div>

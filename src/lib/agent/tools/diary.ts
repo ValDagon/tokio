@@ -71,7 +71,7 @@ async function readDiary(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome>
     const rendered = await renderDailyDiary(ctx.userId, {
       date,
       now: ctx.now,
-      includeTasks: args.include_tasks !== false,
+      ...(args.include_tasks !== undefined ? { includeTasks: args.include_tasks !== false } : {}),
     });
     const content =
       `Дневник за ${rendered.date} ещё не создан — ниже шаблон, который получится при первой записи.\n\n` +

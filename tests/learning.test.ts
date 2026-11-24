@@ -21,11 +21,14 @@ import { createChapter, getChapter } from '../src/lib/dal/docs';
 import { ensureUser } from '../src/lib/dal/users';
 import {
   LEARN_RULE_MAX_CHARS,
+  editRule,
   formatLearnedRuleReply,
   listLearnedRules,
   parseLearnCommand,
   rememberRule,
+  removeRule,
   ruleKey,
+  setPersonaStyle,
   splitDirectives,
 } from '../src/lib/learning';
 
@@ -180,5 +183,30 @@ describe('remember_rule (агентская тулза)', () => {
 
     expect(outcome.ok).toBe(false);
     expect(await getChapter(USER_A, CUSTOM_INSTRUCTIONS_SLUG)).toBeNull();
+  });
+
+  it('editRule и removeRule точечно меняют одно правило, сохраняя остальные и стиль общения', async () => {
+    await rememberRule(USER_A, 'Всегда отвечай кратко');
+    await rememberRule(USER_A, 'По пятницам сверяй Card');
+    await setPersonaStyle(USER_A, 'strategist');
+
+    const edited = await editRule(USER_A, { match: 'пятницам' }, 'По воскресеньям сверяй Wallet');
+    expect(edited.ok).toBe(true);
+    expect(edited.previous).toBe('По пятницам сверяй Card');
+    expect(await listLearnedRules(USER_A)).toEqual([
+      'Всегда отвечай кратко',
+      'По воскресеньям сверяй Wallet',
+    ]);
+
+    const chapterAfterEdit = await getChapter(USER_A, CUSTOM_INSTRUCTIONS_SLUG);
+    expect(splitDirectives(chapterAfterEdit?.content ?? '').style).toBe('strategist');
+
+    const removed = await removeRule(USER_A, { index: 1 });
+    expect(removed.ok).toBe(true);
+    expect(removed.removed).toBe('Всегда отвечай кратко');
+    expect(await listLearnedRules(USER_A)).toEqual(['По воскресеньям сверяй Wallet']);
+
+    const chapterAfterRemove = await getChapter(USER_A, CUSTOM_INSTRUCTIONS_SLUG);
+    expect(splitDirectives(chapterAfterRemove?.content ?? '').style).toBe('strategist');
   });
 });

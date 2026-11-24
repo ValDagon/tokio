@@ -512,4 +512,18 @@ describe('evaluateExecutiveOverload и overloadShieldBlock', () => {
     expect(normalPrompt).toContain('read_skill');
     expect(normalPrompt.indexOf('КАТАЛОГ ДОМЕННЫХ СКИЛЛОВ')).toBeLessThan(idxNormal);
   });
+
+  it('разговорные эмоциональные маркеры включают thought_partner, а talkMode добавляет директиву в хвост', () => {
+    expect(detectMode('устал сегодня, вообще нет сил')).toBe('thought_partner');
+    expect(detectMode('хочется выговориться про работу')).toBe('thought_partner');
+    expect(detectMode('купить молоко завтра')).toBe('action');
+
+    const dateMarker = 'ТЕКУЩЕЕ ВРЕМЯ И КАЛЕНДАРЬ:';
+    const basePrompt = buildSystemPrompt({ now: NOW, mode: 'thought_partner' });
+    const talkPrompt = buildSystemPrompt({ now: NOW, mode: 'thought_partner', talkMode: true });
+    const idx = talkPrompt.indexOf(dateMarker);
+    expect(talkPrompt).toContain('РЕЖИМ СВОБОДНОГО РАЗГОВОРА (/talk)');
+    expect(talkPrompt.indexOf('РЕЖИМ СВОБОДНОГО РАЗГОВОРА (/talk)')).toBeGreaterThan(idx);
+    expect(talkPrompt.slice(0, idx)).toBe(basePrompt.slice(0, basePrompt.indexOf(dateMarker)));
+  });
 });

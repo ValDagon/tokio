@@ -550,5 +550,18 @@ export function getCurrencySymbol(code?: string): string {
   }
 }
 
+/**
+ * Matches an account name against a theme rule pattern (supports pipe-delimited variants like "card|карт").
+ */
+export function matchesAccountThemePattern(accountName: string, pattern: string): boolean {
+  const lowerName = accountName.trim().toLowerCase();
+  if (!lowerName || !pattern) return false;
+  return pattern
+    .split('|')
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+    .some((token) => lowerName.includes(token));
+}
+
 
 

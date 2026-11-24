@@ -30,8 +30,8 @@ describe('agent/tools/index: сборка реестра', () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it('60 тулз: 57 прежних + list_skills, read_skill, draft_skill', () => {
-    expect(agentTools.length).toBe(60);
+  it('75 тулз: 62 прежних + 12 config + create_account', () => {
+    expect(agentTools.length).toBe(75);
   });
 
   it('каждая тулза валидна: имя, описание, runnable', () => {
@@ -45,10 +45,10 @@ describe('agent/tools/index: сборка реестра', () => {
   it('registerAllTools наполняет глобальный реестр целиком и идемпотентно', () => {
     registerAllTools();
     const first = listToolNames();
-    expect(first.length).toBe(60);
+    expect(first.length).toBe(75);
 
     registerAllTools(); // повтор — не дублирует
-    expect(listToolNames().length).toBe(60);
+    expect(listToolNames().length).toBe(75);
     expect(getTool('add_task')).not.toBeNull();
     expect(getTool('add_expense')).not.toBeNull();
   });
@@ -58,7 +58,7 @@ describe('agent/tools/index: сборка реестра', () => {
     const replacement = agentTools[0]!;
     replaceTool({ ...replacement, description: 'подменена' });
     expect(getTool(replacement.name)?.description).toBe('подменена');
-    expect(listToolNames().length).toBe(60);
+    expect(listToolNames().length).toBe(75);
   });
 
   it('registerTool бросает на дубликате (строгий реестр)', () => {

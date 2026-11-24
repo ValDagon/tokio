@@ -21,14 +21,24 @@ import { api, callsOf, resetApi, resetDb, sqliteDDL } from '../mocks/sdk';
 
 import { createTableStatements } from '../../src/db/ddl';
 import { TABLES } from '../../src/db/tables';
-import { resetConfigCache } from '../../src/lib/config';
+import { resetConfigCache, setConfigOverrides } from '../../src/lib/config';
 import { ensureAccounts } from '../../src/lib/dal/finances';
 import { listFailureAggregates } from '../../src/lib/evolution';
 import { ensureUser } from '../../src/lib/dal/users';
 import { parseFinancialIntent } from '../../src/lib/financial-parser';
 import { listNotes } from '../../src/lib/dal/notes';
 import * as sttModule from '../../src/lib/stt';
-import { handlePhotoMessage, handleVoiceMessage, smartIngest } from '../../src/handlers/ingest';
+import * as geminiModule from '../../src/lib/gemini';
+import { readDailyDiary } from '../../src/lib/diary';
+import { kvGet, kvSet } from '../../src/lib/dal/misc';
+import { routeMessage, resetRouterSeams } from '../../src/handlers/router';
+import {
+  TALK_MODE_TTL_MS,
+  handlePhotoMessage,
+  handleVoiceMessage,
+  isTalkModeActive,
+  smartIngest,
+} from '../../src/handlers/ingest';
 
 const USER = 424242;
 const CHAT = 424242;
@@ -585,5 +595,183 @@ describe('проброс replyContext (цитата/реплай) в агент�
     const agentArg = runAgentMock.mock.calls[0][0] as { text: string };
     expect(agentArg.text).toContain('GeForce NOW — 19,99 USD (20-е число)');
     expect(agentArg.text).toContain('Давай перенесём оплату');
+  });
+});
+
+describe('личный дневник: детерминированный перехват префикса «дневник»', () => {
+  afterEach(() => {
+    delete (api as { getFileContent?: unknown }).getFileContent;
+    vi.restoreAllMocks();
+  });
+
+  it('текст «Дневник, ...» причёсывается моделью и пишется в дневник, а не в notes или агента', async () => {
+    vi.spyOn(geminiModule, 'chat').mockResolvedValueOnce({
+      content: JSON.stringify({
+        text: 'Сегодня чувствовал усталость, но успел закрыть важный созвон.',
+        energy: 6,
+        reply: 'Ты сделал хороший шаг сегодня. Береги себя вечером.',
+      }),
+      model: 'gemini-2.5-flash',
+      usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+      costMicros: 0,
+      byok: false,
+      modelsTried: ['gemini-2.5-flash'],
+      finishReason: 'stop',
+      toolCalls: [],
+      raw: {},
+      record: null,
+    });
+
+    await smartIngest({
+      userId: USER,
+      chatId: CHAT,
+      text: 'Дневник, ну вот сегодня прям устал, но созвон закрыл, сил на 6 из 10',
+      forwarded: false,
+    });
+
+    expect(runAgentMock).not.toHaveBeenCalled();
+    expect(await listNotes(USER)).toHaveLength(0);
+    const diary = await readDailyDiary(USER);
+    expect(diary).toContain('Сегодня чувствовал усталость, но успел закрыть важный созвон.');
+    expect(diary).toContain('**Уровень энергии (1–10):** 6');
+    expect(sentTexts().join('\n')).toContain('Записал в дневник');
+  });
+
+  it('при отказе модели сохраняет сырую голосовую речь прямо в дневник и никогда в notes', async () => {
+    (api as { getFileContent?: unknown }).getFileContent = vi
+      .fn()
+      .mockResolvedValue(new Uint8Array([1, 2, 3]));
+    vi.spyOn(sttModule, 'tryTranscribe').mockResolvedValue({
+      text: 'Дневник сегодня просто хотелось выдохнуть и ничего не делать',
+      model: 'gemini-2.5-flash',
+      modelsTried: ['gemini-2.5-flash'],
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+      costMicros: 0,
+      byok: false,
+      record: null,
+    });
+    vi.spyOn(geminiModule, 'chat').mockRejectedValueOnce(new Error('model offline'));
+
+    await handleVoiceMessage(USER, CHAT, { file_id: 'voice-diary-1', duration: 4 }, 77);
+
+    expect(runAgentMock).not.toHaveBeenCalled();
+    expect(await listNotes(USER)).toHaveLength(0);
+    const diary = await readDailyDiary(USER);
+    expect(diary).toContain('сегодня просто хотелось выдохнуть и ничего не делать');
+    const sent = sentTexts().join('\n');
+    expect(sent).toContain('🗣');
+    expect(sent).toContain('Записал в дневник');
+  });
+
+  it('голый префикс «дневник» показывает сегодняшний дневник или подсказку, если пусто', async () => {
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'дневник', forwarded: false });
+    expect(sentTexts().join('\n')).toContain('ещё пуст');
+
+    vi.spyOn(geminiModule, 'chat').mockRejectedValueOnce(new Error('offline'));
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'Дневник: отличное утро', forwarded: false });
+    resetApi();
+
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'дневник', forwarded: false });
+    expect(sentTexts().join('\n')).toContain('отличное утро');
+  });
+});
+
+describe('разговорный режим (/talk и «просто поговорим»)', () => {
+  afterEach(() => {
+    resetConfigCache();
+    resetRouterSeams();
+  });
+
+  it('«просто поговорим» включает 30-мин read-only диалог и не роняет пустой/ошибочный ответ в заметки', async () => {
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'просто поговорим', forwarded: false });
+    expect(runAgentMock).not.toHaveBeenCalled();
+    expect(await isTalkModeActive(USER)).toBe(true);
+    expect(sentTexts().join('\n')).toContain('Режим разговора включён');
+
+    resetApi();
+    runAgentMock.mockResolvedValueOnce({
+      reply: 'Слушаю тебя. Расскажи, что на душе.',
+      mode: 'thought_partner',
+      steps: [],
+      stopReason: 'final',
+      thread: [],
+    });
+
+    await smartIngest({
+      userId: USER,
+      chatId: CHAT,
+      text: 'потратил силы на всё и устал',
+      forwarded: false,
+    });
+    expect(runAgentMock).toHaveBeenCalledTimes(1);
+    expect(runAgentMock.mock.calls[0][0]).toMatchObject({
+      toolAccess: 'read-only',
+      mode: 'thought_partner',
+      talkMode: true,
+    });
+
+    // При empty_reply и llm_error в talkMode сообщение НЕ сохраняется в notes и НЕ уходит в парсер.
+    resetApi();
+    runAgentMock.mockResolvedValueOnce(SILENT_RUN);
+    await smartIngest({
+      userId: USER,
+      chatId: CHAT,
+      text: 'обед 15 евро, но не записывай это просто болтаем',
+      forwarded: false,
+    });
+    expect(await listNotes(USER)).toHaveLength(0);
+    expect(sentTexts().join('\n')).toContain('всё ещё в режиме разговора');
+
+    // Выход по «закончим» возвращает обычный режим.
+    resetApi();
+    await smartIngest({ userId: USER, chatId: CHAT, text: 'закончим', forwarded: false });
+    expect(await isTalkModeActive(USER)).toBe(false);
+    expect(sentTexts().join('\n')).toContain('Вышел из режима разговора');
+  });
+
+  it('истёкший 30-мин TTL выключает разговорный режим автоматически', async () => {
+    const expiredUntil = Date.now() - 1_000;
+    await kvSet(`talk_mode:v1:${USER}`, JSON.stringify({ until: expiredUntil }));
+    expect(await isTalkModeActive(USER)).toBe(false);
+    expect(TALK_MODE_TTL_MS).toBe(30 * 60_000);
+  });
+
+  it('команда /talk поддерживает on, status, off и toggle', async () => {
+    setConfigOverrides({ betaWhitelist: [USER], adminIds: [USER] });
+    const mkMsg = (text: string) => ({
+      message_id: 1,
+      chat: { id: CHAT, type: 'private' as const },
+      from: { id: USER, first_name: 'Tester' },
+      date: 0,
+      text,
+    });
+
+    await routeMessage(mkMsg('/talk status'));
+    expect(sentTexts().join('\n')).toContain('Сейчас обычный режим');
+
+    resetApi();
+    await routeMessage(mkMsg('/talk on'));
+    expect(await isTalkModeActive(USER)).toBe(true);
+    expect(sentTexts().join('\n')).toContain('Режим разговора включён');
+
+    resetApi();
+    await routeMessage(mkMsg('/talk status'));
+    expect(sentTexts().join('\n')).toContain('включён режим разговора');
+
+    resetApi();
+    await routeMessage(mkMsg('/talk off'));
+    expect(await isTalkModeActive(USER)).toBe(false);
+    expect(sentTexts().join('\n')).toContain('Вышел из режима разговора');
+
+    // Bare /talk toggles on, then off
+    resetApi();
+    await routeMessage(mkMsg('/talk'));
+    expect(await isTalkModeActive(USER)).toBe(true);
+    resetApi();
+    await routeMessage(mkMsg('/talk'));
+    expect(await isTalkModeActive(USER)).toBe(false);
+
+    const stored = await kvGet(`talk_mode:v1:${USER}`);
+    expect(stored).toBeNull();
   });
 });

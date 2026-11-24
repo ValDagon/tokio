@@ -395,6 +395,15 @@ async function updateMedicationTool(args: ToolArgs, ctx: ToolContext): Promise<T
       changes.push(active ? 'активен' : 'на паузе');
     }
 
+    if (args.refill_threshold !== undefined && args.refill_threshold !== null) {
+      const threshold = asInt(args.refill_threshold);
+      if (threshold === null || threshold < 0) {
+        return fail('refill_threshold должен быть целым числом ≥ 0.');
+      }
+      patch.refillThreshold = threshold;
+      changes.push(`порог пополнения: ${threshold} шт.`);
+    }
+
     if (changes.length === 0) {
       return fail('Нечего обновлять — передайте хотя бы одно поле.');
     }
@@ -552,6 +561,10 @@ export const medicationTools: Tool[] = [
         refill_pills: {
           type: 'integer',
           description: 'Сколько доз докупили — прибавится к текущему остатку.',
+        },
+        refill_threshold: {
+          type: 'integer',
+          description: 'Новый порог остатка, при котором пора пополнить запас (≥ 0).',
         },
         is_active: { type: 'boolean', description: 'true — принимать, false — поставить на паузу.' },
       },

@@ -14,6 +14,7 @@
 
 import type { Tool } from '../registry';
 import { replaceTool } from '../registry';
+import { configTools } from './config';
 import { diaryTools } from './diary';
 import { financeTools } from './finances';
 import { medicationTools } from './medications';
@@ -26,6 +27,7 @@ import { trashTools } from './trash';
 import { triageTools } from './triage';
 
 export {
+  configTools,
   diaryTools,
   financeTools,
   medicationTools,
@@ -49,7 +51,8 @@ export type ToolDomain =
   | 'runway'
   | 'trash'
   | 'system_docs'
-  | 'reasoning';
+  | 'reasoning'
+  | 'config';
 
 /**
  * Тулзы по доменам — единственный источник имён для фильтра каталога.
@@ -67,6 +70,7 @@ export const TOOL_GROUPS: Readonly<Record<ToolDomain, readonly Tool[]>> = {
   trash: trashTools,
   system_docs: systemDocsTools,
   reasoning: reasoningTools,
+  config: configTools,
 };
 
 /** Все тулзы агента в каноническом порядке (upstream: `ALL_TOOLS`). */
@@ -81,6 +85,7 @@ export const agentTools: readonly Tool[] = [
   ...TOOL_GROUPS.trash,
   ...TOOL_GROUPS.system_docs,
   ...TOOL_GROUPS.reasoning,
+  ...TOOL_GROUPS.config,
 ];
 
 /**

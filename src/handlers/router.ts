@@ -81,9 +81,12 @@ import {
   LIABILITY_REVIEW_STALE_TOAST,
   LIABILITY_REVIEW_TAKEN_TOAST,
   claimVoiceRecovery,
+  disableTalkMode,
+  enableTalkMode,
   handleDocumentMessage,
   handlePhotoMessage,
   handleVoiceMessage,
+  isTalkModeActive,
   retryPhotoRecovery,
   retryVoiceRecovery,
 } from './ingest';
@@ -662,7 +665,7 @@ async function handleDigest(userId: number, chatId: number): Promise<void> {
   // Ручная сводка ведёт себя как плановая: отдельным сообщением после неё идёт
   // «Проверка списаний». Её сбой не отменяет уже показанную сводку.
   try {
-    await deliverLiabilityReview(userId, { chatId });
+    await deliverLiabilityReview(userId, { chatId, ignoreQuietHours: true });
   } catch (err) {
     console.warn('digest: liability review failed', userId, err);
   }
@@ -1352,6 +1355,42 @@ interface NamedCommand {
 const handleByokSlash: CommandHandler = (u, c) => handleByok(u, c, '');
 const handleSkillsSlash: CommandHandler = (u, c) => handleSkills(u, c, '/skills');
 const handleLearnSlash: CommandHandler = (u, c) => handleLearn(u, c, '/learn');
+const handleTalkSlash: CommandHandler = (u, c) => handleTalk(u, c, '/talk');
+
+async function handleTalk(userId: number, chatId: number, rawText: string): Promise<void> {
+  const locale = await loadUserLocale(userId);
+  const firstSpace = rawText.search(/\s/);
+  const arg = (firstSpace === -1 ? '' : rawText.slice(firstSpace)).trim().toLowerCase();
+  const active = await isTalkModeActive(userId);
+
+  let replyKey: 'enabled' | 'disabled' | 'alreadyOn' | 'alreadyOff' | 'statusOn' | 'statusOff';
+  if (arg === 'on' || arg === 'вкл' || arg === 'start' || arg === 'старт') {
+    await enableTalkMode(userId);
+    replyKey = active ? 'alreadyOn' : 'enabled';
+  } else if (
+    arg === 'off' ||
+    arg === 'выкл' ||
+    arg === 'stop' ||
+    arg === 'стоп' ||
+    arg === 'exit' ||
+    arg === 'выход'
+  ) {
+    if (active) await disableTalkMode(userId);
+    replyKey = active ? 'disabled' : 'alreadyOff';
+  } else if (arg === 'status' || arg === 'статус') {
+    replyKey = active ? 'statusOn' : 'statusOff';
+  } else if (active) {
+    await disableTalkMode(userId);
+    replyKey = 'disabled';
+  } else {
+    await enableTalkMode(userId);
+    replyKey = 'enabled';
+  }
+
+  await safeAnswer(chatId, t(locale, `talk.${replyKey}`), {
+    replyMarkup: getMainKeyboard(locale),
+  });
+}
 
 /** Слэш-команды и их алиасы: токен без `/` и без `@botname`. */
 const SLASH_COMMANDS: Record<string, NamedCommand> = {
@@ -1419,6 +1458,11 @@ const SLASH_COMMANDS: Record<string, NamedCommand> = {
   запомни: { handler: handleLearnSlash },
   правило: { handler: handleLearnSlash },
   rule: { handler: handleLearnSlash },
+  talk: { handler: handleTalkSlash },
+  поговорить: { handler: handleTalkSlash },
+  разговор: { handler: handleTalkSlash },
+  болтать: { handler: handleTalkSlash },
+  chat: { handler: handleTalkSlash },
 };
 
 // ---------------------------------------------------------------------------
@@ -1742,6 +1786,17 @@ export async function routeMessage(message: Message): Promise<void> {
       // поэтому перехват идёт до общей таблицы слэш-команд.
       if (token === 'skills' || token === 'скиллы') {
         await handleSkills(userId, chatId, userText);
+        return;
+      }
+
+      if (
+        token === 'talk' ||
+        token === 'поговорить' ||
+        token === 'разговор' ||
+        token === 'болтать' ||
+        token === 'chat'
+      ) {
+        await handleTalk(userId, chatId, userText);
         return;
       }
 

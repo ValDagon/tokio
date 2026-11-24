@@ -19,6 +19,7 @@ import {
   listTasks,
 } from '../../dal/tasks.js';
 import type { TaskRow } from '../../../types.js';
+import { loadUserPrefs, type UserPrefs } from '../../prefs.js';
 import { dateKey } from '../../utils.js';
 import type { Tool, ToolArgs, ToolContext, ToolOutcome } from '../registry.js';
 
@@ -67,12 +68,12 @@ function dueDateKey(task: TaskRow, timeZone: string): string | null {
   return dateKey(due, timeZone);
 }
 
-/** Задача «застряла»: обновлялась не позже чем `STALE_AFTER_DAYS` дней назад. */
-function isStale(task: TaskRow, now: Date): boolean {
+/** Задача «застряла»: обновлялась не позже чем `staleAfterDays` дней назад. */
+function isStale(task: TaskRow, now: Date, staleAfterDays: number): boolean {
   if (!task.updatedAt) return false;
   const updated = new Date(task.updatedAt);
   if (Number.isNaN(updated.getTime())) return false;
-  return now.getTime() - updated.getTime() >= STALE_AFTER_DAYS * DAY_MS;
+  return now.getTime() - updated.getTime() >= staleAfterDays * DAY_MS;
 }
 
 interface TriageNames {
@@ -109,10 +110,15 @@ function label(task: TaskRow, names: TriageNames): string {
 async function triageTasks(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
   const mode = args.mode === 'sphere' ? 'sphere' : 'focus';
   const today = dateKey(ctx.now, ctx.timezone);
-  const staleThreshold = new Date(ctx.now.getTime() - STALE_AFTER_DAYS * DAY_MS);
 
   try {
-    const names = await loadNames(ctx.userId);
+    const [names, prefs] = await Promise.all([
+      loadNames(ctx.userId),
+      loadUserPrefs(ctx.userId).catch((): UserPrefs => ({})),
+    ]);
+    const effectiveFocusLimit = prefs.adhd?.focusLimit ?? FOCUS_LIMIT;
+    const effectiveStaleDays = prefs.adhd?.staleAfterDays ?? STALE_AFTER_DAYS;
+
     if (mode === 'sphere') {
       const sphere = typeof args.sphere === 'string' ? args.sphere.trim() : '';
       if (!sphere) return fail('Для режима sphere нужна сфера (sphere): категория или подкатегория.');
@@ -135,7 +141,7 @@ async function triageTasks(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
       const sorted = [...matched].sort(byDue);
       const items = sorted.slice(0, limit);
       const lines = items.map((task, index) =>
-        formatLine(task, index + 1, names, today, staleThreshold, ctx.timezone),
+        formatLine(task, index + 1, names, today, ctx.now, effectiveStaleDays, ctx.timezone),
       );
       return {
         ok: true,
@@ -152,7 +158,7 @@ async function triageTasks(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
       const due = dueDateKey(task, ctx.timezone);
       return due !== null && due <= today;
     });
-    const limit = readLimit(args, FOCUS_LIMIT, FOCUS_LIMIT_CAP);
+    const limit = readLimit(args, effectiveFocusLimit, effectiveFocusLimit);
     const items = [...focus].sort(byDue).slice(0, limit);
 
     if (items.length === 0) {
@@ -164,12 +170,12 @@ async function triageTasks(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
     }
 
     const lines = items.map((task, index) =>
-      formatLine(task, index + 1, names, today, staleThreshold, ctx.timezone),
+      formatLine(task, index + 1, names, today, ctx.now, effectiveStaleDays, ctx.timezone),
     );
     return {
       ok: true,
       content: [
-        `🎯 Микро-фокус дня (не больше ${FOCUS_LIMIT} задач, на сегодня и просроченные):`,
+        `🎯 Микро-фокус дня (не больше ${effectiveFocusLimit} задач, на сегодня и просроченные):`,
         ...lines,
       ].join('\n'),
       data: { mode, date: today, items: items.map(toData) },
@@ -192,14 +198,15 @@ function formatLine(
   index: number,
   names: TriageNames,
   today: string,
-  staleThreshold: Date,
+  now: Date,
+  staleAfterDays: number,
   timeZone: string,
 ): string {
   const due = dueDateKey(task, timeZone);
   const overdue = due !== null && due < today;
   const dueLabel = due ? ` [${overdue ? 'просрочено до' : 'до'} ${due}]` : '';
   const notes = task.notes?.trim() ? `\n   ↳ ${task.notes.trim()}` : '';
-  const nudge = overdue && isStale(task, staleThreshold)
+  const nudge = overdue && isStale(task, now, staleAfterDays)
     ? `\n   ⚡️ Двухминутный шаг: ${task.title.trim()}`
     : '';
   return `${index}. [${label(task, names)}] ${task.title}${dueLabel}${notes}${nudge}`;

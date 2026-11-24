@@ -36,8 +36,19 @@ import {
   type LiabilityReviewRecord,
 } from '../lib/dal/misc.js';
 import { getUser } from '../lib/dal/users.js';
-import { normalizeLocale, type LocaleCode } from '../lib/i18n.js';
+import { appendReflection, parseDiaryPrefix, readDailyDiary } from '../lib/diary.js';
+import { chat, parseJsonContent } from '../lib/gemini.js';
+import { normalizeLocale, t, type LocaleCode } from '../lib/i18n.js';
 import { getOverlay } from '../lib/overlay.js';
+import {
+  TALK_MODE_TTL_MS,
+  disableTalkMode,
+  enableTalkMode,
+  isTalkModeActive,
+  loadUserPrefs,
+  type FinancePrefs,
+  type UserPrefs,
+} from '../lib/prefs.js';
 import {
   liabilityReviewDueDate,
   parseLiabilityReviewCallback,
@@ -88,6 +99,7 @@ import { escapeAmpLtGt, safeAnswer, safeEdit, signalChatAction } from './formatt
 import { startTurnProgress } from './progress.js';
 import {
   buildAgentDeepLinkKeyboard,
+  buildOpenAppButton,
   buildUndoWithAppKeyboard,
   getMainKeyboard,
   type AgentStepLike,
@@ -197,6 +209,28 @@ export function agentAccessFor(agentQuery: string, replyContext?: string): 'full
   return SOCIAL_MESSAGE_RE.test(stripEmoji(agentQuery)) ? 'read-only' : 'full';
 }
 
+export { TALK_MODE_TTL_MS, disableTalkMode, enableTalkMode, isTalkModeActive };
+
+const TALK_ENTER_RE =
+  /^(?:давай\s+)?(?:просто\s+поговорим|поговорим\s+просто|поболтаем|давай\s+поболтаем|хочу\s+просто\s+поговорить|режим\s+разговора(?:\s+вкл)?|let'?s\s+just\s+talk|just\s+talk|talk\s+mode(?:\s+on)?)$/iu;
+
+const TALK_EXIT_RE =
+  /^(?:закончим|закончили|хватит\s+болтать|выйти\s+из\s+разговора|выход|стоп|конец\s+разговора|режим\s+разговора\s+выкл|talk\s+off|stop\s+talk|end\s+talk|exit\s+talk)$/iu;
+
+function cleanTalkPhrase(text: string): string {
+  return stripEmoji(text).toLowerCase().replace(/[!.,?…]+$/u, '').trim();
+}
+
+export function matchTalkModeEnter(text: string): boolean {
+  const cleaned = cleanTalkPhrase(text);
+  return cleaned.length > 0 && TALK_ENTER_RE.test(cleaned);
+}
+
+export function matchTalkModeExit(text: string): boolean {
+  const cleaned = cleanTalkPhrase(text);
+  return cleaned.length > 0 && TALK_EXIT_RE.test(cleaned);
+}
+
 /** Глаголы денежного перемещения: «переведи всё», «сконвертируй», «переложи». */
 const FINANCE_MOVE_VERBS = /(?:перевед|переведи|переве|перелож|перекин|перемест|сконверт|конвертир|обменя|пересчита|перепривяж)/iu;
 
@@ -294,20 +328,33 @@ async function tryAgentAutonomousStep(
   userText: string,
   prefixQuote?: string,
   replyContext?: string,
+  talkMode = false,
 ): Promise<boolean> {
   const spend = await checkSpendLimit(userId);
   if (!spend.allowed) {
+    if (talkMode) {
+      const user = await getUser(userId);
+      const locale = normalizeLocale(user?.language, getOverlay().manifest.defaultLocale);
+      const msg = t(locale, 'talk.fallbackError');
+      await safeAnswer(chatId, prefixQuote ? `${prefixQuote}${escapeAmpLtGt(msg)}` : msg, {
+        replyMarkup: getMainKeyboard(locale),
+        ...(prefixQuote ? { isHtml: true } : {}),
+      });
+      return true;
+    }
     return false;
   }
 
   const isQuestion =
-    isAgentTrigger(userText) || (Boolean(replyContext) && !parseFinancialIntent(userText));
+    talkMode ||
+    isAgentTrigger(userText) ||
+    (Boolean(replyContext) && !parseFinancialIntent(userText));
   const agentQuery = userText.replace(/^\/(?:ask|agent|агент)\s*/i, '').trim();
   const fullQuery = formatAgentQueryWithReply(agentQuery, replyContext);
   // «Привет», «спасибо», «как дела» — ход без права записи: данные владельца не
   // меняются, даже если модель выберет write-инструмент. Точка одна на текст,
   // голос и подпись фото, потому что все три идут через эту функцию.
-  const toolAccess = agentAccessFor(agentQuery, replyContext);
+  const toolAccess = talkMode ? 'read-only' : agentAccessFor(agentQuery, replyContext);
 
   // Живая индикация: «печатает…» сразу, строка прогресса — только на медленном
   // ходе. Вся индикация внутри себя глушит сбои Bot API (handlers/progress.ts).
@@ -316,13 +363,34 @@ async function tryAgentAutonomousStep(
 
   let agentRes: AgentRunResult;
   try {
-    agentRes = await runAgent({ userId, text: fullQuery, onProgress: progress.onProgress, toolAccess });
+    agentRes = await runAgent(
+      talkMode
+        ? {
+            userId,
+            text: fullQuery,
+            onProgress: progress.onProgress,
+            toolAccess,
+            mode: 'thought_partner',
+            talkMode: true,
+          }
+        : { userId, text: fullQuery, onProgress: progress.onProgress, toolAccess },
+    );
   } catch (error) {
     // Ход упал, но сообщение ещё не потеряно: smartIngest после броска идёт в
     // детерминированные фолбэки и может ответить по существу. Заменять строку
     // ошибкой здесь нельзя — иначе честный ответ встанет рядом с «сбой модели».
     // Строку просто гасим: ход продолжается.
     await progress.finish();
+    if (talkMode) {
+      const user = await getUser(userId);
+      const locale = normalizeLocale(user?.language, getOverlay().manifest.defaultLocale);
+      const msg = t(locale, 'talk.fallbackError');
+      await safeAnswer(chatId, prefixQuote ? `${prefixQuote}${escapeAmpLtGt(msg)}` : msg, {
+        replyMarkup: getMainKeyboard(locale),
+        ...(prefixQuote ? { isHtml: true } : {}),
+      });
+      return true;
+    }
     throw error;
   }
 
@@ -333,6 +401,18 @@ async function tryAgentAutonomousStep(
     // этом же ходе не ушёл детерминированный ответ (сводка, задача, заметка,
     // напоминание), чтобы извинение не вставало рядом с настоящим ответом.
     if (agentRes.stopReason === 'llm_error') {
+      if (talkMode) {
+        const user = await getUser(userId);
+        const locale = normalizeLocale(user?.language, getOverlay().manifest.defaultLocale);
+        const msg = t(locale, 'talk.fallbackError');
+        if (deferReplyNotice(chatId, msg)) return true;
+        if (await progress.fail(msg)) return true;
+        await safeAnswer(chatId, prefixQuote ? `${prefixQuote}${escapeAmpLtGt(msg)}` : msg, {
+          replyMarkup: getMainKeyboard(locale),
+          ...(prefixQuote ? { isHtml: true } : {}),
+        });
+        return true;
+      }
       // Текст сбоя считается один раз: он же закрывает индикатор, когда ход
       // открыт не был (`deferReplyNotice` = false, см. lib/reply_turn.ts).
       const outageText = isQuestion
@@ -375,6 +455,17 @@ async function tryAgentAutonomousStep(
       return true;
     }
 
+    if (talkMode) {
+      const user = await getUser(userId);
+      const locale = normalizeLocale(user?.language, getOverlay().manifest.defaultLocale);
+      const msg = t(locale, 'talk.fallbackError');
+      await safeAnswer(chatId, prefixQuote ? `${prefixQuote}${escapeAmpLtGt(msg)}` : msg, {
+        replyMarkup: getMainKeyboard(locale),
+        ...(prefixQuote ? { isHtml: true } : {}),
+      });
+      return true;
+    }
+
     // Агент промолчал (`empty_reply`) — отдаём сообщение в инбокс-фоллбэк.
     return false;
   } finally {
@@ -385,10 +476,154 @@ async function tryAgentAutonomousStep(
   }
 }
 
+const DIARY_POLISH_PROMPT =
+  'You are a careful, compassionate personal diary editor. ' +
+  "Clean up the user's raw note or voice transcript into a coherent first-person diary entry in the exact same language, " +
+  'preserving ALL concrete facts, emotions, names, and meaning while removing only speech disfluencies, filler words, or stutters. ' +
+  'Extract an energy level from 1 to 10 ONLY if explicitly stated or clearly rated by the user (otherwise null). ' +
+  'Respond strictly with a single JSON object: ' +
+  '{"text":"<cleaned diary entry>","energy":<integer 1..10 or null>,"reply":"<1-2 warm, non-judgmental grounding sentences in the same language, no pressure>"}';
+
+/**
+ * Детерминированный перехват префикса «дневник» / «в дневник» / «diary».
+ * Работает одинаково для текста и распознанной речи, гарантирует сохранение в
+ * дневник даже при недоступности LLM и никогда не роняет запись в обычные заметки.
+ */
+async function handleDiaryPrefixMessage(
+  ctx: IngestContext,
+  body: string,
+): Promise<void> {
+  const { userId, chatId, prefixQuote } = ctx;
+  const user = await getUser(userId);
+  const locale = normalizeLocale(user?.language, getOverlay().manifest.defaultLocale);
+  const appBtn = buildOpenAppButton('diary', undefined, locale);
+  const replyMarkup: ReplyMarkup = appBtn
+    ? { inline_keyboard: [[appBtn]] }
+    : getMainKeyboard(locale);
+
+  if (!body) {
+    const existing = await readDailyDiary(userId);
+    if (existing) {
+      const rendered = markdownToTelegramHtml(existing);
+      await safeAnswer(chatId, prefixQuote ? `${prefixQuote}${rendered}` : rendered, {
+        replyMarkup,
+        isHtml: true,
+      });
+    } else {
+      const hint = t(locale, 'diary.emptyToday');
+      await safeAnswer(
+        chatId,
+        prefixQuote ? `${prefixQuote}${escapeAmpLtGt(hint)}` : hint,
+        {
+          replyMarkup,
+          ...(prefixQuote ? { isHtml: true } : {}),
+        },
+      );
+    }
+    return;
+  }
+
+  let finalText = body;
+  let energy: number | null = null;
+  let warmReply: string | null = null;
+
+  const spend = await checkSpendLimit(userId);
+  if (spend.allowed) {
+    signalChatAction(chatId, 'typing');
+    try {
+      const llmRes = await chat(
+        [
+          { role: 'system', content: DIARY_POLISH_PROMPT },
+          { role: 'user', content: body },
+        ],
+        {
+          userId,
+          json: true,
+          temperature: 0.2,
+          maxTokens: 1500,
+          purpose: 'diary_polish',
+        },
+      );
+      const parsed = parseJsonContent<{ text?: unknown; energy?: unknown; reply?: unknown }>(
+        llmRes.content,
+      );
+      if (typeof parsed?.text === 'string' && parsed.text.trim()) {
+        finalText = parsed.text.trim();
+      }
+      if (typeof parsed?.energy === 'number' && Number.isFinite(parsed.energy)) {
+        energy = Math.min(10, Math.max(1, Math.round(parsed.energy)));
+      }
+      if (typeof parsed?.reply === 'string' && parsed.reply.trim()) {
+        warmReply = parsed.reply.trim();
+      }
+    } catch {
+      // При отказе модели/JSON сохраняем сырую запись прямо в дневник без потерь.
+    }
+  }
+
+  const saved = await appendReflection(userId, finalText, { energy });
+  const lines: string[] = [
+    t(locale, 'diary.savedHeader', { date: escapeAmpLtGt(saved.date) }),
+    `<i>${escapeAmpLtGt(truncate(finalText, 500))}</i>`,
+  ];
+  if (energy !== null) {
+    lines.push(t(locale, 'diary.energyLine', { energy: String(energy) }));
+  }
+  if (warmReply) {
+    lines.push('', markdownToTelegramHtml(warmReply));
+  }
+  const msgBody = lines.join('\n');
+  await safeAnswer(chatId, prefixQuote ? `${prefixQuote}${msgBody}` : msgBody, {
+    replyMarkup,
+    isHtml: true,
+  });
+}
+
 export async function smartIngest(ctx: IngestContext): Promise<void> {
   const { userId, chatId, text, forwarded, prefixQuote, replyContext } = ctx;
   const userText = text.trim();
   if (!userText) return;
+
+  // 0. Детерминированный перехват личного дневника (текст и голос).
+  if (!forwarded) {
+    const diaryMatch = parseDiaryPrefix(userText);
+    if (diaryMatch.matched) {
+      await handleDiaryPrefixMessage(ctx, diaryMatch.body);
+      return;
+    }
+  }
+
+  // 0.5. Разговорный режим (/talk или «просто поговорим»): только read-only диалог,
+  // 30-минутный скользящий TTL и запрет на провал в инбокс/парсер.
+  let talkActive = false;
+  if (!forwarded) {
+    talkActive = await isTalkModeActive(userId);
+    if (talkActive && matchTalkModeExit(userText)) {
+      await disableTalkMode(userId);
+      const user = await getUser(userId);
+      const locale = normalizeLocale(user?.language, getOverlay().manifest.defaultLocale);
+      const msg = t(locale, 'talk.disabled');
+      await safeAnswer(chatId, prefixQuote ? `${prefixQuote}${escapeAmpLtGt(msg)}` : msg, {
+        replyMarkup: getMainKeyboard(locale),
+        ...(prefixQuote ? { isHtml: true } : {}),
+      });
+      return;
+    }
+    if (!talkActive && matchTalkModeEnter(userText)) {
+      await enableTalkMode(userId);
+      const user = await getUser(userId);
+      const locale = normalizeLocale(user?.language, getOverlay().manifest.defaultLocale);
+      const msg = t(locale, 'talk.enabled');
+      await safeAnswer(chatId, prefixQuote ? `${prefixQuote}${escapeAmpLtGt(msg)}` : msg, {
+        replyMarkup: getMainKeyboard(locale),
+        ...(prefixQuote ? { isHtml: true } : {}),
+      });
+      return;
+    }
+    if (talkActive) {
+      await enableTalkMode(userId);
+    }
+  }
 
   // 1. Агентный шаг (Agent-First): 100% прямых сообщений идут сразу в модель с полным набором инструментов.
   if (!forwarded) {
@@ -399,6 +634,7 @@ export async function smartIngest(ctx: IngestContext): Promise<void> {
         userText,
         prefixQuote,
         replyContext,
+        talkActive,
       );
       if (handled) return;
     } catch (err) {
@@ -414,7 +650,13 @@ export async function smartIngest(ctx: IngestContext): Promise<void> {
 
   // 2. Офлайн-фоллбэк финансового парсера (только для прямых сообщений, если агент промолчал или недоступен)
   if (!forwarded) {
-    const finIntent = parseFinancialIntent(userText);
+    const userPrefs = await loadUserPrefs(userId).catch((): UserPrefs => ({}));
+    const user = await getUser(userId);
+    const finIntent = parseFinancialIntent(
+      userText,
+      user?.baseCurrency || 'EUR',
+      userPrefs.finance,
+    );
     if (finIntent) {
       try {
         const finRes = await executeFinancialIntent(userId, finIntent, userText);
@@ -1586,6 +1828,7 @@ interface BalanceRejection {
 function inferScreenBankHint(
   snapshots: readonly VisionBalance[],
   allAccounts: readonly AccountRow[],
+  userFinancePrefs?: FinancePrefs | null,
 ): string | null {
   const hints = new Set<string>();
   const byId = new Map(allAccounts.map((acc) => [acc.id, acc]));
@@ -1595,7 +1838,7 @@ function inferScreenBankHint(
       const strict = matchExplicitAccount(
         normalizeBalanceAccountName(rawName),
         snap.currency,
-        { strictBrandOnly: true },
+        { strictBrandOnly: true, userFinancePrefs },
       );
       if (strict) hints.add(strict);
     }
@@ -1605,7 +1848,7 @@ function inferScreenBankHint(
         const strict = matchExplicitAccount(
           normalizeBalanceAccountName(acc.name),
           acc.currency,
-          { strictBrandOnly: true },
+          { strictBrandOnly: true, userFinancePrefs },
         );
         if (strict) hints.add(strict);
       }
@@ -1618,7 +1861,11 @@ async function resolveBalanceSnapshot(
   userId: number,
   snapshot: VisionBalance,
   overrideAccountId?: number,
-  context?: { allAccounts?: readonly AccountRow[]; screenBankHint?: string | null },
+  context?: {
+    allAccounts?: readonly AccountRow[];
+    screenBankHint?: string | null;
+    userFinancePrefs?: FinancePrefs | null;
+  },
 ): Promise<BalanceResolution | BalanceRejection> {
   if (snapshot.ambiguous) {
     return {
@@ -1661,7 +1908,11 @@ async function resolveBalanceSnapshot(
   if (!name) return { detail: 'на экране не напечатано название счёта', choices: [] };
 
   const normalized = normalizeBalanceAccountName(name);
-  const strictBrand = matchExplicitAccount(normalized, currency, { strictBrandOnly: true });
+  const userFinancePrefs = context?.userFinancePrefs;
+  const strictBrand = matchExplicitAccount(normalized, currency, {
+    strictBrandOnly: true,
+    userFinancePrefs,
+  });
 
   // 1. Строгий бренд: сужает набор, решает единственность счёта в этой валюте.
   if (strictBrand) {
@@ -1699,7 +1950,7 @@ async function resolveBalanceSnapshot(
   const sameCurrencyAccounts = allAccounts.filter(sameCurrency);
   let genericBrand: string | null = null;
   if (!strictBrand && !screenBankHint && sameCurrencyAccounts.length <= 1) {
-    genericBrand = matchExplicitAccount(normalized, currency);
+    genericBrand = matchExplicitAccount(normalized, currency, { userFinancePrefs });
     if (genericBrand) {
       const genericCandidates = (
         await findAccountCandidates(userId, genericBrand, snapshot.currency)
@@ -1906,8 +2157,12 @@ async function applyBalanceSnapshot(params: {
    */
   allowReapply?: boolean;
 }): Promise<BalanceOutcome> {
-  const allAccounts = await listAccounts(params.userId);
-  const screenBankHint = inferScreenBankHint(params.snapshots, allAccounts);
+  const [allAccounts, userPrefs] = await Promise.all([
+    listAccounts(params.userId),
+    loadUserPrefs(params.userId).catch((): UserPrefs => ({})),
+  ]);
+  const userFinancePrefs = userPrefs.finance;
+  const screenBankHint = inferScreenBankHint(params.snapshots, allAccounts, userFinancePrefs);
   const isMultiRowScreen = params.snapshots.length > 1;
 
   const candidateResolved: Array<ResolvedBalanceSnapshot & { index: number }> = [];
@@ -1931,7 +2186,7 @@ async function applyBalanceSnapshot(params: {
       params.userId,
       snapshot,
       params.overrides?.get(index),
-      { allAccounts, screenBankHint },
+      { allAccounts, screenBankHint, userFinancePrefs },
     );
     if ('detail' in found) {
       unmappedEntries.push({
@@ -2676,7 +2931,15 @@ async function runPhotoPipeline(params: PhotoPipelineParams): Promise<void> {
   // 1. Если есть подпись — единая проверка финансового fast-path и агентного шага.
   //    На повторе этот шаг пропускается целиком: см. комментарий выше.
   if (!replay && cleanCaption) {
-    const finIntent = parseFinancialIntent(cleanCaption);
+    const [captionPrefs, captionUser] = await Promise.all([
+      loadUserPrefs(userId).catch((): UserPrefs => ({})),
+      getUser(userId),
+    ]);
+    const finIntent = parseFinancialIntent(
+      cleanCaption,
+      captionUser?.baseCurrency || 'EUR',
+      captionPrefs.finance,
+    );
     if (finIntent) {
       try {
         const finRes = await executeFinancialIntent(userId, finIntent, cleanCaption);

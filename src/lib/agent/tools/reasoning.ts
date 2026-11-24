@@ -40,6 +40,7 @@ import {
   splitDirectives,
 } from '../../learning';
 import { findOverlaySkill, getOverlaySkills } from '../../overlay';
+import { loadUserPrefs } from '../../prefs';
 import { listLiabilities } from '../../dal/finances';
 import { listDoses, listMedications } from '../../dal/medications';
 import {
@@ -208,7 +209,10 @@ async function synthesizeLifeContext(args: ToolArgs, ctx: ToolContext): Promise<
 
     // 4. Активные задачи верхнего уровня (полная выборка для WIP/просрочки, срез 6 для показа).
     const now = ctx.now instanceof Date && !Number.isNaN(ctx.now.getTime()) ? ctx.now : new Date();
-    const user = await getUser(ctx.userId);
+    const [user, userPrefs] = await Promise.all([
+      getUser(ctx.userId),
+      loadUserPrefs(ctx.userId).catch(() => ({ adhd: undefined })),
+    ]);
     const timezone = ctx.timezone?.trim() || user?.timezone?.trim() || DEFAULT_TIMEZONE;
     const localDateStr = dateKey(now, timezone);
 
@@ -242,6 +246,7 @@ async function synthesizeLifeContext(args: ToolArgs, ctx: ToolContext): Promise<
       activeTodoCount,
       missedMedsCount,
       userText: topic ?? undefined,
+      thresholds: userPrefs.adhd?.overloadShield,
     });
 
     const sections: string[] = ['💾 **Срез реальных данных из вашей базы:**'];
@@ -366,17 +371,25 @@ interface DirectivesState {
 }
 
 /** Разбор главы директив: текст + хвост «Стиль общения: X» (ADR: в `users` колонки нет). */
-function parseDirectives(content: string): DirectivesState {
+function parseDirectives(
+  content: string,
+  customPersonaIds: readonly string[] = [],
+): DirectivesState {
   const { instructions, style } = splitDirectives(content);
+  const validStyle = style && (STYLES.includes(style) || customPersonaIds.includes(style));
   return {
     instructions,
-    style: style && STYLES.includes(style) ? style : 'mentor',
+    style: validStyle ? style : 'mentor',
   };
 }
 
 async function readDirectives(ctx: ToolContext): Promise<DirectivesState> {
-  const chapter = await getChapter(ctx.userId, CUSTOM_INSTRUCTIONS_SLUG);
-  return parseDirectives(chapter?.content ?? '');
+  const [chapter, prefs] = await Promise.all([
+    getChapter(ctx.userId, CUSTOM_INSTRUCTIONS_SLUG),
+    loadUserPrefs(ctx.userId).catch(() => ({ brain: undefined })),
+  ]);
+  const customIds = Object.keys(prefs.brain?.customPersonas ?? {});
+  return parseDirectives(chapter?.content ?? '', customIds);
 }
 
 async function updateCustomDirectives(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
@@ -384,9 +397,12 @@ async function updateCustomDirectives(args: ToolArgs, ctx: ToolContext): Promise
   if (!instructions) return fail('Укажите новые директивы (instructions).');
 
   const requestedStyle = asText(args.persona_style);
-  if (requestedStyle !== null && !STYLES.includes(requestedStyle)) {
+  const prefs = await loadUserPrefs(ctx.userId).catch(() => ({ brain: undefined }));
+  const customPersonas = prefs.brain?.customPersonas ?? {};
+  const allowedStyles = [...STYLES, ...Object.keys(customPersonas)];
+  if (requestedStyle !== null && !allowedStyles.includes(requestedStyle)) {
     return fail(
-      `Неизвестный стиль «${requestedStyle}». Доступные: ${STYLES.join(', ')}.`,
+      `Неизвестный стиль «${requestedStyle}». Доступные: ${allowedStyles.join(', ')}.`,
     );
   }
 
@@ -646,10 +662,12 @@ async function rememberRuleTool(args: ToolArgs, ctx: ToolContext): Promise<ToolO
 async function listSkillsTool(_args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
   try {
     const builtin = getOverlaySkills();
-    const [userSkills, directives] = await Promise.all([
+    const [userSkills, directives, prefs] = await Promise.all([
       listAllUserSkills(ctx.userId),
       readDirectives(ctx),
+      loadUserPrefs(ctx.userId).catch(() => ({ brain: undefined })),
     ]);
+    const disabledBuiltin = new Set(prefs.brain?.disabledBuiltinSkills ?? []);
     const rulesCount = listRuleLines(directives.instructions).length;
 
     const lines: string[] = [
@@ -661,7 +679,8 @@ async function listSkillsTool(_args: ToolArgs, ctx: ToolContext): Promise<ToolOu
       lines.push('— нет встроенных скиллов');
     } else {
       for (const s of builtin) {
-        lines.push(`- ${s.id} (${s.name}): ${s.description}`);
+        const tag = disabledBuiltin.has(s.id) ? ' [отключён]' : '';
+        lines.push(`- ${s.id} (${s.name})${tag}: ${s.description}`);
       }
     }
 
@@ -691,6 +710,7 @@ async function listSkillsTool(_args: ToolArgs, ctx: ToolContext): Promise<ToolOu
           name: s.name,
           description: s.description,
           triggers: s.triggers ?? [],
+          enabled: !disabledBuiltin.has(s.id),
         })),
         user_skills: userSkills.map((entry) => ({
           id: entry.row.id,
@@ -718,6 +738,8 @@ async function readSkillTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutc
   try {
     const builtin = findOverlaySkill(raw);
     if (builtin) {
+      const prefs = await loadUserPrefs(ctx.userId).catch(() => ({ brain: undefined }));
+      const disabled = (prefs.brain?.disabledBuiltinSkills ?? []).includes(builtin.id);
       return {
         ok: true,
         content: `# ${builtin.name}\n${builtin.description}\n\n${builtin.body}`,
@@ -726,7 +748,7 @@ async function readSkillTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutc
           id: builtin.id,
           name: builtin.name,
           description: builtin.description,
-          status: 'active',
+          status: disabled ? 'disabled' : 'active',
           body_md: builtin.body,
         },
       };

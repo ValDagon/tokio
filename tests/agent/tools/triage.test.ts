@@ -23,6 +23,7 @@ import {
   findCategoryByName,
 } from '../../../src/lib/dal/tasks';
 import { ensureUser } from '../../../src/lib/dal/users';
+import { saveUserPrefs } from '../../../src/lib/prefs';
 import type { TaskItemType } from '../../../src/types';
 
 const USER_A = 1;
@@ -169,5 +170,34 @@ describe('triage_tasks: sphere', () => {
 
     expect(outcome.ok).toBe(false);
     expect(outcome.content).toContain('sphere');
+  });
+});
+
+describe('triage_tasks: Волна 2 СДВГ-переопределения', () => {
+  it('не считает задачу застрявшей через 36 часов и срабатывает ровно с 2 дней по умолчанию', async () => {
+    const freshId = await addTask('Недавно трогал', { dueAt: '2026-03-10T09:00:00.000Z' });
+    // 36 часов до NOW (2026-03-15T10:00Z -> 2026-03-13T22:00Z)
+    await db.run(sql`UPDATE tasks SET updated_at = '2026-03-13T22:00:00.000Z' WHERE id = ${freshId}`);
+
+    const staleId = await addTask('Простаивает 49 часов', { dueAt: '2026-03-10T09:00:00.000Z' });
+    await db.run(sql`UPDATE tasks SET updated_at = '2026-03-13T09:00:00.000Z' WHERE id = ${staleId}`);
+
+    const outcome = await run({});
+    expect(outcome.content).not.toContain('Двухминутный шаг: Недавно трогал');
+    expect(outcome.content).toContain('Двухминутный шаг: Простаивает 49 часов');
+  });
+
+  it('применяет adhd.focusLimit и adhd.staleAfterDays из user_prefs', async () => {
+    await saveUserPrefs(USER_A, { adhd: { focusLimit: 2, staleAfterDays: 5 } });
+    for (let i = 1; i <= 5; i += 1) {
+      const id = await addTask(`Задача ${i}`, { dueAt: '2026-03-10T09:00:00.000Z' });
+      // 3 дня простоя (< 5)
+      await db.run(sql`UPDATE tasks SET updated_at = '2026-03-12T10:00:00.000Z' WHERE id = ${id}`);
+    }
+
+    const outcome = await run({ limit: 10 });
+    expect(outcome.ok).toBe(true);
+    expect((outcome.data as { items: unknown[] }).items).toHaveLength(2);
+    expect(outcome.content).not.toContain('Двухминутный шаг:');
   });
 });

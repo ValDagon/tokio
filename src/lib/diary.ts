@@ -9,26 +9,56 @@
  * из `opts.now` (детерминированные тесты).
  */
 
-import { kvGet, kvSet } from './dal/misc';
+import { kvGet, kvListByPrefix, kvSet } from './dal/misc';
 import { listCategories, listTasks } from './dal/tasks';
 import { getUser } from './dal/users';
-import { dateKey, zonedParts } from './utils';
-
-/** Шаблон нового дневника (если в шаблоне нет `{{DATE}}`, дата появится в заголовке). */
-export const DEFAULT_DIARY_TEMPLATE =
-  '# Дневник: {{DATE}}\n\n' +
-  '## 🔋 1. Самочувствие и уровень энергии\n\n' +
-  '## 🎯 2. Главное за день\n\n' +
-  '## 💭 3. Мысли и рефлексия\n\n' +
-  '## 💡 4. Выводы и фокус на завтра\n';
+import { loadUserPrefs, type DiaryPrefs, type UserPrefs } from './prefs';
+import { dateKey, truncate, zonedParts } from './utils';
 
 const HEADER_ENERGY = '## 🔋 1. Самочувствие и уровень энергии';
 const HEADER_FOCUS = '## 🎯 2. Главное за день';
 const HEADER_REFLECTION = '## 💭 3. Мысли и рефлексия';
-const HEADER_TOMORROW = '## 💡 4.';
+const HEADER_TOMORROW_FULL = '## 💡 4. Выводы и фокус на завтра';
+
+/** Шаблон нового дневника (если в шаблоне нет `{{DATE}}`, дата появится в заголовке). */
+export const DEFAULT_DIARY_TEMPLATE =
+  '# Дневник: {{DATE}}\n\n' +
+  `${HEADER_ENERGY}\n\n` +
+  `${HEADER_FOCUS}\n\n` +
+  `${HEADER_REFLECTION}\n\n` +
+  `${HEADER_TOMORROW_FULL}\n`;
+
+/** Строит шаблон дневника с учётом пользовательских настроек `diary`. */
+export function buildDiaryTemplateFromPrefs(diary?: DiaryPrefs | null): string {
+  const hasCustomSections = Array.isArray(diary?.sections) && diary.sections.length > 0;
+  const hasCustomHeader = Boolean(diary?.headerTemplate?.trim());
+  if (!hasCustomSections && !hasCustomHeader) {
+    return DEFAULT_DIARY_TEMPLATE;
+  }
+
+  const rawHeader = diary?.headerTemplate?.trim() || '# Дневник: {{DATE}}';
+  const header = rawHeader.startsWith('#') ? rawHeader : `# ${rawHeader}`;
+  const rawSections = hasCustomSections
+    ? diary!.sections!
+    : [HEADER_ENERGY, HEADER_FOCUS, HEADER_REFLECTION, HEADER_TOMORROW_FULL];
+
+  const renderedSections = rawSections.map((sec, idx) => {
+    const trimmed = sec.trim();
+    if (trimmed.startsWith('## ')) return trimmed;
+    if (trimmed.startsWith('# ')) return `#${trimmed}`;
+    return `## ${idx + 1}. ${trimmed}`;
+  });
+
+  return `${header}\n\n${renderedSections.join('\n\n')}\n`;
+}
 
 /** Куда может «упереться» вставка рефлексии — порядок важен (`## 💡` — префикс `## 💡 4.`). */
 const NEXT_SECTION_CANDIDATES = ['## 💡 4.', '## 4.', '---', '## 💡'] as const;
+
+const FOCUS_HEADING_RE = /^##\s+[^\n]*(?:главн|задач|фокус|выполн|tasks|focus|done)[^\n]*$/im;
+const ENERGY_HEADING_RE = /^##\s+[^\n]*(?:энерг|самочувств|состоян|energy|mood)[^\n]*$/im;
+const REFLECTION_HEADING_RE =
+  /^##\s+[^\n]*(?:мысл|рефлекс|итог|заметк|reflection|thoughts|notes|journal)[^\n]*$/im;
 
 const ENERGY_LINE_RE = /(\*\*Уровень энергии \(1–10\):\*\*)(.*)/;
 
@@ -137,17 +167,37 @@ export async function renderDailyDiary(
 }
 
 /** Шаблон + выполненные задачи для уже разрешённой даты (без kv). */
+const WEEKDAY_SHORT_RU = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'] as const;
+
+function weekdayLabel(dateStr: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (!m) return '';
+  const utc = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return WEEKDAY_SHORT_RU[utc.getUTCDay()] ?? '';
+}
+
 async function renderContent(
   userId: number,
   date: string,
   timeZone: string,
   opts: { includeTasks?: boolean; template?: string },
 ): Promise<string> {
-  let content = opts.template && opts.template.trim() !== '' ? opts.template : DEFAULT_DIARY_TEMPLATE;
-  // Шаблон-строка: поддерживаем и `{{DATE}}`, и «пустой» заголовок.
-  content = content.includes('{{DATE}}') ? content.replace(/\{\{DATE\}\}/g, date) : content;
+  const needsPrefs = !(opts.template && opts.template.trim() !== '') || opts.includeTasks === undefined;
+  const prefs = needsPrefs
+    ? await loadUserPrefs(userId).catch((): UserPrefs => ({}))
+    : undefined;
 
-  if (opts.includeTasks !== false) {
+  let content =
+    opts.template && opts.template.trim() !== ''
+      ? opts.template
+      : buildDiaryTemplateFromPrefs(prefs?.diary);
+  const weekday = weekdayLabel(date);
+  content = content
+    .replace(/\{\{DATE\}\}|\{date\}/g, date)
+    .replace(/\{\{WEEKDAY\}\}|\{weekday\}/g, weekday);
+
+  const includeTasks = opts.includeTasks ?? prefs?.diary?.includeTasks ?? true;
+  if (includeTasks) {
     const completed = await getTodayCompletedTasks(userId, { date, timeZone });
     if (completed.length > 0) {
       const block = completed.map((task) => `- ${task}`).join('\n');
@@ -156,6 +206,11 @@ async function renderContent(
         content = content.replace(anchor, `${HEADER_FOCUS}\n${block}\n- `);
       } else if (content.includes(HEADER_FOCUS)) {
         content = content.replace(HEADER_FOCUS, `${HEADER_FOCUS}\n${block}`);
+      } else {
+        const customFocus = FOCUS_HEADING_RE.exec(content);
+        if (customFocus) {
+          content = content.replace(customFocus[0], `${customFocus[0]}\n${block}`);
+        }
       }
     }
   }
@@ -189,31 +244,60 @@ function applyEnergy(content: string, energy: DiaryEnergy): string {
   if (content.includes(HEADER_ENERGY)) {
     return content.replace(HEADER_ENERGY, `${HEADER_ENERGY}\n- **Уровень энергии (1–10):** ${String(energy)}`);
   }
+  const customEnergy = ENERGY_HEADING_RE.exec(content);
+  if (customEnergy) {
+    return content.replace(
+      customEnergy[0],
+      `${customEnergy[0]}\n- **Уровень энергии (1–10):** ${String(energy)}`,
+    );
+  }
+  const titleMatch = /^#\s+[^\n]+/m.exec(content);
+  if (titleMatch) {
+    return content.replace(
+      titleMatch[0],
+      `${titleMatch[0]}\n\n- **Уровень энергии (1–10):** ${String(energy)}`,
+    );
+  }
   return content;
 }
 
-/** Вставляет запись рефлексии в секцию 3 (последней строкой перед следующей секцией). */
+/** Вставляет запись рефлексии в секцию рефлексии (последней строкой перед следующей секцией). */
 function applyReflection(content: string, reflection: string, time: string): string {
   const text = reflection.trim();
   if (text === '') return content;
 
   const entryLine = `\n\n**[${time}]** ${text}\n`;
 
-  if (!content.includes(HEADER_REFLECTION)) {
-    return `${content}\n\n${HEADER_REFLECTION}${entryLine}`;
+  if (content.includes(HEADER_REFLECTION)) {
+    const [head, tail] = content.split(HEADER_REFLECTION) as [string, string];
+    const nextSection = NEXT_SECTION_CANDIDATES.find((candidate) => tail.includes(candidate));
+
+    if (nextSection) {
+      const index = tail.indexOf(nextSection);
+      const reflectionPart = tail.slice(0, index);
+      const after = tail.slice(index + nextSection.length);
+      return head + HEADER_REFLECTION + reflectionPart.replace(/\s+$/u, '') + entryLine + '\n' + nextSection + after;
+    }
+
+    return head + HEADER_REFLECTION + tail.replace(/\s+$/u, '') + entryLine;
   }
 
-  const [head, tail] = content.split(HEADER_REFLECTION) as [string, string];
-  const nextSection = NEXT_SECTION_CANDIDATES.find((candidate) => tail.includes(candidate));
-
-  if (nextSection) {
-    const index = tail.indexOf(nextSection);
-    const reflectionPart = tail.slice(0, index);
-    const after = tail.slice(index + nextSection.length);
-    return head + HEADER_REFLECTION + reflectionPart.replace(/\s+$/u, '') + entryLine + '\n' + nextSection + after;
+  const customHeading = REFLECTION_HEADING_RE.exec(content);
+  if (customHeading) {
+    const header = customHeading[0];
+    const idx = customHeading.index;
+    const head = content.slice(0, idx);
+    const tail = content.slice(idx + header.length);
+    const nextMatch = /\n(##\s+|---)/m.exec(tail);
+    if (nextMatch) {
+      const reflectionPart = tail.slice(0, nextMatch.index);
+      const after = tail.slice(nextMatch.index);
+      return head + header + reflectionPart.replace(/\s+$/u, '') + entryLine + after;
+    }
+    return head + header + tail.replace(/\s+$/u, '') + entryLine;
   }
 
-  return head + HEADER_REFLECTION + tail.replace(/\s+$/u, '') + entryLine;
+  return `${content}\n\n${HEADER_REFLECTION}${entryLine}`;
 }
 
 /**
@@ -223,10 +307,14 @@ function applyReflection(content: string, reflection: string, time: string): str
 export async function appendReflection(
   userId: number,
   reflection: string,
-  opts: DiaryOptions & { energy?: DiaryEnergy | null } = {},
+  opts: DiaryOptions & { energy?: DiaryEnergy | null; includeTasks?: boolean } = {},
 ): Promise<DiaryRecord> {
   const { date, timeZone, now } = await resolveContext(userId, opts);
-  const { content: base } = await getOrCreateDailyDiary(userId, { date, now, includeTasks: false });
+  const { content: base } = await getOrCreateDailyDiary(userId, {
+    date,
+    now,
+    ...(opts.includeTasks !== undefined ? { includeTasks: opts.includeTasks } : {}),
+  });
 
   let content = base;
   if (opts.energy !== undefined && opts.energy !== null && String(opts.energy).trim() !== '') {
@@ -236,6 +324,85 @@ export async function appendReflection(
 
   await kvSet(diaryStorageKey(userId, date), content);
   return { date, content };
+}
+
+export interface DiaryEntrySummary {
+  date: string;
+  preview: string;
+  energy: string | null;
+}
+
+const DIARY_PREFIX_RE = /^(?:в\s+)?(?:дневник|diary)(?:$|[\s,:;—–.-]+([\s\S]*))$/iu;
+
+/**
+ * Распознаёт явный префикс «дневник» / «в дневник» / «diary» в начале текста или речи.
+ * Однокоренные слова вроде «дневника» или «дневниковый» не срабатывают.
+ */
+export function parseDiaryPrefix(text: string): { matched: boolean; body: string } {
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) return { matched: false, body: '' };
+  const match = DIARY_PREFIX_RE.exec(trimmed);
+  if (!match) return { matched: false, body: '' };
+  return { matched: true, body: (match[1] ?? '').trim() };
+}
+
+function extractDiaryPreview(content: string): string {
+  let slice = content;
+  if (content.includes(HEADER_REFLECTION)) {
+    const [, afterHeader = ''] = content.split(HEADER_REFLECTION);
+    const nextSection = NEXT_SECTION_CANDIDATES.find((candidate) => afterHeader.includes(candidate));
+    slice = nextSection ? afterHeader.slice(0, afterHeader.indexOf(nextSection)) : afterHeader;
+  } else {
+    const stampedLine = content
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => /^\*\*\[\d{2}:\d{2}\]\*\*/.test(line));
+    if (stampedLine) {
+      return truncate(stampedLine.replace(/^\*\*\[[^\]]+\]\*\*\s*/, '').trim(), 140);
+    }
+  }
+  const lines = slice
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && line !== '---' && !line.startsWith('#'));
+
+  for (const line of lines) {
+    const cleaned = line
+      .replace(/^\*\*\[[^\]]+\]\*\*\s*/, '')
+      .replace(/^\[[^\]]+\]\s*/, '')
+      .replace(/^[-*]\s*/, '')
+      .trim();
+    if (cleaned) return truncate(cleaned, 140);
+  }
+
+  const fallbackLines = content
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#') && line !== '---');
+  return fallbackLines.length > 0 ? truncate(fallbackLines[0]!, 140) : '';
+}
+
+/** Список дневников пользователя по датам (свежие сверху). */
+export async function listDiaryDates(userId: number, limit = 60): Promise<DiaryEntrySummary[]> {
+  const prefix = `diary:${userId}:`;
+  const keyRe = new RegExp(`^diary:${userId}:(\\d{4}-\\d{2}-\\d{2})$`);
+  const rows = await kvListByPrefix(prefix);
+  const entries: DiaryEntrySummary[] = [];
+
+  for (const row of rows) {
+    const match = keyRe.exec(row.key);
+    if (!match?.[1]) continue;
+    const energyMatch = ENERGY_LINE_RE.exec(row.value);
+    const rawEnergy = energyMatch?.[2]?.trim() ?? '';
+    entries.push({
+      date: match[1],
+      preview: extractDiaryPreview(row.value),
+      energy: rawEnergy || null,
+    });
+  }
+
+  entries.sort((a, b) => b.date.localeCompare(a.date));
+  return entries.slice(0, Math.max(0, limit));
 }
 
 // Совместимость с именованием upstream.

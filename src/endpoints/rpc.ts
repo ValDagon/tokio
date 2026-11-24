@@ -28,9 +28,11 @@ import {
   createExchange,
   createTransaction,
   deleteAccount,
+  deleteBudget,
   deleteLiability,
   deleteTransaction,
   getAccount,
+  getBudget,
   getLiability,
   listAccounts,
   listLiabilities,
@@ -55,6 +57,7 @@ import userLifeContext from './user_life_context.js';
 import docsSearch from './docs_search.js';
 import systemUsage from './system_usage.js';
 import { createNote, deleteNote, listNotes, updateNote, type NotePatch } from '../lib/dal/notes.js';
+import { listDiaryDates, readDailyDiary } from '../lib/diary.js';
 import { clearThread, getAgentState } from '../lib/dal/agentState.js';
 import { FEEDBACK_KINDS, createFeedback, listAllFeedback, listFeedback, type FeedbackKind } from '../lib/dal/misc.js';
 import { runDueJobs } from '../lib/dal/due_jobs.js';
@@ -94,6 +97,27 @@ import { getChapter, listChapters } from '../lib/dal/docs.js';
 import { seedDocs, toChapterView } from '../lib/systemDocs.js';
 import { hasSecureRandom, randomBytes, sealByok } from '../lib/crypto.js';
 import { PROVIDER_IDS, parseProviderId, type ProviderId } from '../lib/provider/index.js';
+import { isProviderKeyAvailable } from '../lib/gemini.js';
+import { scheduleNightlyConsolidation } from '../lib/consolidation.js';
+import {
+  applyPresetPayloadToState,
+  applySettingsState,
+  buildSettingsPrefsSummary,
+  captureSettingsState,
+  countActiveAiRoutines,
+  formatSettingsDiff,
+  loadPrefsHistory,
+  loadUserPrefs,
+  MAX_ACTIVE_AI_ROUTINES,
+  normalizeConfigSlug,
+  pushPrefsSnapshot,
+  RESET_SECTIONS,
+  resetSettingsSection,
+  resolveEffectiveUiConfig,
+  rollbackSettings,
+  saveUserPrefs,
+  type ResetSection,
+} from '../lib/prefs.js';
 import { exportUserData, importBackup, type BackupMode } from '../lib/backup.js';
 import { normalizeLocale } from '../lib/i18n.js';
 import { getOverlay, getOverlaySkills } from '../lib/overlay.js';
@@ -107,7 +131,7 @@ import {
   resolveItem,
 } from '../lib/evolution.js';
 import { diagnosticsReply } from '../lib/summary.js';
-import { formatCents } from '../lib/utils.js';
+import { formatCents, nowIso } from '../lib/utils.js';
 import type { MedicationLogRow, NoteColumn, TaskItemType, TaskRow, TaskStatus } from '../types.js';
 
 export interface RpcPayload {
@@ -154,6 +178,30 @@ function newInviteCode(): string {
  */
 async function deliverRemindersQuietly(userId: number): Promise<void> {
   await runReminderClock(userId, { source: 'rpc' });
+}
+
+async function resolveTaskCategoryNames(
+  userId: number,
+  categoryId: number | null,
+  subcategoryId: number | null,
+): Promise<{ category_name?: string; subcategory_name?: string }> {
+  if (categoryId === null && subcategoryId === null) return {};
+  const categories = await listTaskCategories(userId);
+  const catName =
+    categoryId !== null ? categories.find((c) => c.id === categoryId)?.name : undefined;
+  let subName: string | undefined;
+  if (subcategoryId !== null) {
+    const targetCats =
+      categoryId !== null ? categories.filter((c) => c.id === categoryId) : categories;
+    const subs = (
+      await Promise.all(targetCats.map((c) => listSubcategories(userId, c.id)))
+    ).flat();
+    subName = subs.find((s) => s.id === subcategoryId)?.name;
+  }
+  return {
+    ...(catName ? { category_name: catName } : {}),
+    ...(subName ? { subcategory_name: subName } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -364,6 +412,38 @@ async function loadUserDirectives(
   };
 }
 
+function decodePathSegment(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    badRequest('Некорректный параметр в пути запроса');
+  }
+}
+
+async function buildSettingsResponse(effectiveUserId: number): Promise<Record<string, unknown>> {
+  const [user, state, history] = await Promise.all([
+    getUser(effectiveUserId),
+    captureSettingsState(effectiveUserId),
+    loadPrefsHistory(effectiveUserId),
+  ]);
+  const summary = buildSettingsPrefsSummary(state, history.length);
+  return {
+    name: user?.name,
+    language: user?.language ?? 'ru',
+    base_currency: user?.baseCurrency ?? 'EUR',
+    timezone: user?.timezone ?? 'UTC',
+    summary_time: user?.summaryTime ?? '07:00',
+    low_stimulation_mode: user?.lowStimulationMode ?? false,
+    custom_instructions: state.directives.instructions,
+    persona_style: state.directives.style ?? 'mentor',
+    role: 'admin',
+    onboarded: true,
+    has_byok_key: Boolean(user?.byok?.ciphertext),
+    model_provider: user?.modelProvider ?? 'gemini',
+    ...summary,
+  };
+}
+
 /**
  * Пути-константы, которые роутер гарантированно обслуживает.
  *
@@ -401,11 +481,15 @@ const KNOWN_CONSTANT_PATHS: ReadonlySet<string> = new Set([
   '/api/finances/reset',
   '/api/notes',
   '/notes',
+  '/api/diary',
+  '/diary',
   '/api/medications',
   '/api/feedback',
   '/api/config/ui',
   '/api/settings',
   '/api/settings/onboarding',
+  '/api/settings/reset',
+  '/api/settings/rollback',
   '/api/user/settings',
   '/api/user/life-context',
   '/api/trash',
@@ -491,6 +575,7 @@ async function handleMachineClock(
       liability_warning: clockKind(outcome.kinds.liability_warning),
       medication_reminder: clockKind(outcome.kinds.medication_reminder),
       morning_digest: clockKind(outcome.kinds.morning_digest),
+      custom_routines: clockKind(outcome.kinds.custom_routines),
     },
   };
 }
@@ -617,6 +702,12 @@ export default async function (
         recurrence: typeof body.recurrence === 'string' ? JSON.parse(body.recurrence) : body.recurrence ?? null,
       });
 
+      const catNames = await resolveTaskCategoryNames(
+        effectiveUserId,
+        created.categoryId,
+        created.subcategoryId,
+      );
+
       return {
         id: String(created.id),
         title: created.title,
@@ -625,6 +716,7 @@ export default async function (
         notes: created.notes ?? undefined,
         category_id: created.categoryId ? String(created.categoryId) : undefined,
         subcategory_id: created.subcategoryId ? String(created.subcategoryId) : undefined,
+        ...catNames,
         steps: [],
         created_at: created.createdAt ?? '',
         due_at: created.dueAt,
@@ -668,6 +760,12 @@ export default async function (
         throw new EndpointError('Task not found', { code: 'NOT_FOUND' });
       }
 
+      const catNames = await resolveTaskCategoryNames(
+        effectiveUserId,
+        updated.categoryId,
+        updated.subcategoryId,
+      );
+
       return {
         id: String(updated.id),
         title: updated.title,
@@ -676,6 +774,7 @@ export default async function (
         notes: updated.notes ?? undefined,
         category_id: updated.categoryId ? String(updated.categoryId) : undefined,
         subcategory_id: updated.subcategoryId ? String(updated.subcategoryId) : undefined,
+        ...catNames,
         created_at: updated.createdAt ?? '',
         due_at: updated.dueAt,
         remind_at: updated.remindAt,
@@ -922,10 +1021,31 @@ export default async function (
     return { status: 'deleted', id: String(transactionId) };
   }
 
+  const budgetDeleteMatch = cleanPath.match(/^\/(?:api\/)?finances\/budgets\/(\d+)$/);
+  if (budgetDeleteMatch && method === 'DELETE') {
+    const categoryId = Number(budgetDeleteMatch[1]);
+    const rawMonth = queryParams.month?.trim();
+    if (rawMonth && !/^\d{4}-(0[1-9]|1[0-2])$/.test(rawMonth)) {
+      badRequest('month: ожидается формат YYYY-MM');
+    }
+    const month = rawMonth || todayIso().slice(0, 7);
+    const existing = await getBudget(effectiveUserId, { month, categoryId });
+    if (!existing) {
+      throw new EndpointError('Бюджет не найден', { code: 'NOT_FOUND', status: 404 });
+    }
+    const deleted = await deleteBudget(effectiveUserId, existing.id);
+    return { ok: true, deleted, category_id: String(categoryId), month };
+  }
+
   if (cleanPath === '/api/finances/budgets' && method === 'POST') {
+    const rawMonth = typeof body.month === 'string' ? body.month.trim() : '';
+    if (rawMonth && !/^\d{4}-(0[1-9]|1[0-2])$/.test(rawMonth)) {
+      badRequest('month: ожидается формат YYYY-MM');
+    }
     await setBudget(effectiveUserId, {
       categoryName: body.category_name,
       limitAmountEurCents: Math.round(Number(body.limit_amount_eur) * 100),
+      month: rawMonth || undefined,
     });
     return { ok: true };
   }
@@ -1178,6 +1298,27 @@ export default async function (
   }
 
   // -------------------------------------------------------------------------
+  // 5b. Diary (/api/diary) — read-only дневник рефлексии
+  // -------------------------------------------------------------------------
+  if ((cleanPath === '/api/diary' || cleanPath === '/diary') && method === 'GET') {
+    const entries = await listDiaryDates(effectiveUserId);
+    return { entries };
+  }
+
+  const diaryDateMatch = cleanPath.match(/^\/(?:api\/)?diary\/([^/]+)$/);
+  if (diaryDateMatch && method === 'GET') {
+    const date = decodeURIComponent(diaryDateMatch[1]);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      badRequest('date: ожидается формат YYYY-MM-DD');
+    }
+    const content = await readDailyDiary(effectiveUserId, { date });
+    if (content === null) {
+      throw new EndpointError('Diary entry not found', { status: 404, code: 'NOT_FOUND' });
+    }
+    return { date, content };
+  }
+
+  // -------------------------------------------------------------------------
   // 6. Medications (/api/medications)
   // -------------------------------------------------------------------------
   const medTakeMatch = cleanPath.match(/^\/(?:api\/)?medications\/(\d+)\/take$/);
@@ -1287,24 +1428,16 @@ export default async function (
   // 7. Settings & Onboarding (/api/settings, /api/user/*, /api/config/ui)
   // -------------------------------------------------------------------------
   if (cleanPath === '/api/config/ui' && method === 'GET') {
-    const o = getOverlay().manifest;
-    return {
-      brand: {
-        assistantName: o.brand.assistantName,
-        localizedNames: o.brand.localizedNames,
-        backupPrefix: o.brand.backupPrefix,
-        supportContact: o.brand.supportContact,
-      },
-      features: {
-        feedbackEnabled: o.features.feedbackEnabled,
-        calmModeUi: o.features.calmModeUi,
-        onboardingWizard: o.features.onboardingWizard,
-      },
-      finance: {
-        reserveAmount: o.finance.reserveAmount,
-      },
-      miniapp: o.miniapp,
-    };
+    const [user, prefs] = await Promise.all([
+      getUser(effectiveUserId),
+      loadUserPrefs(effectiveUserId),
+    ]);
+    const manifest = getOverlay().manifest;
+    return resolveEffectiveUiConfig(
+      manifest,
+      prefs,
+      user?.language ?? manifest.defaultLocale,
+    );
   }
 
   if (cleanPath === '/api/settings/onboarding' && method === 'POST') {
@@ -1329,23 +1462,147 @@ export default async function (
         }).catch(() => {});
       }
     }
-    const [user, directives] = await Promise.all([
-      getUser(effectiveUserId),
-      loadUserDirectives(effectiveUserId),
-    ]);
+    return await buildSettingsResponse(effectiveUserId);
+  }
+
+  const routineToggleMatch = cleanPath.match(/^\/(?:api\/)?settings\/routines\/([^/]+)$/);
+  if (routineToggleMatch && (method === 'PATCH' || method === 'PUT')) {
+    if (typeof body.enabled !== 'boolean') {
+      badRequest('enabled: ожидается boolean (true или false)');
+    }
+    const routineId = normalizeConfigSlug(decodePathSegment(routineToggleMatch[1]));
+    const state = await captureSettingsState(effectiveUserId);
+    const routines = state.prefs.proactive?.routines ?? {};
+    const existing = routineId && Object.hasOwn(routines, routineId) ? routines[routineId] : undefined;
+    if (!existing) {
+      throw new EndpointError('Рутина не найдена', { status: 404, code: 'NOT_FOUND' });
+    }
+    if (
+      existing.kind === 'ai' &&
+      body.enabled === true &&
+      !existing.enabled &&
+      countActiveAiRoutines(routines) >= MAX_ACTIVE_AI_ROUTINES
+    ) {
+      badRequest(
+        `Достигнут лимит активных AI-рутин (максимум ${MAX_ACTIVE_AI_ROUTINES}). Сначала поставьте на паузу одну из текущих.`,
+      );
+    }
+    if (existing.enabled !== body.enabled) {
+      await pushPrefsSnapshot(
+        effectiveUserId,
+        `${body.enabled ? 'Включение' : 'Пауза'} рутины «${existing.name}»`,
+        state,
+      );
+      const nextPrefs = JSON.parse(JSON.stringify(state.prefs)) as typeof state.prefs;
+      nextPrefs.proactive = nextPrefs.proactive ?? {};
+      nextPrefs.proactive.routines = nextPrefs.proactive.routines ?? {};
+      nextPrefs.proactive.routines[existing.id] = {
+        ...existing,
+        enabled: body.enabled,
+        updatedAt: nowIso(),
+      };
+      await saveUserPrefs(effectiveUserId, nextPrefs);
+    }
     return {
-      name: user?.name,
-      language: user?.language ?? 'ru',
-      base_currency: user?.baseCurrency ?? 'EUR',
-      timezone: user?.timezone ?? 'UTC',
-      summary_time: user?.summaryTime ?? '07:00',
-      low_stimulation_mode: user?.lowStimulationMode ?? false,
-      custom_instructions: directives.instructions,
-      persona_style: directives.style,
-      role: 'admin',
-      onboarded: true,
-      has_byok_key: Boolean(user?.byok?.ciphertext),
-      model_provider: user?.modelProvider ?? 'gemini',
+      ok: true,
+      routine_id: existing.id,
+      enabled: body.enabled,
+      settings: await buildSettingsResponse(effectiveUserId),
+    };
+  }
+
+  const presetApplyMatch = cleanPath.match(/^\/(?:api\/)?settings\/presets\/([^/]+)\/apply$/);
+  if (presetApplyMatch && method === 'POST') {
+    const presetId = normalizeConfigSlug(decodePathSegment(presetApplyMatch[1]));
+    const state = await captureSettingsState(effectiveUserId);
+    const presetsMap = state.prefs.presets;
+    const found =
+      presetId && presetsMap && Object.hasOwn(presetsMap, presetId)
+        ? presetsMap[presetId]
+        : undefined;
+    if (!found) {
+      throw new EndpointError('Пресет не найден', { status: 404, code: 'NOT_FOUND' });
+    }
+    const presetProvider = found.snapshot.profile?.modelProvider;
+    if (presetProvider) {
+      const keyOk = await isProviderKeyAvailable(effectiveUserId, presetProvider);
+      if (!keyOk) {
+        badRequest(
+          `Пресет «${found.name}» использует провайдер «${presetProvider}», но для него нет доступного API-ключа.`,
+        );
+      }
+    }
+    await pushPrefsSnapshot(effectiveUserId, `Применение пресета «${found.name}»`, state);
+    const nextState = applyPresetPayloadToState(state, found.snapshot);
+    await applySettingsState(effectiveUserId, nextState);
+    const after = await captureSettingsState(effectiveUserId);
+    if (
+      after.prefs.proactive?.jobs?.nightly_consolidation?.hour !==
+      state.prefs.proactive?.jobs?.nightly_consolidation?.hour
+    ) {
+      await scheduleNightlyConsolidation(effectiveUserId).catch(() => {});
+    }
+    return {
+      ok: true,
+      preset_id: found.id,
+      preset_name: found.name,
+      diff: formatSettingsDiff(state, after),
+      settings: await buildSettingsResponse(effectiveUserId),
+    };
+  }
+
+  if (cleanPath === '/api/settings/reset' && method === 'POST') {
+    const rawSection =
+      typeof body.section === 'string' && body.section.trim()
+        ? body.section.trim().toLowerCase()
+        : 'all';
+    if (!RESET_SECTIONS.includes(rawSection as ResetSection)) {
+      badRequest(`section: ожидается одно из значений: ${RESET_SECTIONS.join(', ')}`);
+    }
+    const section = rawSection as ResetSection;
+    const res = await resetSettingsSection(effectiveUserId, section);
+    if (section === 'all' || section === 'proactive') {
+      await scheduleNightlyConsolidation(effectiveUserId).catch(() => {});
+    }
+    return {
+      ok: true,
+      section,
+      diff: formatSettingsDiff(res.stateBefore, res.stateAfter),
+      settings: await buildSettingsResponse(effectiveUserId),
+    };
+  }
+
+  if (cleanPath === '/api/settings/rollback' && method === 'POST') {
+    const rawSteps = body.steps;
+    let steps = 1;
+    if (rawSteps !== undefined && rawSteps !== null) {
+      if (
+        (typeof rawSteps !== 'number' && typeof rawSteps !== 'string') ||
+        (typeof rawSteps === 'string' && rawSteps.trim() === '')
+      ) {
+        badRequest('steps: ожидается целое число от 1 до 10');
+      }
+      steps = Number(rawSteps);
+      if (!Number.isInteger(steps) || steps < 1 || steps > 10) {
+        badRequest('steps: ожидается целое число от 1 до 10');
+      }
+    }
+    const res = await rollbackSettings(effectiveUserId, steps);
+    if (!res.ok) {
+      badRequest(res.error ?? 'История изменений пуста — откатывать нечего.');
+    }
+    if (
+      res.after.prefs.proactive?.jobs?.nightly_consolidation?.hour !==
+      res.before.prefs.proactive?.jobs?.nightly_consolidation?.hour
+    ) {
+      await scheduleNightlyConsolidation(effectiveUserId).catch(() => {});
+    }
+    return {
+      ok: true,
+      restored_summary: res.restoredSummary ?? null,
+      remaining_history: res.remainingHistory,
+      diff: formatSettingsDiff(res.before, res.after),
+      settings: await buildSettingsResponse(effectiveUserId),
     };
   }
 
@@ -1395,24 +1652,7 @@ export default async function (
 
   if (cleanPath === '/api/settings' || cleanPath === '/api/user/settings') {
     if (method === 'GET') {
-      const [user, directives] = await Promise.all([
-        getUser(effectiveUserId),
-        loadUserDirectives(effectiveUserId),
-      ]);
-      return {
-        name: user?.name,
-        language: user?.language ?? 'ru',
-        base_currency: user?.baseCurrency ?? 'EUR',
-        timezone: user?.timezone ?? 'UTC',
-        summary_time: user?.summaryTime ?? '07:00',
-        low_stimulation_mode: user?.lowStimulationMode ?? false,
-        custom_instructions: directives.instructions,
-        persona_style: directives.style,
-        role: 'admin',
-        onboarded: true,
-        has_byok_key: Boolean(user?.byok?.ciphertext),
-        model_provider: user?.modelProvider ?? 'gemini',
-      };
+      return await buildSettingsResponse(effectiveUserId);
     }
     if (method === 'PATCH' || method === 'PUT') {
       const summaryTime = parseSummaryTime(body.summary_time);
@@ -1425,20 +1665,36 @@ export default async function (
         nextProvider = parsedProvider;
       }
 
-      const updated = await updateUser(effectiveUserId, {
-        name: body.name,
-        language: body.language !== undefined ? normalizeLocale(body.language) : undefined,
-        baseCurrency: body.base_currency,
-        timezone: body.timezone,
-        summaryTime,
-        lowStimulationMode: body.low_stimulation_mode,
-        ...(nextProvider !== undefined ? { modelProvider: nextProvider } : {}),
-      });
-
       const hasInstructions =
         Object.hasOwn(body, 'custom_instructions') && body.custom_instructions !== undefined;
       const hasStyle = Object.hasOwn(body, 'persona_style') && body.persona_style !== undefined;
-      let directives = await loadUserDirectives(effectiveUserId);
+      const hasUserField =
+        body.name !== undefined ||
+        body.language !== undefined ||
+        body.base_currency !== undefined ||
+        body.timezone !== undefined ||
+        summaryTime !== undefined ||
+        body.low_stimulation_mode !== undefined ||
+        nextProvider !== undefined;
+
+      if (hasUserField || hasInstructions || hasStyle) {
+        const beforeState = await captureSettingsState(effectiveUserId);
+        await pushPrefsSnapshot(effectiveUserId, 'Обновление настроек (Mini App)', beforeState);
+      }
+
+      if (hasUserField) {
+        await updateUser(effectiveUserId, {
+          name: body.name,
+          language: body.language !== undefined ? normalizeLocale(body.language) : undefined,
+          baseCurrency: body.base_currency,
+          timezone: body.timezone,
+          summaryTime,
+          lowStimulationMode: body.low_stimulation_mode,
+          ...(nextProvider !== undefined ? { modelProvider: nextProvider } : {}),
+        });
+      }
+
+      const directives = await loadUserDirectives(effectiveUserId);
       if (hasInstructions || hasStyle) {
         const nextInstructions = hasInstructions
           ? String(body.custom_instructions ?? '')
@@ -1448,24 +1704,10 @@ export default async function (
               ? body.persona_style.trim()
               : null)
           : directives.style;
-        const saved = await saveDirectives(effectiveUserId, nextInstructions, nextStyle);
-        directives = { instructions: saved.instructions, style: saved.style ?? 'mentor' };
+        await saveDirectives(effectiveUserId, nextInstructions, nextStyle);
       }
 
-      return {
-        name: updated?.name,
-        language: updated?.language ?? 'ru',
-        base_currency: updated?.baseCurrency,
-        timezone: updated?.timezone,
-        summary_time: updated?.summaryTime ?? '07:00',
-        low_stimulation_mode: updated?.lowStimulationMode,
-        custom_instructions: directives.instructions,
-        persona_style: directives.style,
-        role: 'admin',
-        onboarded: true,
-        has_byok_key: Boolean(updated?.byok?.ciphertext),
-        model_provider: updated?.modelProvider ?? 'gemini',
-      };
+      return await buildSettingsResponse(effectiveUserId);
     }
   }
 
@@ -1594,10 +1836,12 @@ export default async function (
   // 10. Skills & Backlog (/api/skills*, /api/backlog*)
   // -------------------------------------------------------------------------
   if (cleanPath === '/api/skills' && method === 'GET') {
-    const [builtinRaw, userRaw] = await Promise.all([
+    const [builtinRaw, userRaw, prefs] = await Promise.all([
       Promise.resolve(getOverlaySkills()),
       listAllUserSkills(effectiveUserId),
+      loadUserPrefs(effectiveUserId),
     ]);
+    const disabledBuiltinSet = new Set(prefs.brain?.disabledBuiltinSkills ?? []);
     return {
       builtin: builtinRaw.map((s) => ({
         id: s.id,
@@ -1605,6 +1849,7 @@ export default async function (
         description: s.description,
         triggers: [...(s.triggers ?? [])],
         body: s.body,
+        disabled: disabledBuiltinSet.has(s.id),
       })),
       user: userRaw.map(({ row, spec, usage }) => ({
         id: String(row.id),
@@ -1811,12 +2056,16 @@ export default async function (
     inviteMatch,
     accountMatch,
     transactionMatch,
+    budgetDeleteMatch,
     liabilityPayMatch,
     liabilityMatch,
     noteMatch,
+    diaryDateMatch,
     medTakeMatch,
     medSkipMatch,
     medMatch,
+    routineToggleMatch,
+    presetApplyMatch,
     trashItemMatch,
     chapterDetailMatch,
     skillActivateMatch,

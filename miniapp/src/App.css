@@ -4263,3 +4263,329 @@ body.low-stimulation .reader-sheet-footer {
   background: rgba(239, 68, 68, 0.22);
 }
 
+/* --- Active Settings, Presets & Routines Card (Wave 3) --- */
+.prefs-overview-card {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prefs-overview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.prefs-overview-title {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.prefs-overview-badge {
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.prefs-overview-badge.has-overrides {
+  background: var(--accent-subtle, rgba(245, 158, 11, 0.14));
+  color: var(--accent-color);
+}
+
+.prefs-inline-toast {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #34d399;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.prefs-default-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.prefs-overrides-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.prefs-override-chip {
+  font-size: 12.5px;
+  line-height: 1.35;
+  padding: 3px 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+}
+
+.prefs-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-hairline);
+}
+
+.prefs-subsection-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.prefs-subsection-count {
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.prefs-presets-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.prefs-preset-chip {
+  padding: 6px 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.prefs-preset-chip:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: var(--accent-color);
+}
+
+.prefs-preset-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.prefs-routines-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.prefs-routine-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border-hairline);
+}
+
+.prefs-routine-row.is-paused {
+  opacity: 0.72;
+}
+
+.prefs-routine-info {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.prefs-routine-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prefs-routine-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.prefs-routine-writes-badge {
+  font-size: 12.5px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.14);
+  color: var(--accent-color);
+}
+
+.prefs-switch-label {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-height: 32px;
+  cursor: pointer;
+}
+
+.prefs-switch-input[switch] {
+  accent-color: var(--accent-color);
+  margin: 0;
+  cursor: pointer;
+}
+
+.prefs-switch-input:not([switch]) {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 40px;
+  height: 22px;
+  margin: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--border-hairline);
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease;
+  flex-shrink: 0;
+}
+
+.prefs-switch-input:not([switch])::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  transition: transform 0.18s ease;
+}
+
+.prefs-switch-input:not([switch]):checked {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.prefs-switch-input:not([switch]):checked::after {
+  transform: translateX(18px);
+  background: var(--accent-text, #0c0d10);
+}
+
+.prefs-switch-input:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 3px;
+}
+
+.prefs-switch-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.prefs-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-hairline);
+}
+
+.prefs-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border-hairline);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.prefs-action-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.prefs-action-btn.danger {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.28);
+  color: #fca5a5;
+}
+
+.prefs-action-btn.danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.16);
+}
+
+.prefs-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prefs-switch-input:not([switch]),
+  .prefs-switch-input:not([switch])::after {
+    transition: none;
+  }
+}
+
+body.low-stimulation .prefs-overview-badge.has-overrides,
+body.low-stimulation .prefs-preset-chip,
+body.low-stimulation .prefs-routine-writes-badge {
+  background: #1f212c !important;
+  border-color: #374151 !important;
+  color: var(--text-secondary) !important;
+}
+
+body.low-stimulation .prefs-switch-input:not([switch]),
+body.low-stimulation .prefs-switch-input:not([switch])::after {
+  transition: none !important;
+}
+
+body.low-stimulation .prefs-switch-input:not([switch]):checked {
+  background: #4b5563 !important;
+  border-color: #6b7280 !important;
+}
+
+body.low-stimulation .prefs-switch-input[switch] {
+  accent-color: #6b7280;
+}
+
+body.low-stimulation .prefs-inline-toast {
+  background: #1f212c !important;
+  border-color: #374151 !important;
+  color: var(--text-primary) !important;
+}
+
+body.low-stimulation .prefs-action-btn.danger {
+  background: #1f212c !important;
+  border-color: #374151 !important;
+  color: var(--text-secondary) !important;
+}
+

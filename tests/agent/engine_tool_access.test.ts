@@ -56,7 +56,9 @@ describe('runAgent: read-only ход не выполняет write-тулзы', 
 
     const specs = requests[0]?.tools ?? [];
     const names = specs.map((spec) => spec.name);
-    expect(names.length).toBe(20);
+    expect(names.length).toBe(22);
+    expect(names).toContain('get_settings');
+    expect(names).toContain('get_budget_plan');
     expect(names).toContain('list_skills');
     expect(names).toContain('read_skill');
     expect(names).not.toContain('draft_skill');

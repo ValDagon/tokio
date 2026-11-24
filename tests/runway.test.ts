@@ -17,6 +17,7 @@ import { calculateRunway } from '../src/lib/runway';
 import { createAccount, createLiability, createTransaction } from '../src/lib/dal/finances';
 import { ensureUser, updateUser } from '../src/lib/dal/users';
 import { setRates } from '../src/lib/dal/fx';
+import { saveUserPrefs } from '../src/lib/prefs';
 import type { LiabilityQueue } from '../src/types';
 
 const USER = 1;
@@ -273,5 +274,36 @@ describe('calculateRunway: просрочка и закрытие месяца',
 
     expect(result.pendingDebtHorizonCents).toBe(0);
     expect(result.alreadyPaid).toContain('Rent');
+  });
+});
+
+describe('calculateRunway: Волна 2 переопределения из user_prefs', () => {
+  it('применяет reserveCents и параметры runway, сохраняя приоритет явных opts', async () => {
+    await ensureUser(USER);
+    await createAccount(USER, { name: 'Main', currency: 'EUR', initialBalanceCents: 100_000 });
+    await saveUserPrefs(USER, {
+      finance: {
+        reserveCents: 20_000, // 200 € резерв
+        runway: {
+          dailyBurnOverrideCents: 4_000, // 40 €/день
+          horizonDays: 10,
+        },
+      },
+    });
+
+    const fromPrefs = await calculateRunway(USER, { now: NOW });
+    expect(fromPrefs.reservedCents).toBe(20_000);
+    expect(fromPrefs.spendableCents).toBe(80_000);
+    expect(fromPrefs.dailyBurnCents).toBe(4_000);
+    expect(fromPrefs.horizonDays).toBe(10);
+
+    // Явные opts перекрывают prefs
+    const explicitWins = await calculateRunway(USER, {
+      now: NOW,
+      dailyBurnOverrideCents: 5_000,
+      horizonDays: 15,
+    });
+    expect(explicitWins.dailyBurnCents).toBe(5_000);
+    expect(explicitWins.horizonDays).toBe(15);
   });
 });

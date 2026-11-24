@@ -7,6 +7,8 @@ import type {
   RunwayInfo,
   TransactionItem,
   Note,
+  DiaryEntrySummary,
+  DiaryEntryDetail,
   Medication,
   Liability,
   TrashData,
@@ -27,6 +29,10 @@ import type {
   CreateTransactionPayload,
   TransactionWriteResponse,
   DocSearchResult,
+  RoutineToggleResponse,
+  PresetApplyResponse,
+  SettingsResetResponse,
+  SettingsRollbackResponse,
 } from './types';
 
 export type { UiConfig } from './types';
@@ -217,14 +223,19 @@ export function subscribeDataSource(listener: (source: ApiSource) => void): () =
 const API_TIMEOUT_MS = 25000;
 const API_MAX_ATTEMPTS = 3;
 
-export const apiFetch = async (path: string, init?: RequestInit): Promise<Response> => {
+export interface ApiFetchInit extends RequestInit {
+  retryable?: boolean;
+}
+
+export const apiFetch = async (path: string, init?: ApiFetchInit): Promise<Response> => {
   const url = path.startsWith('http') ? path : `${API_BASE}${path.startsWith('/') ? path : '/' + path}`;
-  const method = (init?.method || 'GET').toUpperCase();
+  const { retryable, ...restInit } = init ?? {};
+  const method = (restInit.method || 'GET').toUpperCase();
   // Only idempotent requests are retried automatically
-  const attempts = method === 'GET' ? API_MAX_ATTEMPTS : 1;
+  const attempts = (retryable ?? method === 'GET') ? API_MAX_ATTEMPTS : 1;
   let lastError: unknown = null;
 
-  const reqHeaders = new Headers(init?.headers);
+  const reqHeaders = new Headers(restInit.headers);
   const initData = resolveInitData();
   if (initData) {
     if (!reqHeaders.has('X-Telegram-Init-Data')) {
@@ -239,7 +250,7 @@ export const apiFetch = async (path: string, init?: RequestInit): Promise<Respon
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
     try {
-      const res = await fetch(url, { ...init, headers: reqHeaders, signal: controller.signal });
+      const res = await fetch(url, { ...restInit, headers: reqHeaders, signal: controller.signal });
       if ([502, 503, 504].includes(res.status) && attempt < attempts) {
         await new Promise((r) => setTimeout(r, 1500 * attempt));
         continue;
@@ -398,6 +409,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       const initData = resolveInitData();
       res = await apiFetch('/api/rpc', {
         method: 'POST',
+        retryable: method === 'GET',
         headers: {
           'Content-Type': 'application/json',
           ...getHeaders(),
@@ -550,6 +562,44 @@ export async function completeOnboarding(payload: OnboardingPayload): Promise<Us
   });
 }
 
+export async function toggleSettingsRoutine(
+  routineId: string,
+  enabled: boolean,
+): Promise<RoutineToggleResponse> {
+  return request<RoutineToggleResponse>(
+    `/api/settings/routines/${encodeURIComponent(routineId)}`,
+    {
+      method: 'PATCH',
+      body: { enabled },
+    },
+  );
+}
+
+export async function applySettingsPreset(presetId: string): Promise<PresetApplyResponse> {
+  return request<PresetApplyResponse>(
+    `/api/settings/presets/${encodeURIComponent(presetId)}/apply`,
+    {
+      method: 'POST',
+    },
+  );
+}
+
+export async function resetSettingsToDefault(
+  section = 'all',
+): Promise<SettingsResetResponse> {
+  return request<SettingsResetResponse>('/api/settings/reset', {
+    method: 'POST',
+    body: { section },
+  });
+}
+
+export async function rollbackSettingsChange(steps = 1): Promise<SettingsRollbackResponse> {
+  return request<SettingsRollbackResponse>('/api/settings/rollback', {
+    method: 'POST',
+    body: { steps },
+  });
+}
+
 export async function fetchLifeContext(topic?: string, depth: number = 1): Promise<{ context: string }> {
   const params = new URLSearchParams();
   if (topic) params.append('topic', topic);
@@ -597,6 +647,13 @@ export async function setBudget(categoryName: string, limitAmountEur: number): P
   await request<void>('/api/finances/budgets', {
     method: 'POST',
     body: { category_name: categoryName, limit_amount_eur: limitAmountEur },
+  });
+}
+
+export async function deleteBudget(categoryId: number | string, month?: string): Promise<void> {
+  const qs = month ? `?month=${encodeURIComponent(month)}` : '';
+  await request<void>(`/api/finances/budgets/${encodeURIComponent(String(categoryId))}${qs}`, {
+    method: 'DELETE',
   });
 }
 
@@ -664,6 +721,17 @@ export async function deleteNote(noteId: string): Promise<void> {
   await request<void>(`/api/notes/${noteId}`, {
     method: 'DELETE',
   });
+}
+
+// --- Diary (read-only) ---
+
+export async function fetchDiaryList(): Promise<DiaryEntrySummary[]> {
+  const res = await request<{ entries: DiaryEntrySummary[] }>('/api/diary');
+  return Array.isArray(res?.entries) ? res.entries : [];
+}
+
+export async function fetchDiaryEntry(date: string): Promise<DiaryEntryDetail> {
+  return request<DiaryEntryDetail>(`/api/diary/${encodeURIComponent(date)}`);
 }
 
 // --- Medications ---
@@ -799,10 +867,23 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   },
   finance: {
     reserveAmount: 0,
+    accountAliases: [],
+    defaultAccountByCurrency: {},
   },
   miniapp: {
     tabs: ['today', 'tasks', 'finances', 'notes', 'system'],
     accountThemes: [],
+  },
+  adhd: {
+    focusLimit: null,
+    staleAfterDays: null,
+    overloadShieldEnabled: true,
+  },
+  personas: [],
+  summary: {
+    activeRoutinesCount: 0,
+    totalRoutinesCount: 0,
+    presetsCount: 0,
   },
 };
 
@@ -821,6 +902,13 @@ export async function fetchUiConfig(): Promise<UiConfig> {
       finance: {
         ...DEFAULT_UI_CONFIG.finance,
         ...(raw?.finance || {}),
+        accountAliases: Array.isArray(raw?.finance?.accountAliases)
+          ? raw.finance.accountAliases
+          : DEFAULT_UI_CONFIG.finance.accountAliases,
+        defaultAccountByCurrency:
+          raw?.finance?.defaultAccountByCurrency && typeof raw.finance.defaultAccountByCurrency === 'object'
+            ? raw.finance.defaultAccountByCurrency
+            : DEFAULT_UI_CONFIG.finance.defaultAccountByCurrency,
       },
       miniapp: {
         tabs: Array.isArray(raw?.miniapp?.tabs) && raw.miniapp.tabs.length > 0
@@ -829,6 +917,17 @@ export async function fetchUiConfig(): Promise<UiConfig> {
         accountThemes: Array.isArray(raw?.miniapp?.accountThemes)
           ? raw.miniapp.accountThemes
           : DEFAULT_UI_CONFIG.miniapp.accountThemes,
+      },
+      adhd: {
+        focusLimit: raw?.adhd?.focusLimit ?? null,
+        staleAfterDays: raw?.adhd?.staleAfterDays ?? null,
+        overloadShieldEnabled: raw?.adhd?.overloadShieldEnabled ?? true,
+      },
+      personas: Array.isArray(raw?.personas) ? raw.personas : [],
+      summary: {
+        activeRoutinesCount: raw?.summary?.activeRoutinesCount ?? 0,
+        totalRoutinesCount: raw?.summary?.totalRoutinesCount ?? 0,
+        presetsCount: raw?.summary?.presetsCount ?? 0,
       },
     };
   } catch {

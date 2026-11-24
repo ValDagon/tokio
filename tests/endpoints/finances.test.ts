@@ -154,6 +154,52 @@ describe('T16 endpoints: finances', () => {
     expect(summary.month).toMatch(/^\d{4}-\d{2}$/);
   });
 
+  it('finances_summary считает total_budgeted_eur / total_budgeted_spent_eur и показывает категории с 0 трат', async () => {
+    const account = await createAccount(TEST_USER, {
+      name: 'Основной',
+      currency: 'EUR',
+      initialBalanceCents: 100000,
+    });
+    await createTransaction(TEST_USER, {
+      kind: 'expense',
+      amountCents: 6000,
+      accountId: account.id,
+      categoryName: 'Продукты',
+      occurredAt: daysAgoIso(0),
+    });
+    await createTransaction(TEST_USER, {
+      kind: 'expense',
+      amountCents: 3000,
+      accountId: account.id,
+      categoryName: 'Безлимит',
+      occurredAt: daysAgoIso(0),
+    });
+    await setBudget(TEST_USER, {
+      categoryName: 'Продукты',
+      month: currentMonth(),
+      limitAmountEurCents: 10000,
+    });
+    await setBudget(TEST_USER, {
+      categoryName: 'Аренда',
+      month: currentMonth(),
+      limitAmountEurCents: 50000,
+    });
+
+    const summary = await financesSummary({}, mockCtx);
+    expect(summary.total_spent_eur).toBe(90);
+    expect(summary.total_budgeted_eur).toBe(600);
+    expect(summary.total_budgeted_spent_eur).toBe(60);
+
+    const rent = summary.categories.find((c) => c.category_name === 'Аренда');
+    expect(rent).toBeDefined();
+    expect(rent).toMatchObject({
+      category_name: 'Аренда',
+      spent_eur: 0,
+      limit_eur: 500,
+      percent_used: 0,
+    });
+  });
+
   it('finances_transactions отдаёт операции с именами и соблюдает limit', async () => {
     const account = await createAccount(TEST_USER, {
       name: 'Основной',

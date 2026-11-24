@@ -52,6 +52,7 @@ import { splitDirectives } from '../learning.js';
 import { chat, type ChatMessage } from '../gemini.js';
 import { normalizeLocale, t, type LocaleCode } from '../i18n.js';
 import { getOverlay } from '../overlay.js';
+import { loadUserPrefs, type UserPrefs } from '../prefs.js';
 import { dateKey, truncate } from '../utils.js';
 import { CUSTOM_INSTRUCTIONS_SLUG } from './constants.js';
 import {
@@ -105,6 +106,8 @@ export interface AgentChatRequest {
   userId?: number;
   /** Провайдер чата; `undefined` — провайдер продукта (`config.chatProvider`). */
   provider?: ProviderId;
+  /** Предпочтительная стартовая модель цепочки; `undefined` — дефолт провайдера. */
+  model?: string;
   /** Системный промпт прогона (собирается на каждый шаг — дата «сегодня»). */
   systemPrompt: string;
   /** История в формате чата: системного сообщения здесь нет. */
@@ -152,6 +155,7 @@ const defaultChat: AgentChatFn = async (request) => {
   const result = await chat([{ role: 'system', content: request.systemPrompt }, ...request.messages], {
     userId: request.userId,
     provider: request.provider,
+    model: request.model,
     purpose: request.purpose,
     temperature: request.temperature,
     maxTokens: request.maxTokens,
@@ -280,6 +284,16 @@ export interface RunAgentOptions {
    * `true` в ответе — строка открыта, её нужно продлить на возврате модели.
    */
   onProgress?: AgentProgressHook;
+  /** Разговорный режим (/talk): пробрасывает директиву свободного диалога в промпт. */
+  talkMode?: boolean;
+  /** Переопределение AI-провайдера на прогон (опционально). */
+  provider?: ProviderId;
+  /** Переопределение температуры на прогон (опционально). */
+  temperature?: number;
+  /** Фоновый режим (кастомная рутина): без треда чата, без `destroy`-тулз и без подтверждений. */
+  background?: boolean;
+  /** Дополнительная директива в хвост системного промпта для фоновой рутины. */
+  backgroundDirective?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +421,49 @@ export function confirmationObservation(name: string): string {
  * должен получать русский вопрос. Аргументы печатаются как есть, кроме самого
  * `confirm`, — по ним видно, что именно будет удалено.
  */
+function formatConfigConfirmDetail(name: string, args: Record<string, unknown>): string | null {
+  if (name === 'update_settings') {
+    const parts: string[] = [];
+    if (args.model_provider !== undefined) {
+      parts.push(`провайдер → ${String(args.model_provider ?? 'по умолчанию')}`);
+    }
+    if (args.preferred_model !== undefined) {
+      parts.push(`модель → ${String(args.preferred_model ?? 'по умолчанию')}`);
+    }
+    return parts.length > 0 ? ` (${parts.join(', ')})` : null;
+  }
+  if (name === 'reset_or_rollback_settings') {
+    const section = typeof args.section === 'string' && args.section.trim() ? args.section.trim() : 'all';
+    return ` (сброс настроек: ${section})`;
+  }
+  if (name === 'manage_skills') {
+    const action = String(args.action ?? '').trim();
+    const target = args.skill_id ?? args.builtin_id ?? args.key ?? '';
+    return action ? ` (${action}${target ? `: ${String(target)}` : ''})` : null;
+  }
+  if (name === 'manage_routines') {
+    const action = String(args.action ?? '').trim();
+    const target = args.name ?? args.id ?? '';
+    const access =
+      String(args.tool_access ?? '').trim().toLowerCase() === 'allow_writes'
+        ? ', права записи allow_writes (без destroy)'
+        : '';
+    return action ? ` (${action}${target ? `: ${String(target)}` : ''}${access})` : null;
+  }
+  if (
+    name === 'manage_presets' ||
+    name === 'manage_personas' ||
+    name === 'manage_docs' ||
+    name === 'manage_backlog' ||
+    name === 'manage_categories'
+  ) {
+    const action = String(args.action ?? '').trim();
+    const target = args.id ?? args.slug ?? args.name ?? args.item_id ?? args.category_id ?? args.target ?? '';
+    return action ? ` (${action}${target ? `: ${String(target)}` : ''})` : null;
+  }
+  return null;
+}
+
 export function confirmationPrompt(
   name: string,
   args: Record<string, unknown>,
@@ -414,7 +471,8 @@ export function confirmationPrompt(
 ): string {
   const payload = { ...args };
   delete payload.confirm;
-  const detail = Object.keys(payload).length > 0 ? ` ${JSON.stringify(payload)}` : '';
+  const customDetail = formatConfigConfirmDetail(name, payload);
+  const detail = customDetail ?? (Object.keys(payload).length > 0 ? ` ${JSON.stringify(payload)}` : '');
   return t(locale, 'agent.confirm_prompt', { name, detail });
 }
 
@@ -428,12 +486,13 @@ export function confirmationPrompt(
  * передать вызывающий код (`options.profile`); без него стиль не навязывается.
  */
 export async function loadAgentProfile(userId: number, now: Date = new Date()): Promise<AgentProfile> {
-  const [user, custom, skills] = await Promise.all([
+  const [user, custom, skills, prefs] = await Promise.all([
     getUser(userId),
     getChapter(userId, CUSTOM_INSTRUCTIONS_SLUG),
     // Скиллы — часть профиля прогона, а не отдельный источник: включаются тем
     // же чтением один раз. Сбой загрузки не должен лишать пользователя ответа.
     listActiveSkills(userId).catch(() => []),
+    loadUserPrefs(userId).catch((): UserPrefs => ({})),
   ]);
 
   const timezone = user?.timezone?.trim() || DEFAULT_TIMEZONE;
@@ -460,8 +519,12 @@ export async function loadAgentProfile(userId: number, now: Date = new Date()): 
     locale: normalizeLocale(user?.language, getOverlay().manifest.defaultLocale),
     personaStyle: parsedDirectives.style || null,
     customInstructions: parsedDirectives.instructions || null,
+    assistantName: prefs.assistantName ?? null,
+    customPersonas: prefs.brain?.customPersonas ?? null,
+    disabledBuiltinSkills: prefs.brain?.disabledBuiltinSkills ?? null,
     activeSkills: skills,
     lowStimulationMode: Boolean(user?.lowStimulationMode),
+    overloadShieldEnabled: prefs.adhd?.overloadShield?.enabled,
     overdueTaskCount,
     activeTodoCount,
     missedMedsCount,
@@ -814,7 +877,10 @@ function normalizeChatReply(reply: AgentChatResult): AgentChatReply {
 
 /** Инструмент с эффектом, требующим подтверждения, без явного `confirm: true` не выполняется. */
 function needsConfirmation(tool: Tool | null, args: Record<string, unknown>): boolean {
-  return tool != null && requiresConfirmation(tool.effect) && args.confirm !== true;
+  if (!tool) return false;
+  if (args.confirm === true) return false;
+  if (requiresConfirmation(tool.effect)) return true;
+  return typeof tool.confirmWhen === 'function' && tool.confirmWhen(args);
 }
 
 /** Сколько прошло с прошлого хода; `null` — отметки нет или она битая. */
@@ -856,6 +922,7 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   'query_spending',
   'can_i_afford',
   'get_fin_balances',
+  'get_budget_plan',
   'get_fx_rates',
   'get_liabilities',
   'list_transactions',
@@ -868,6 +935,7 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   'read_turn_log',
   'list_skills',
   'read_skill',
+  'get_settings',
 ]);
 
 /** Имя модели из ответа: строковый контракт модель не называет. */
@@ -885,6 +953,11 @@ function isParallelSafeReadCall(call: ThreadToolCall, tools: readonly Tool[]): b
   return true;
 }
 
+const BACKGROUND_FORBIDDEN_TOOLS: ReadonlySet<string> = new Set([
+  'manage_routines',
+  'reset_or_rollback_settings',
+]);
+
 /**
  * Полный прогон агента: реплика пользователя → ответ.
  *
@@ -894,10 +967,16 @@ function isParallelSafeReadCall(call: ThreadToolCall, tools: readonly Tool[]): b
 export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult> {
   const userId = assertUserId(options.userId);
   const text = typeof options.text === 'string' ? options.text.trim() : '';
-  const maxSteps = normalizeMaxSteps(options.maxSteps);
   const now = options.now ?? new Date();
   const chatFn = options.chatFn ?? defaultChat;
-  const store = options.store === undefined ? dbThreadStore : options.store === null ? null : options.store;
+  const isBackground = options.background === true;
+  const store = isBackground
+    ? null
+    : options.store === undefined
+      ? dbThreadStore
+      : options.store === null
+        ? null
+        : options.store;
   const clock = options.clock ?? (() => Date.now());
   const startedAt = clock();
   const turnBudgetMs =
@@ -907,7 +986,25 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
   const unlimited = turnBudgetMs <= 0;
 
   return withUserLock(userId, async () => {
-    const profile = options.profile ?? (await loadAgentProfile(userId, now));
+    const [profile, userPrefs, dbUser] = await Promise.all([
+      options.profile ? Promise.resolve(options.profile) : loadAgentProfile(userId, now),
+      loadUserPrefs(userId).catch((): UserPrefs => ({})),
+      getUser(userId).catch(() => null),
+    ]);
+    const maxSteps = normalizeMaxSteps(
+      options.maxSteps ?? (typeof userPrefs.ai?.maxSteps === 'number' ? userPrefs.ai.maxSteps : undefined),
+    );
+    const effectiveProvider = options.provider ?? dbUser?.modelProvider ?? undefined;
+    const effectiveModel =
+      typeof userPrefs.ai?.preferredModel === 'string' && userPrefs.ai.preferredModel.trim()
+        ? userPrefs.ai.preferredModel.trim()
+        : undefined;
+    const effectiveTemperature =
+      typeof options.temperature === 'number' && Number.isFinite(options.temperature)
+        ? options.temperature
+        : typeof userPrefs.ai?.temperature === 'number' && Number.isFinite(userPrefs.ai.temperature)
+          ? userPrefs.ai.temperature
+          : undefined;
     // Профиль заморожен на прогон: внутри цикла он не перечитывается, поэтому
     // включение скилла посреди прогона видно только следующему прогону.
     const appliedSkills = [...(profile.activeSkills ?? [])];
@@ -918,16 +1015,22 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     // Read-only ход: право на запись отнимается физически — write-тулз нет ни в
     // спеках модели, ни в диспетчере вызовов, поэтому «незапрошенный» write
     // невозможен даже при ошибке модели.
-    const tools = readOnly
+    // Фоновый режим дополнительно вырезает любые `destroy`-тулзы и самоизменение рутин/сбросы.
+    const filteredByAccess = readOnly
       ? declaredTools.filter((tool) => tool.effect.kind === 'read')
       : declaredTools;
+    const tools = isBackground
+      ? filteredByAccess.filter(
+          (tool) => tool.effect.kind !== 'destroy' && !BACKGROUND_FORBIDDEN_TOOLS.has(tool.name),
+        )
+      : filteredByAccess;
     const toolSpecs: ProviderToolSpec[] = tools.map((tool) => {
       // Без схемы инструмент остаётся вызываемым: пустой объект валиден.
       const parameters = tool.schema ?? { type: 'object', properties: {} };
-      if (!requiresConfirmation(tool.effect)) {
+      if (!requiresConfirmation(tool.effect) && typeof tool.confirmWhen !== 'function') {
         return { name: tool.name, description: tool.description, parameters };
       }
-      // Тулза с необратимым/массовым эффектом получает поле подтверждения в
+      // Тулза с необратимым/массовым/условным эффектом получает поле подтверждения в
       // самой схеме, чтобы модель видела требование, а не узнавала о нём из
       // ошибки. Уже объявленное бизнес-правило тулзы не перезаписывается.
       const properties = isRecord(parameters.properties) ? parameters.properties : {};
@@ -952,9 +1055,10 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
 
     let stored = store ? sanitizeThread(await store.load(userId)) : [];
     // Состояние прошлого хода: когда он закончился и ждёт ли ответа действие.
-    // `kv` вспомогательное: пустое состояние просто выключает обе проверки,
-    // поэтому сбой чтения не мешает обычному прогону.
-    const turnState = await readAgentTurnState(userId, clock());
+    // В фоновом режиме интерактивный тред и подтверждения не затрагиваются.
+    const turnState = isBackground
+      ? { lastTurnAt: null, confirmation: null }
+      : await readAgentTurnState(userId, clock());
     const idleMs = idleSince(turnState.lastTurnAt, clock());
     const staleThread = idleMs !== null && idleMs >= THREAD_STALE_AFTER_MS;
     if (staleThread) {
@@ -970,9 +1074,10 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       ? (tools.find((tool) => tool.name === normalizeToolName(turnState.confirmation!.name)) ?? null)
       : null;
     const pendingConfirm =
+      !isBackground &&
       turnState.confirmation &&
       confirmationTool &&
-      requiresConfirmation(confirmationTool.effect) &&
+      needsConfirmation(confirmationTool, withoutConfirm(turnState.confirmation.args)) &&
       !staleThread &&
       isAffirmativeReply(text)
         ? { name: confirmationTool.name, args: withoutConfirm(turnState.confirmation.args) }
@@ -981,7 +1086,8 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     let staleYes = false;
     // Право может протухнуть до того, как о нём прочитают: `kv` тогда отдаёт
     // `null`, а вопрос остался в треде — «да» на него всё равно не разрешение.
-    const awaitingConfirm = turnState.confirmation !== null || threadAwaitsConfirm(stored);
+    const awaitingConfirm =
+      !isBackground && (turnState.confirmation !== null || threadAwaitsConfirm(stored));
     if (awaitingConfirm) {
       // Ждущий вопрос — не закрытая просьба: в историю он не идёт никогда, ни
       // при живом подтверждении, ни когда права на исполнение уже нет.
@@ -1042,6 +1148,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       activeTodoCount: profile.activeTodoCount,
       missedMedsCount: profile.missedMedsCount,
       userText: text,
+      thresholds: userPrefs.adhd?.overloadShield,
     });
     const steps: AgentStep[] = [];
     let reply = '';
@@ -1067,12 +1174,12 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
 
     /**
      * Крошка хода в `kv`: где именно умер медленный ход. Пишет движок, индикатор
-     * дописывает `handlers/progress.ts`. Сбой записи ход не рвёт — это диагностика.
+     * дописывает `handlers/progress.ts`. В фоне не затираем интерактивную крошку.
      */
     const traceTurn = async (patch: TurnTracePatch): Promise<void> => {
-      await patchTurnTrace(userId, patch);
+      if (!isBackground) await patchTurnTrace(userId, patch);
     };
-    await startTurnTrace(userId);
+    if (!isBackground) await startTurnTrace(userId);
     /**
      * Бюджет исчерпан с учётом резерва на конец хода: инструменты уже не зовём,
      * ответ собираем и отправляем тем временем, которое осталось окна платформы.
@@ -1198,6 +1305,9 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         await traceTurn({ stage: 'model-start', modelStarted: true });
         const contRaw = await chatFn({
           userId,
+          ...(effectiveProvider ? { provider: effectiveProvider } : {}),
+          ...(effectiveModel ? { model: effectiveModel } : {}),
+          ...(effectiveTemperature !== undefined ? { temperature: effectiveTemperature } : {}),
           systemPrompt: activeSystemPrompt,
           messages: [
             ...toSynthesisMessages(prepared),
@@ -1241,7 +1351,13 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         locale: profile.locale,
         profile: {
           ...profile,
+          assistantName: profile.assistantName ?? userPrefs.assistantName ?? null,
+          customPersonas: profile.customPersonas ?? userPrefs.brain?.customPersonas ?? null,
+          disabledBuiltinSkills:
+            profile.disabledBuiltinSkills ?? userPrefs.brain?.disabledBuiltinSkills ?? null,
           lowStimulationMode: executiveOverload.lowStimulationMode,
+          overloadShieldEnabled:
+            profile.overloadShieldEnabled ?? userPrefs.adhd?.overloadShield?.enabled,
         },
         mode: resolvedMode,
         focus: null,
@@ -1249,12 +1365,14 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         maxSteps,
         now,
         executiveOverload,
+        talkMode: Boolean(options.talkMode),
       });
       // Read-only ход проговаривает ограничение модели: тулсета для записи нет,
       // и модель обязана сказать об этом честно, а не имитировать действие.
-      const systemPrompt = readOnly
-        ? `${baseSystemPrompt}\n\n${READ_ONLY_DIRECTIVE}`
-        : baseSystemPrompt;
+      const bgTail = options.backgroundDirective?.trim()
+        ? `\n\n${options.backgroundDirective.trim()}`
+        : '';
+      const systemPrompt = `${baseSystemPrompt}${readOnly ? `\n\n${READ_ONLY_DIRECTIVE}` : ''}${bgTail}`;
 
       const indicatorOpen = await notifyProgress({ stage: 'model', step: iteration });
       await traceTurn({ stage: 'model-start', modelStarted: true });
@@ -1264,6 +1382,9 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         modelCallsStarted += 1;
         raw = await chatFn({
           userId,
+          ...(effectiveProvider ? { provider: effectiveProvider } : {}),
+          ...(effectiveModel ? { model: effectiveModel } : {}),
+          ...(effectiveTemperature !== undefined ? { temperature: effectiveTemperature } : {}),
           systemPrompt,
           messages: toProviderMessages(prepared),
           tools: toolSpecs,
@@ -1417,8 +1538,17 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           const target = tools.find((tool) => tool.name === validName) ?? null;
 
           // Гардрейл: деструктивное действие без явного «да» не выполняется —
-          // прогон останавливается и спрашивает пользователя.
-          if (needsConfirmation(target, args)) {
+          // прогон останавливается и спрашивает пользователя (в фоне — сразу отказ, confirm:true игнорируется).
+          const confirmCheckArgs = isBackground ? withoutConfirm(args) : args;
+          if (needsConfirmation(target, confirmCheckArgs)) {
+            if (isBackground) {
+              recordOutcome(call, {
+                ok: false,
+                content:
+                  'Не выполнено: в фоновой рутине запрещены действия, требующие подтверждения пользователя.',
+              });
+              continue;
+            }
             const observation = confirmationObservation(call.name);
             working.push({
               role: 'user',
@@ -1535,7 +1665,27 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
 
       const available = tools.map((tool) => tool.name).join(', ') || '—';
       const target = tools.find((tool) => tool.name === name) ?? null;
-      if (needsConfirmation(target, args)) {
+      const confirmCheckArgs = isBackground ? withoutConfirm(args) : args;
+      if (needsConfirmation(target, confirmCheckArgs)) {
+        if (isBackground) {
+          const observation =
+            'Не выполнено: в фоновой рутине запрещены действия, требующие подтверждения пользователя.';
+          working.push({
+            role: 'user',
+            content: observation,
+            meta: observationMeta({ id: call.id, name: call.name, ok: false }),
+          });
+          steps.push({
+            index: steps.length,
+            thought: parsed.thought,
+            action: { name: call.name, args },
+            observation,
+            ok: false,
+          });
+          totalToolCalls += 1;
+          iteration += 1;
+          continue;
+        }
         const observation = confirmationObservation(call.name);
         working.push({
           role: 'user',
@@ -1614,7 +1764,13 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           locale: profile.locale,
           profile: {
             ...profile,
+            assistantName: profile.assistantName ?? userPrefs.assistantName ?? null,
+            customPersonas: profile.customPersonas ?? userPrefs.brain?.customPersonas ?? null,
+            disabledBuiltinSkills:
+              profile.disabledBuiltinSkills ?? userPrefs.brain?.disabledBuiltinSkills ?? null,
             lowStimulationMode: executiveOverload.lowStimulationMode,
+            overloadShieldEnabled:
+              profile.overloadShieldEnabled ?? userPrefs.adhd?.overloadShield?.enabled,
           },
           mode: resolvedMode,
           focus: null,
@@ -1622,12 +1778,16 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           maxSteps,
           now,
           executiveOverload,
-        })}\n\n${readOnly ? `${READ_ONLY_DIRECTIVE}\n\n` : ''}${FINAL_SYNTHESIS_DIRECTIVE}`;
+          talkMode: Boolean(options.talkMode),
+        })}${readOnly ? `\n\n${READ_ONLY_DIRECTIVE}` : ''}${options.backgroundDirective?.trim() ? `\n\n${options.backgroundDirective.trim()}` : ''}\n\n${FINAL_SYNTHESIS_DIRECTIVE}`;
 
         const synthIndicatorOpen = await notifyProgress({ stage: 'model', step: iteration });
         await traceTurn({ stage: 'model-start', modelStarted: true });
         const synthRaw = await chatFn({
           userId,
+          ...(effectiveProvider ? { provider: effectiveProvider } : {}),
+          ...(effectiveModel ? { model: effectiveModel } : {}),
+          ...(effectiveTemperature !== undefined ? { temperature: effectiveTemperature } : {}),
           systemPrompt: synthesisSystemPrompt,
           messages: toSynthesisMessages(prepared),
           purpose: 'agent',
@@ -1672,10 +1832,21 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       working.push({ role: 'assistant', content: reply });
     }
 
-    const thread = sanitizeThread(working);
+    const threadReset = steps.some(
+      (step) =>
+        step.ok &&
+        step.data &&
+        typeof step.data === 'object' &&
+        (step.data as { threadReset?: unknown }).threadReset === true,
+    );
+    const thread = threadReset ? [] : sanitizeThread(working);
     if (store) {
       try {
-        await store.save(userId, thread);
+        if (threadReset) {
+          await store.clear(userId);
+        } else {
+          await store.save(userId, thread);
+        }
       } catch {
         // сбой записи не должен отнимать у пользователя готовый ответ
       }
@@ -1684,7 +1855,9 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     // Граница хода для экспирации треда: без неё следующая реплика всегда
     // считает старую инструкцию живой. Считается вместе с `turn_trace`, но в
     // своём ключе — диагностика не имеет права влиять на поведение.
-    await patchAgentTurnState(userId, { lastTurnAt: new Date(clock()).toISOString() }, clock());
+    if (!isBackground) {
+      await patchAgentTurnState(userId, { lastTurnAt: new Date(clock()).toISOString() }, clock());
+    }
 
     // Крошка хода: последняя метка — «ответ собран и тред сохранён». Если её нет
     // в `kv`, а есть только `model-start`, значит ход убит внутри вызова модели.

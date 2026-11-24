@@ -22,18 +22,17 @@
  *  - `auto_detect_tasks` — порт `auto_detect_completed_task` без LLM-вызовов.
  */
 
-import type { RecurrenceRule, TaskRow } from '../../../types';
+import type { RecurrenceRule, TaskCategoryRow, TaskRow, TaskSubcategoryRow } from '../../../types';
 import {
   completeTask,
   createTask,
   ensureSystemCategories,
-  findCategoryByName,
   listCategories,
+  listSubcategories,
   listTasks,
   updateTask,
 } from '../../dal/tasks';
 import { softDeleteTask } from '../../dal/misc';
-import type { TaskCategoryRow } from '../../../types';
 import {
   addMinutes,
   formatDate,
@@ -233,15 +232,111 @@ function shortDate(date: Date, timeZone: string): string {
   return `${formatDate(date, timeZone).slice(0, 5)} ${timeKey(date, timeZone)}`;
 }
 
+const SUBCATEGORY_ALIASES: Record<string, string> = {
+  'ютуб': 'youtube',
+  'ютюб': 'youtube',
+  'youtube': 'youtube',
+  'гигиена и чистота дома': 'гигиена и уборка',
+  'гигиена': 'гигиена и уборка',
+  'уборка': 'гигиена и уборка',
+  'чистота': 'гигиена и уборка',
+  'чистота дома': 'гигиена и уборка',
+  'еда': 'питание',
+};
+
+function normName(value: string): string {
+  return value.trim().toLowerCase().replace(/ё/g, 'е');
+}
+
+function matchCategory(
+  categories: readonly TaskCategoryRow[],
+  rawName: string,
+): TaskCategoryRow | null {
+  const exact = categories.find((c) => c.name === rawName);
+  if (exact) return exact;
+  const needle = normName(rawName);
+  if (!needle) return null;
+  return categories.find((c) => normName(c.name) === needle) ?? null;
+}
+
+async function loadAllSubcategories(
+  userId: number,
+  categories: readonly TaskCategoryRow[],
+): Promise<TaskSubcategoryRow[]> {
+  const nested = await Promise.all(categories.map((c) => listSubcategories(userId, c.id)));
+  return nested.flat();
+}
+
+function matchSubcategory(
+  subs: readonly TaskSubcategoryRow[],
+  rawName: string,
+): TaskSubcategoryRow | null {
+  const needle = normName(rawName);
+  if (!needle) return null;
+  const canonical = SUBCATEGORY_ALIASES[needle] ?? needle;
+  const exact = subs.find((s) => {
+    const n = normName(s.name);
+    return n === needle || n === canonical;
+  });
+  if (exact) return exact;
+  if (canonical.length >= 4) {
+    const matches = subs.filter((s) => normName(s.name).includes(canonical));
+    if (matches.length === 1) return matches[0];
+  }
+  return null;
+}
+
+interface ResolvedCategoryAndSubcategory {
+  categoryId: number | null;
+  resolvedCategoryName: string | null;
+  subcategoryId: number | null;
+  resolvedSubcategoryName: string | null;
+}
+
 /**
- * Категория по имени: `ensureSystemCategories` создаёт системные, дальше —
- * точный `findCategoryByName`. Не нашли → `null` (get-or-create в DAL нет).
+ * Разрешает категорию и подкатегорию задачи (с алиасами RU/EN и авто-выводом
+ * родительской категории по подкатегории, если `category_name` не задан).
+ * Незнакомые категории по-прежнему не создаются (ADR-002).
  */
-async function resolveCategoryId(ctx: ToolContext, name: string | null): Promise<number | null> {
-  if (!name) return null;
+async function resolveCategoryAndSubcategory(
+  ctx: ToolContext,
+  categoryName: string | null,
+  subcategoryName: string | null,
+): Promise<ResolvedCategoryAndSubcategory> {
+  if (!categoryName && !subcategoryName) {
+    return {
+      categoryId: null,
+      resolvedCategoryName: null,
+      subcategoryId: null,
+      resolvedSubcategoryName: null,
+    };
+  }
+
   await ensureSystemCategories(ctx.userId);
-  const category = await findCategoryByName(ctx.userId, name);
-  return category ? category.id : null;
+  const categories = await listCategories(ctx.userId);
+
+  let matchedCategory = categoryName ? matchCategory(categories, categoryName) : null;
+  let matchedSub: TaskSubcategoryRow | null = null;
+
+  if (subcategoryName) {
+    if (matchedCategory) {
+      const subs = await listSubcategories(ctx.userId, matchedCategory.id);
+      matchedSub = matchSubcategory(subs, subcategoryName);
+    } else if (!categoryName) {
+      const allSubs = await loadAllSubcategories(ctx.userId, categories);
+      matchedSub = matchSubcategory(allSubs, subcategoryName);
+      if (matchedSub) {
+        matchedCategory = categories.find((c) => c.id === matchedSub!.categoryId) ?? null;
+      }
+    }
+  }
+
+  return {
+    categoryId: matchedCategory ? matchedCategory.id : null,
+    resolvedCategoryName: matchedCategory ? matchedCategory.name : null,
+    subcategoryId: matchedSub ? matchedSub.id : null,
+    resolvedSubcategoryName: matchedSub ? matchedSub.name : null,
+  };
 }
 
 function categoryMap(categories: readonly TaskCategoryRow[]): Map<number, string> {
@@ -292,15 +387,17 @@ async function setReminder(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
 
   const notes = args.notes === undefined ? null : asText(args.notes);
   const categoryName = asText(args.category_name);
+  const subcategoryName = asText(args.subcategory_name);
 
   try {
-    const categoryId = await resolveCategoryId(ctx, categoryName);
+    const resolved = await resolveCategoryAndSubcategory(ctx, categoryName, subcategoryName);
     const when = reminder.value ?? addMinutes(ctx.now, 60);
     const whenIso = toIso(when);
 
     const task = await createTask(ctx.userId, {
       title,
-      categoryId,
+      categoryId: resolved.categoryId,
+      subcategoryId: resolved.subcategoryId,
       notes,
       dueAt: whenIso,
       remindAt: whenIso,
@@ -319,6 +416,9 @@ async function setReminder(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcom
       data: {
         task_id: task.id,
         title: task.title,
+        category_id: task.categoryId,
+        subcategory_id: task.subcategoryId,
+        subcategory_name: resolved.resolvedSubcategoryName,
         remind_at: task.remindAt,
         due_at: task.dueAt,
         recurrence: task.recurrence,
@@ -355,15 +455,17 @@ async function addTask(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
 
   const notes = args.notes === undefined ? null : asText(args.notes);
   const categoryName = asText(args.category_name);
+  const subcategoryName = asText(args.subcategory_name);
 
   try {
-    const categoryId = await resolveCategoryId(ctx, categoryName);
+    const resolved = await resolveCategoryAndSubcategory(ctx, categoryName, subcategoryName);
     const remindAt = reminder.value;
     const dueAt = due.value ?? remindAt;
 
     const task = await createTask(ctx.userId, {
       title,
-      categoryId,
+      categoryId: resolved.categoryId,
+      subcategoryId: resolved.subcategoryId,
       notes,
       dueAt: dueAt ? toIso(dueAt) : null,
       remindAt: remindAt ? toIso(remindAt) : null,
@@ -375,7 +477,8 @@ async function addTask(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
       for (const [position, step] of steps.entries()) {
         await createTask(ctx.userId, {
           title: step,
-          categoryId,
+          categoryId: resolved.categoryId,
+          subcategoryId: resolved.subcategoryId,
           parentId: task.id,
           position,
         });
@@ -385,11 +488,18 @@ async function addTask(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
 
     const recDesc = recurrence.value ? `, повтор: ${recurrenceRu(recurrence.value)}` : '';
     const remindDesc = remindAt ? `, напомню ${dateInWords(remindAt, ctx.timezone)}` : '';
-    const categoryPart = categoryName
-      ? categoryId !== null
-        ? categoryName
-        : `без категории, «${categoryName}» не найдена`
-      : 'без категории';
+    const categoryPart =
+      resolved.subcategoryId !== null && resolved.resolvedCategoryName && resolved.resolvedSubcategoryName
+        ? `${resolved.resolvedCategoryName} · ${resolved.resolvedSubcategoryName}`
+        : categoryName
+          ? resolved.categoryId !== null
+            ? (resolved.resolvedCategoryName ?? categoryName)
+            : `без категории, «${categoryName}» не найдена`
+          : resolved.resolvedSubcategoryName
+            ? resolved.resolvedSubcategoryName
+            : subcategoryName
+              ? `без категории, подкатегория «${subcategoryName}» не найдена`
+              : 'без категории';
     let content = `Записал задачу: «${task.title}» (категория: ${categoryPart})${recDesc}${remindDesc}`;
     if (stepsCreated > 0) content += ` с ${stepsCreated} шагами`;
 
@@ -400,7 +510,9 @@ async function addTask(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
         task_id: task.id,
         title: task.title,
         category_id: task.categoryId,
-        category_name: categoryName,
+        category_name: resolved.resolvedCategoryName ?? categoryName,
+        subcategory_id: task.subcategoryId,
+        subcategory_name: resolved.resolvedSubcategoryName,
         notes: task.notes,
         due_at: task.dueAt,
         remind_at: task.remindAt,
@@ -420,6 +532,7 @@ async function addTask(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
 interface BatchLine {
   title: string;
   categoryName: string | null;
+  subcategoryName: string | null;
   notes: string | null;
   remindAt: string | null;
   dueAt: string | null;
@@ -458,10 +571,12 @@ async function addTasksBatch(args: ToolArgs, ctx: ToolContext): Promise<ToolOutc
 
     const moment = reminder.value ?? due.value;
     const categoryName = asText(entry.category_name) ?? asText(entry.category);
+    const subcategoryName = asText(entry.subcategory_name) ?? asText(entry.subcategory);
 
     parsed.push({
       title,
       categoryName,
+      subcategoryName,
       notes: asText(entry.notes),
       remindAt: moment ? toIso(moment) : null,
       dueAt: moment ? toIso(moment) : null,
@@ -476,10 +591,15 @@ async function addTasksBatch(args: ToolArgs, ctx: ToolContext): Promise<ToolOutc
     const createdIds: number[] = [];
 
     for (const line of parsed) {
-      const categoryId = await resolveCategoryId(ctx, line.categoryName);
+      const resolved = await resolveCategoryAndSubcategory(
+        ctx,
+        line.categoryName,
+        line.subcategoryName,
+      );
       const task = await createTask(ctx.userId, {
         title: line.title,
-        categoryId,
+        categoryId: resolved.categoryId,
+        subcategoryId: resolved.subcategoryId,
         notes: line.notes,
         dueAt: line.dueAt,
         remindAt: line.remindAt,
@@ -487,11 +607,14 @@ async function addTasksBatch(args: ToolArgs, ctx: ToolContext): Promise<ToolOutc
       });
       createdIds.push(task.id);
 
-      const cat = line.categoryName
-        ? categoryId !== null
-          ? line.categoryName
-          : `${line.categoryName} → без категории (не найдена)`
-        : 'без категории';
+      const cat =
+        resolved.subcategoryId !== null && resolved.resolvedCategoryName && resolved.resolvedSubcategoryName
+          ? `${resolved.resolvedCategoryName} · ${resolved.resolvedSubcategoryName}`
+          : line.categoryName
+            ? resolved.categoryId !== null
+              ? (resolved.resolvedCategoryName ?? line.categoryName)
+              : `${line.categoryName} → без категории (не найдена)`
+            : 'без категории';
       const recPart = line.recurrence ? ` [🔁 ${recurrenceRu(line.recurrence)}]` : '';
       const notePart = line.notes ? ` — ${line.notes}` : '';
       lines.push(`• «${line.title}» [${cat}]${recPart}${notePart}`);
@@ -565,18 +688,39 @@ async function completeTaskTool(args: ToolArgs, ctx: ToolContext): Promise<ToolO
  */
 async function listTasksTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutcome> {
   const categoryName = asText(args.category_name);
+  const subcategoryName = asText(args.subcategory_name);
 
   try {
-    const categories = categoryMap(await listCategories(ctx.userId));
+    const allCategories = await listCategories(ctx.userId);
+    const categories = categoryMap(allCategories);
+    const allSubcategories = await loadAllSubcategories(ctx.userId, allCategories);
+    const subMap = new Map(allSubcategories.map((sub) => [sub.id, sub.name]));
     const all = await listTasks(ctx.userId, { status: 'todo', limit: 500 });
 
     let roots = all.filter((task) => task.parentId === null && task.status === 'todo');
     if (categoryName) {
-      const needle = categoryName.toLowerCase();
+      const needle = normName(categoryName);
       roots = roots.filter((task) => {
         const name = task.categoryId === null ? null : categories.get(task.categoryId);
-        return name ? name.toLowerCase() === needle : false;
+        return name ? normName(name) === needle : false;
       });
+    }
+    if (subcategoryName) {
+      const needle = normName(subcategoryName);
+      const canonical = SUBCATEGORY_ALIASES[needle] ?? needle;
+      const matchedIds = new Set(
+        allSubcategories
+          .filter((s) => {
+            const n = normName(s.name);
+            return n === needle || n === canonical;
+          })
+          .map((s) => s.id),
+      );
+      if (matchedIds.size === 0) {
+        const sub = matchSubcategory(allSubcategories, subcategoryName);
+        if (sub) matchedIds.add(sub.id);
+      }
+      roots = roots.filter((task) => task.subcategoryId !== null && matchedIds.has(task.subcategoryId));
     }
 
     const stepsByParent = new Map<number, number>();
@@ -606,7 +750,15 @@ async function listTasksTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutc
     const lines: string[] = ['Ваши актуальные дела:'];
     for (const task of top) {
       const category = task.categoryId === null ? null : categories.get(task.categoryId);
-      const cat = category ? ` [${category}]` : '';
+      const subcategory = task.subcategoryId === null ? null : subMap.get(task.subcategoryId);
+      const cat =
+        category && subcategory
+          ? ` [${category} · ${subcategory}]`
+          : category
+            ? ` [${category}]`
+            : subcategory
+              ? ` [${subcategory}]`
+              : '';
       const steps = stepsByParent.get(task.id) ?? 0;
       const sub = steps > 0 ? ` (${steps} шагов)` : '';
       const rec = task.recurrence ? ` 🔁 ${recurrenceRu(task.recurrence)}` : '';
@@ -624,6 +776,7 @@ async function listTasksTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOutc
           id: task.id,
           title: task.title,
           category: task.categoryId === null ? null : (categories.get(task.categoryId) ?? null),
+          subcategory: task.subcategoryId === null ? null : (subMap.get(task.subcategoryId) ?? null),
           remind_at: task.remindAt,
           due_at: task.dueAt,
           recurrence: task.recurrence,
@@ -685,16 +838,62 @@ async function updateTaskTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOut
     if (args.category_name !== undefined && args.category_name !== null) {
       const categoryName = asText(args.category_name);
       if (categoryName) {
-        const category = await resolveCategoryId(ctx, categoryName);
-        if (category === null) {
-          const available = await listCategories(ctx.userId);
+        await ensureSystemCategories(ctx.userId);
+        const available = await listCategories(ctx.userId);
+        const category = matchCategory(available, categoryName);
+        if (!category) {
           const names = available.map((item) => item.name).join(', ');
           return fail(
             `Категория «${categoryName}» не найдена. Доступные категории: ${names || 'нет — создайте категорию в интерфейсе'}.`,
           );
         }
-        patch.categoryId = category;
-        changes.push(`категория: ${categoryName}`);
+        patch.categoryId = category.id;
+        changes.push(`категория: ${category.name}`);
+        if (
+          category.id !== task.categoryId &&
+          args.subcategory_name === undefined &&
+          task.subcategoryId !== null
+        ) {
+          patch.subcategoryId = null;
+        }
+      }
+    }
+
+    if (args.subcategory_name !== undefined) {
+      const subInput = asText(args.subcategory_name);
+      if (args.subcategory_name === null || subInput === null) {
+        patch.subcategoryId = null;
+        changes.push('подкатегория: —');
+      } else {
+        await ensureSystemCategories(ctx.userId);
+        const targetCategoryId = patch.categoryId ?? null;
+        let candidates: TaskSubcategoryRow[] = [];
+        let matchedSub: TaskSubcategoryRow | null = null;
+        if (targetCategoryId !== null) {
+          candidates = await listSubcategories(ctx.userId, targetCategoryId);
+          matchedSub = matchSubcategory(candidates, subInput);
+        } else {
+          const categories = await listCategories(ctx.userId);
+          if (task.categoryId !== null) {
+            const currentSubs = await listSubcategories(ctx.userId, task.categoryId);
+            matchedSub = matchSubcategory(currentSubs, subInput);
+          }
+          candidates = await loadAllSubcategories(ctx.userId, categories);
+          if (!matchedSub) {
+            matchedSub = matchSubcategory(candidates, subInput);
+          }
+          if (matchedSub && matchedSub.categoryId !== task.categoryId) {
+            patch.categoryId = matchedSub.categoryId;
+          }
+        }
+        if (!matchedSub) {
+          const names = candidates.map((s) => s.name).join(', ');
+          return fail(
+            `Подкатегория «${subInput}» не найдена. Доступные подкатегории: ${names || 'нет — создайте в интерфейсе'}.`,
+          );
+        }
+        patch.subcategoryId = matchedSub.id;
+        changes.push(`подкатегория: ${matchedSub.name}`);
       }
     }
 
@@ -729,6 +928,7 @@ async function updateTaskTool(args: ToolArgs, ctx: ToolContext): Promise<ToolOut
         task_id: updated.id,
         title: updated.title,
         category_id: updated.categoryId,
+        subcategory_id: updated.subcategoryId,
         notes: updated.notes,
         due_at: updated.dueAt,
         remind_at: updated.remindAt,
@@ -895,6 +1095,10 @@ export const tasksTools: Tool[] = [
           type: 'string',
           description: 'Категория («Быт», «Работа», …); неизвестная — задача без категории.',
         },
+        subcategory_name: {
+          type: 'string',
+          description: 'Подкатегория («YouTube», «Гигиена и уборка», «Питание», …).',
+        },
       },
       required: ['title'],
     },
@@ -904,7 +1108,7 @@ export const tasksTools: Tool[] = [
     name: 'add_task',
     effect: { kind: 'create' },
     description:
-      'Добавляет задачу в список дел: категория, шаги, заметки, напоминание, срок и повтор.',
+      'Добавляет задачу в список дел: категория, подкатегория, шаги, заметки, напоминание, срок и повтор.',
     schema: {
       type: 'object',
       properties: {
@@ -912,6 +1116,10 @@ export const tasksTools: Tool[] = [
         category_name: {
           type: 'string',
           description: 'Категория («Работа», «Быт», «Хобби», …); неизвестная — без категории.',
+        },
+        subcategory_name: {
+          type: 'string',
+          description: 'Подкатегория («YouTube», «Церковь», «Гигиена и уборка», «Питание», …); может сама определить категорию.',
         },
         steps: {
           type: 'array',
@@ -945,12 +1153,13 @@ export const tasksTools: Tool[] = [
         tasks: {
           type: 'array',
           description:
-            'Список задач: {title, category_name?, notes?, remind_at?, due_at?, recurrence?}.',
+            'Список задач: {title, category_name?, subcategory_name?, notes?, remind_at?, due_at?, recurrence?}.',
           items: {
             type: 'object',
             properties: {
               title: { type: 'string', description: 'Название задачи (обязательно).' },
               category_name: { type: 'string', description: 'Категория задачи.' },
+              subcategory_name: { type: 'string', description: 'Подкатегория задачи.' },
               notes: { type: 'string', description: 'Детали задачи.' },
               remind_at: { type: 'string', description: 'Время напоминания ISO-8601.' },
               due_at: { type: 'string', description: 'Срок выполнения ISO-8601.' },
@@ -990,6 +1199,10 @@ export const tasksTools: Tool[] = [
       type: 'object',
       properties: {
         category_name: { type: 'string', description: 'Фильтр по категории (без учёта регистра).' },
+        subcategory_name: {
+          type: 'string',
+          description: 'Фильтр по подкатегории (без учёта регистра и с алиасами).',
+        },
       },
       required: [],
     },
@@ -999,7 +1212,7 @@ export const tasksTools: Tool[] = [
     name: 'update_task',
     effect: { kind: 'mutate' },
     description:
-      'Обновляет или переносит задачу: название, напоминание/срок, категорию, заметку, повтор.',
+      'Обновляет или переносит задачу: название, напоминание/срок, категорию, подкатегорию, заметку, повтор.',
     schema: {
       type: 'object',
       properties: {
@@ -1012,6 +1225,10 @@ export const tasksTools: Tool[] = [
         },
         due_at: { type: 'string', description: 'Новый срок выполнения ISO-8601.' },
         category_name: { type: 'string', description: 'Новая категория.' },
+        subcategory_name: {
+          type: 'string',
+          description: 'Новая подкатегория (пустая строка — очистить).',
+        },
         notes: { type: 'string', description: 'Новая заметка (пустая строка — очистить).' },
         recurrence: {
           type: 'object',

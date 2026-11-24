@@ -232,6 +232,7 @@ describe('clock: heartbeat', () => {
       'source',
     ]);
     expect(Object.keys((heartbeat?.kinds ?? {}) as Record<string, unknown>).sort()).toEqual([
+      'custom_routines',
       'liability_warning',
       'medication_reminder',
       'morning_digest',

@@ -22,6 +22,7 @@
  */
 
 import { db, sql } from 'sdk/db';
+import { withTransaction } from './finances.js';
 import type {
   RecurrenceRule,
   TaskCategoryRow,
@@ -276,6 +277,200 @@ export async function listSubcategories(
     ORDER BY position ASC, id ASC
   `);
   return rows.map(mapSubcategory);
+}
+
+/** Регистронезависимый поиск категории задач в JS (SQLite `lower()` не работает с кириллицей). */
+export async function findCategoryByNameInsensitive(
+  userId: number,
+  name: string,
+): Promise<TaskCategoryRow | null> {
+  const needle = String(name ?? '').trim().toLowerCase();
+  if (!needle) return null;
+  const categories = await listCategories(userId);
+  return categories.find((cat) => cat.name.trim().toLowerCase() === needle) ?? null;
+}
+
+/** Регистронезависимый поиск подкатегории задач в JS (кирилл-безопасный). */
+export async function findSubcategoryByNameInsensitive(
+  userId: number,
+  categoryId: number,
+  name: string,
+): Promise<TaskSubcategoryRow | null> {
+  const needle = String(name ?? '').trim().toLowerCase();
+  if (!needle) return null;
+  const subs = await listSubcategories(userId, categoryId);
+  return subs.find((sub) => sub.name.trim().toLowerCase() === needle) ?? null;
+}
+
+/** Обновляет категорию задач (имя, цвет, позиция). */
+export async function updateCategory(
+  userId: number,
+  categoryId: number,
+  patch: { name?: string; color?: string | null; position?: number },
+): Promise<TaskCategoryRow | null> {
+  const categories = await listCategories(userId);
+  const current = categories.find((c) => c.id === categoryId) ?? null;
+  if (!current) return null;
+
+  let nextName = current.name;
+  if (patch.name !== undefined) {
+    const trimmed = String(patch.name).trim();
+    if (!trimmed) throw new Error('tasks.updateCategory: name cannot be empty');
+    const conflict = categories.find(
+      (c) => c.id !== categoryId && c.name.trim().toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (conflict) {
+      throw new Error(`tasks.updateCategory: category "${conflict.name}" already exists`);
+    }
+    nextName = trimmed;
+  }
+  const nextColor = patch.color !== undefined ? patch.color : current.color;
+  const nextPosition =
+    typeof patch.position === 'number' && Number.isFinite(patch.position)
+      ? Math.trunc(patch.position)
+      : current.position;
+
+  await db.run(sql`
+    UPDATE task_categories
+    SET name = ${nextName}, color = ${nextColor}, position = ${nextPosition}
+    WHERE id = ${categoryId} AND user_id = ${userId}
+  `);
+
+  const updated = await db.get<TaskCategoryDbRow>(sql`
+    SELECT * FROM task_categories WHERE id = ${categoryId} AND user_id = ${userId} LIMIT 1
+  `);
+  return updated ? mapCategory(updated) : null;
+}
+
+/**
+ * Безопасно удаляет категорию задач: отвязывает задачи (`category_id = NULL`,
+ * `subcategory_id = NULL`), удаляет её подкатегории и саму категорию. Задачи не удаляются.
+ */
+export async function deleteCategory(
+  userId: number,
+  categoryId: number,
+): Promise<{ deleted: boolean; unlinkedTasks: number }> {
+  const current = await db.get<{ id: number }>(sql`
+    SELECT id FROM task_categories WHERE id = ${categoryId} AND user_id = ${userId} LIMIT 1
+  `);
+  if (!current) return { deleted: false, unlinkedTasks: 0 };
+
+  return withTransaction(async () => {
+    const unlinkRes = await db.run(sql`
+      UPDATE tasks
+      SET category_id = NULL, subcategory_id = NULL, updated_at = ${nowIso()}
+      WHERE user_id = ${userId} AND category_id = ${categoryId}
+    `);
+    await db.run(sql`
+      DELETE FROM task_subcategories WHERE user_id = ${userId} AND category_id = ${categoryId}
+    `);
+    await db.run(sql`
+      DELETE FROM task_categories WHERE id = ${categoryId} AND user_id = ${userId}
+    `);
+    return { deleted: true, unlinkedTasks: Number(unlinkRes.rowsAffected ?? 0) };
+  });
+}
+
+/** Создаёт подкатегорию задач внутри категории владельца. */
+export async function createSubcategory(
+  userId: number,
+  categoryId: number,
+  name: string,
+  position?: number,
+): Promise<TaskSubcategoryRow> {
+  const cat = await db.get<{ id: number }>(sql`
+    SELECT id FROM task_categories WHERE id = ${categoryId} AND user_id = ${userId} LIMIT 1
+  `);
+  if (!cat) throw new Error(`tasks.createSubcategory: category ${categoryId} not found`);
+
+  const trimmed = String(name ?? '').trim();
+  if (!trimmed) throw new Error('tasks.createSubcategory: name is required');
+
+  const existing = await listSubcategories(userId, categoryId);
+  const conflict = existing.find((s) => s.name.trim().toLowerCase() === trimmed.toLowerCase());
+  if (conflict) {
+    throw new Error(`tasks.createSubcategory: subcategory "${conflict.name}" already exists`);
+  }
+
+  const nextPos =
+    typeof position === 'number' && Number.isFinite(position)
+      ? Math.trunc(position)
+      : existing.reduce((max, s) => Math.max(max, s.position), -1) + 1;
+
+  const now = nowIso();
+  const res = await db.run(sql`
+    INSERT INTO task_subcategories (user_id, category_id, name, position, created_at)
+    VALUES (${userId}, ${categoryId}, ${trimmed}, ${nextPos}, ${now})
+    RETURNING id, user_id, category_id, name, position, created_at
+  `);
+  const row = res.rows[0] as unknown as TaskSubcategoryDbRow | undefined;
+  if (!row) throw new Error('tasks.createSubcategory: insert returned no row');
+  return mapSubcategory(row);
+}
+
+/** Обновляет подкатегорию задач (имя, позиция). */
+export async function updateSubcategory(
+  userId: number,
+  subcategoryId: number,
+  patch: { name?: string; position?: number },
+): Promise<TaskSubcategoryRow | null> {
+  const row = await db.get<TaskSubcategoryDbRow>(sql`
+    SELECT * FROM task_subcategories WHERE id = ${subcategoryId} AND user_id = ${userId} LIMIT 1
+  `);
+  if (!row) return null;
+  const current = mapSubcategory(row);
+
+  let nextName = current.name;
+  if (patch.name !== undefined) {
+    const trimmed = String(patch.name).trim();
+    if (!trimmed) throw new Error('tasks.updateSubcategory: name cannot be empty');
+    const siblings = await listSubcategories(userId, current.categoryId);
+    const conflict = siblings.find(
+      (s) => s.id !== subcategoryId && s.name.trim().toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (conflict) {
+      throw new Error(`tasks.updateSubcategory: subcategory "${conflict.name}" already exists`);
+    }
+    nextName = trimmed;
+  }
+  const nextPosition =
+    typeof patch.position === 'number' && Number.isFinite(patch.position)
+      ? Math.trunc(patch.position)
+      : current.position;
+
+  await db.run(sql`
+    UPDATE task_subcategories
+    SET name = ${nextName}, position = ${nextPosition}
+    WHERE id = ${subcategoryId} AND user_id = ${userId}
+  `);
+
+  const updated = await db.get<TaskSubcategoryDbRow>(sql`
+    SELECT * FROM task_subcategories WHERE id = ${subcategoryId} AND user_id = ${userId} LIMIT 1
+  `);
+  return updated ? mapSubcategory(updated) : null;
+}
+
+/** Безопасно удаляет подкатегорию: отвязывает задачи (`subcategory_id = NULL`), не удаляя сами задачи. */
+export async function deleteSubcategory(
+  userId: number,
+  subcategoryId: number,
+): Promise<{ deleted: boolean; unlinkedTasks: number }> {
+  const row = await db.get<{ id: number }>(sql`
+    SELECT id FROM task_subcategories WHERE id = ${subcategoryId} AND user_id = ${userId} LIMIT 1
+  `);
+  if (!row) return { deleted: false, unlinkedTasks: 0 };
+
+  return withTransaction(async () => {
+    const unlinkRes = await db.run(sql`
+      UPDATE tasks
+      SET subcategory_id = NULL, updated_at = ${nowIso()}
+      WHERE user_id = ${userId} AND subcategory_id = ${subcategoryId}
+    `);
+    await db.run(sql`
+      DELETE FROM task_subcategories WHERE id = ${subcategoryId} AND user_id = ${userId}
+    `);
+    return { deleted: true, unlinkedTasks: Number(unlinkRes.rowsAffected ?? 0) };
+  });
 }
 
 // ---------------------------------------------------------------------------

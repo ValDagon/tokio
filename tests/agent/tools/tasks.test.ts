@@ -984,3 +984,114 @@ describe('auto_detect_tasks', () => {
     expect(await listTasks(USER_B, { status: 'todo' })).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Подкатегории задач
+// ---------------------------------------------------------------------------
+
+describe('подкатегории задач (subcategory_name, алиасы, авто-вывод и фильтр)', () => {
+  it('add_task по подкатегории «Ютуб» без category_name выводит «Хобби · YouTube» и прокидывает в шаги', async () => {
+    const outcome = await run('add_task', {
+      title: 'Смонтировать выпуск',
+      subcategory_name: 'Ютуб',
+      steps: ['Собрать B-roll'],
+    });
+    expect(outcome.ok).toBe(true);
+    expect(outcome.content).toContain('категория: Хобби · YouTube');
+    const data = outcome.data as AddTaskData & {
+      subcategory_id: number | null;
+      subcategory_name: string | null;
+    };
+    expect(data.category_id).toBe(await categoryId('Хобби'));
+    expect(data.category_name).toBe('Хобби');
+    expect(data.subcategory_id).not.toBeNull();
+    expect(data.subcategory_name).toBe('YouTube');
+
+    const rows = await listTasks(USER_A, { status: 'todo' });
+    const step = rows.find((r) => r.parentId === data.task_id);
+    expect(step?.subcategoryId).toBe(data.subcategory_id);
+  });
+
+  it('add_task разрешает алиас «Гигиена и чистота дома» в «Гигиена и уборка» под «Быт»', async () => {
+    const outcome = await run('add_task', {
+      title: 'Помыть кухню',
+      category_name: 'Быт',
+      subcategory_name: 'Гигиена и чистота дома',
+    });
+    expect(outcome.ok).toBe(true);
+    expect(outcome.content).toContain('категория: Быт · Гигиена и уборка');
+  });
+
+  it('add_task при неизвестной категории не угадывает категорию по подкатегории (ADR-002)', async () => {
+    const outcome = await run('add_task', {
+      title: 'Странная задача',
+      category_name: 'Космос',
+      subcategory_name: 'Ютуб',
+    });
+    expect(outcome.ok).toBe(true);
+    const data = outcome.data as AddTaskData & { subcategory_id: number | null };
+    expect(data.category_id).toBeNull();
+    expect(data.subcategory_id).toBeNull();
+  });
+
+  it('set_reminder и add_tasks_batch поддерживают subcategory_name и алиасы', async () => {
+    const rem = await run('set_reminder', {
+      title: 'Воскресная служба',
+      subcategory_name: 'Церковь',
+      remind_in_minutes: 30,
+    });
+    expect(rem.ok).toBe(true);
+    expect((rem.data as { subcategory_name: string | null }).subcategory_name).toBe('Церковь');
+
+    const batch = await run('add_tasks_batch', {
+      tasks: [
+        { title: 'Купить овощи', category_name: 'Быт', subcategory_name: 'Еда' },
+        { title: 'Нарезать превью', subcategory_name: 'Ютуб' },
+      ],
+    });
+    expect(batch.ok).toBe(true);
+    expect(batch.content).toContain('[Быт · Питание]');
+    expect(batch.content).toContain('[Хобби · YouTube]');
+  });
+
+  it('list_tasks фильтрует по subcategory_name и отображает [Категория · Подкатегория]', async () => {
+    await run('add_task', { title: 'Ролик про AI', subcategory_name: 'Ютуб' });
+    await run('add_task', { title: 'Купить хлеб', category_name: 'Быт', subcategory_name: 'Питание' });
+
+    const all = await run('list_tasks', {});
+    expect(all.ok).toBe(true);
+    expect(all.content).toContain('[Хобби · YouTube]');
+    expect(all.content).toContain('[Быт · Питание]');
+
+    const filtered = await run('list_tasks', { subcategory_name: 'ютюб' });
+    expect(filtered.ok).toBe(true);
+    expect(filtered.content).toContain('Ролик про AI');
+    expect(filtered.content).not.toContain('Купить хлеб');
+    const tasks = (filtered.data as { tasks: Array<{ title: string; subcategory: string | null }> }).tasks;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].subcategory).toBe('YouTube');
+  });
+
+  it('update_task ставит подкатегорию с авто-синхронизацией родителя и очищает её по пустой строке', async () => {
+    await run('add_task', { title: 'Запись подкаста', subcategory_name: 'Ютуб' });
+
+    const moved = await run('update_task', {
+      query: 'подкаста',
+      subcategory_name: 'Здоровье',
+    });
+    expect(moved.ok).toBe(true);
+    const movedData = moved.data as { category_id: number | null; subcategory_id: number | null; changes: string[] };
+    expect(movedData.category_id).toBe(await categoryId('Быт'));
+    expect(movedData.subcategory_id).not.toBeNull();
+    expect(movedData.changes).toEqual(['подкатегория: Здоровье']);
+
+    const cleared = await run('update_task', {
+      query: 'подкаста',
+      subcategory_name: '',
+    });
+    expect(cleared.ok).toBe(true);
+    const clearedData = cleared.data as { subcategory_id: number | null; changes: string[] };
+    expect(clearedData.subcategory_id).toBeNull();
+    expect(clearedData.changes).toEqual(['подкатегория: —']);
+  });
+});
